@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Html5Qrcode } from "html5-qrcode";
+import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
 
 export default function QRScanner() {
   const scannerRegionId = useMemo(
@@ -14,27 +14,61 @@ export default function QRScanner() {
   const [errorMessage, setErrorMessage] = useState("");
   const [selectedFileName, setSelectedFileName] = useState("");
 
+  async function ensureScannerInstance() {
+    if (!scannerRef.current) {
+      scannerRef.current = new Html5Qrcode(scannerRegionId);
+    }
+    return scannerRef.current;
+  }
+
+  async function stopAndClearScanner() {
+    if (!scannerRef.current) return;
+
+    try {
+      const state = scannerRef.current.getState();
+      if (
+        state === Html5QrcodeScannerState.SCANNING ||
+        state === Html5QrcodeScannerState.PAUSED
+      ) {
+        await scannerRef.current.stop();
+      }
+    } catch {
+      // игнорируем
+    }
+
+    try {
+      await scannerRef.current.clear();
+    } catch {
+      // игнорируем
+    }
+
+    scannerRef.current = null;
+  }
+
   async function startScanner() {
     try {
       setErrorMessage("");
       setResult("");
       setIsStarting(true);
 
-      if (!scannerRef.current) {
-        scannerRef.current = new Html5Qrcode(scannerRegionId);
-      }
+      await stopAndClearScanner();
 
-      await scannerRef.current.start(
-        { facingMode: "environment" },
+      const scanner = await ensureScannerInstance();
+
+      await scanner.start(
+        {
+          facingMode: { ideal: "environment" },
+        },
         {
           fps: 10,
-          qrbox: { width: 220, height: 220 },
+          qrbox: { width: 240, height: 240 },
+          aspectRatio: 1,
         },
         (decodedText) => {
           setResult(decodedText);
         },
         () => {
-          // Ошибки промежуточного чтения игнорируем
+          // промежуточные ошибки чтения игнорируем
         }
       );
 
@@ -46,22 +80,15 @@ export default function QRScanner() {
           : "Не удалось запустить камеру";
 
       setErrorMessage(message);
+      setIsScanning(false);
     } finally {
       setIsStarting(false);
     }
   }
 
   async function stopScanner() {
-    try {
-      if (scannerRef.current && isScanning) {
-        await scannerRef.current.stop();
-        await scannerRef.current.clear();
-      }
-    } catch {
-      // молча игнорируем
-    } finally {
-      setIsScanning(false);
-    }
+    await stopAndClearScanner();
+    setIsScanning(false);
   }
 
   async function handleFileScan(event: React.ChangeEvent<HTMLInputElement>) {
@@ -73,10 +100,17 @@ export default function QRScanner() {
       setResult("");
       setSelectedFileName(file.name);
 
+      await stopAndClearScanner();
+
       const tempScanner = new Html5Qrcode(scannerRegionId);
       const decoded = await tempScanner.scanFile(file, true);
       setResult(decoded);
-      await tempScanner.clear();
+
+      try {
+        await tempScanner.clear();
+      } catch {
+        // игнорируем
+      }
     } catch (error) {
       const message =
         error instanceof Error
@@ -89,12 +123,7 @@ export default function QRScanner() {
 
   useEffect(() => {
     return () => {
-      if (scannerRef.current) {
-        scannerRef.current
-          .stop()
-          .then(() => scannerRef.current?.clear())
-          .catch(() => {});
-      }
+      stopAndClearScanner().catch(() => {});
     };
   }, []);
 
@@ -126,8 +155,8 @@ export default function QRScanner() {
           lineHeight: 1.5,
         }}
       >
-        Сначала попробуй кнопку запуска камеры. Если браузер на телефоне не даст
-        доступ к камере по локальному IP, ниже можно загрузить фото QR-кода.
+        Нажми «Включить камеру». Если камера не покажет изображение или не
+        запустится, можно проверить чтение через фото QR-кода.
       </p>
 
       <div
@@ -192,31 +221,34 @@ export default function QRScanner() {
       </div>
 
       <div
-        id={scannerRegionId}
         style={{
           width: "100%",
           maxWidth: 420,
-          minHeight: 280,
-          borderRadius: 16,
-          border: "1px dashed #cbd5e1",
-          background: "#f8fafc",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          overflow: "hidden",
           marginBottom: 16,
         }}
       >
+        <div
+          id={scannerRegionId}
+          style={{
+            width: "100%",
+            minHeight: 320,
+            borderRadius: 16,
+            border: "2px solid #cbd5e1",
+            background: "#0f172a",
+            overflow: "hidden",
+            position: "relative",
+          }}
+        />
+
         {!isScanning && (
           <div
             style={{
+              marginTop: 10,
               color: "#64748b",
-              textAlign: "center",
-              padding: 16,
-              lineHeight: 1.5,
+              fontSize: 14,
             }}
           >
-            Область камеры появится здесь
+            После запуска здесь должно появиться изображение с камеры.
           </div>
         )}
       </div>
