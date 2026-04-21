@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
 
+type CameraItem = {
+  id: string;
+  label: string;
+};
+
 export default function QRScanner() {
   const scannerRegionId = useMemo(
     () => `qr-reader-${Math.random().toString(36).slice(2, 9)}`,
@@ -8,11 +13,50 @@ export default function QRScanner() {
   );
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
+
   const [isStarting, setIsStarting] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [result, setResult] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [selectedFileName, setSelectedFileName] = useState("");
+  const [cameras, setCameras] = useState<CameraItem[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState("");
+
+  async function loadCameras() {
+    try {
+      const devices = await Html5Qrcode.getCameras();
+
+      const mapped = devices.map((cam) => ({
+        id: cam.id,
+        label: cam.label || `Камера ${cam.id}`,
+      }));
+
+      setCameras(mapped);
+
+      if (mapped.length > 0 && !selectedCameraId) {
+        const backCamera =
+          mapped.find((cam) =>
+            cam.label.toLowerCase().includes("back")
+          ) ||
+          mapped.find((cam) =>
+            cam.label.toLowerCase().includes("rear")
+          ) ||
+          mapped.find((cam) =>
+            cam.label.toLowerCase().includes("environment")
+          ) ||
+          mapped[0];
+
+        setSelectedCameraId(backCamera.id);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Не удалось получить список камер";
+
+      setErrorMessage(`Ошибка получения камер: ${message}`);
+    }
+  }
 
   async function ensureScannerInstance() {
     if (!scannerRef.current) {
@@ -26,6 +70,7 @@ export default function QRScanner() {
 
     try {
       const state = scannerRef.current.getState();
+
       if (
         state === Html5QrcodeScannerState.SCANNING ||
         state === Html5QrcodeScannerState.PAUSED
@@ -53,12 +98,22 @@ export default function QRScanner() {
 
       await stopAndClearScanner();
 
+      if (!selectedCameraId) {
+        await loadCameras();
+      }
+
+      const cameraIdToUse = selectedCameraId || cameras[0]?.id;
+
+      if (!cameraIdToUse) {
+        throw new Error(
+          "Камеры не найдены. Проверь разрешение на камеру в браузере."
+        );
+      }
+
       const scanner = await ensureScannerInstance();
 
       await scanner.start(
-        {
-          facingMode: { ideal: "environment" },
-        },
+        cameraIdToUse,
         {
           fps: 10,
           qrbox: { width: 240, height: 240 },
@@ -79,7 +134,7 @@ export default function QRScanner() {
           ? error.message
           : "Не удалось запустить камеру";
 
-      setErrorMessage(message);
+      setErrorMessage(`Ошибка камеры: ${message}`);
       setIsScanning(false);
     } finally {
       setIsStarting(false);
@@ -117,11 +172,13 @@ export default function QRScanner() {
           ? error.message
           : "Не удалось прочитать QR с изображения";
 
-      setErrorMessage(message);
+      setErrorMessage(`Ошибка файла: ${message}`);
     }
   }
 
   useEffect(() => {
+    loadCameras();
+
     return () => {
       stopAndClearScanner().catch(() => {});
     };
@@ -144,7 +201,7 @@ export default function QRScanner() {
           color: "#111827",
         }}
       >
-        Сканер QR 1,1
+        Сканер QR TEST 123
       </h2>
 
       <p
@@ -155,8 +212,8 @@ export default function QRScanner() {
           lineHeight: 1.5,
         }}
       >
-        Нажми «Включить камеру». Если камера не покажет изображение или не
-        запустится, можно проверить чтение через фото QR-кода.
+        Сначала выбери камеру, потом нажми «Включить камеру». Если камера не
+        заработает, ниже можно проверить QR через фото.
       </p>
 
       <div
@@ -165,8 +222,29 @@ export default function QRScanner() {
           gap: 12,
           flexWrap: "wrap",
           marginBottom: 16,
+          alignItems: "center",
         }}
       >
+        <select
+          value={selectedCameraId}
+          onChange={(e) => setSelectedCameraId(e.target.value)}
+          style={{
+            border: "1px solid #d1d5db",
+            borderRadius: 12,
+            padding: "12px 14px",
+            background: "#fff",
+            color: "#111827",
+            minWidth: 220,
+          }}
+        >
+          <option value="">Выбери камеру</option>
+          {cameras.map((camera) => (
+            <option key={camera.id} value={camera.id}>
+              {camera.label}
+            </option>
+          ))}
+        </select>
+
         <button
           onClick={startScanner}
           disabled={isStarting || isScanning}
@@ -197,6 +275,21 @@ export default function QRScanner() {
           }}
         >
           Остановить
+        </button>
+
+        <button
+          onClick={loadCameras}
+          style={{
+            border: "1px solid #d1d5db",
+            borderRadius: 12,
+            padding: "12px 16px",
+            background: "#fff",
+            color: "#111827",
+            fontWeight: 700,
+            cursor: "pointer",
+          }}
+        >
+          Обновить камеры
         </button>
 
         <label
@@ -253,6 +346,18 @@ export default function QRScanner() {
         )}
       </div>
 
+      {cameras.length > 0 && (
+        <div
+          style={{
+            marginBottom: 12,
+            color: "#475569",
+            fontSize: 14,
+          }}
+        >
+          Найдено камер: {cameras.length}
+        </div>
+      )}
+
       {selectedFileName && (
         <div
           style={{
@@ -294,7 +399,7 @@ export default function QRScanner() {
             lineHeight: 1.5,
           }}
         >
-          Ошибка: {errorMessage}
+          {errorMessage}
         </div>
       )}
     </div>
