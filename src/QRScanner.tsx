@@ -144,7 +144,7 @@ export default function QRScanner() {
           color: "#111827",
         }}
       >
-        Сканер QR
+        Сканер QR 1,1
       </h2>
 
       <p
