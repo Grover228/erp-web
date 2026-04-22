@@ -1,8 +1,39 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Production from "./Production";
 import QRScanner from "./QRScanner";
+import AuthPage from "./AuthPage";
+import DashboardPage from "./pages/DashboardPage";
+import DirectoriesPage from "./pages/DirectoriesPage";
+import EmployeesDirectory from "./directories/EmployeesDirectory";
+import { supabase } from "./supabase";
 
-type Screen = "dashboard" | "production" | "scanner";
+type Screen =
+  | "dashboard"
+  | "production"
+  | "scanner"
+  | "directories"
+  | "directory-employees"
+  | "directory-suppliers"
+  | "directory-counterparties"
+  | "directory-products"
+  | "directory-materials"
+  | "directory-consumables"
+  | "directory-operations"
+  | "directory-variants"
+  | "directory-units"
+  | "directory-statuses";
+
+type Employee = {
+  id: string;
+  full_name: string | null;
+  role: string | null;
+  phone: string | null;
+  telegram: string | null;
+  payment_type: string | null;
+  is_active: boolean | null;
+  notes: string | null;
+  created_at: string | null;
+};
 
 function App() {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -10,27 +41,26 @@ function App() {
   const [employeesOpen, setEmployeesOpen] = useState(true);
   const [currentScreen, setCurrentScreen] = useState<Screen>("dashboard");
 
+  const [session, setSession] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState("");
+
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [employeesLoading, setEmployeesLoading] = useState(false);
+  const [employeesError, setEmployeesError] = useState("");
+
   const alerts = [
     "Пачка №124 зависла",
     "Заказ ORD-018 просрочен",
     "Сообщение от сотрудника",
   ];
 
-  const employees = [
-    { name: "Айгуль", status: "Шьёт", done: 18, pay: "900 ₽" },
-    { name: "Марина", status: "Крой", done: 32, pay: "640 ₽" },
-    { name: "Ольга", status: "Упаковка", done: 24, pay: "240 ₽" },
-    { name: "Света", status: "Свободна", done: 0, pay: "0 ₽" },
-  ];
-
   const menuItems = [
     { key: "dashboard", label: "Дашборд" },
     { key: "production", label: "Производство" },
-    { key: "warehouse", label: "Склад" },
-    { key: "purchase", label: "Закупка" },
-    { key: "sales", label: "Продажи" },
     { key: "directories", label: "Справочники" },
-    { key: "finance", label: "Финансы" },
     { key: "scanner", label: "Сканер QR" },
   ];
 
@@ -39,6 +69,28 @@ function App() {
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
+      : currentScreen === "directories"
+      ? "Справочники"
+      : currentScreen === "directory-employees"
+      ? "Сотрудники"
+      : currentScreen === "directory-suppliers"
+      ? "Поставщики"
+      : currentScreen === "directory-counterparties"
+      ? "Контрагенты"
+      : currentScreen === "directory-products"
+      ? "Изделия"
+      : currentScreen === "directory-materials"
+      ? "Материалы"
+      : currentScreen === "directory-consumables"
+      ? "Расходники"
+      : currentScreen === "directory-operations"
+      ? "Операции"
+      : currentScreen === "directory-variants"
+      ? "Цвета и размеры"
+      : currentScreen === "directory-units"
+      ? "Единицы измерения"
+      : currentScreen === "directory-statuses"
+      ? "Статусы"
       : "Сканер QR";
 
   const pageSubtitle =
@@ -46,7 +98,33 @@ function App() {
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
+      : currentScreen === "directories"
+      ? "Выбор нужного справочника"
+      : currentScreen === "directory-employees"
+      ? "Справочник сотрудников и входящие заявки"
+      : currentScreen === "directory-suppliers"
+      ? "Справочник поставщиков"
+      : currentScreen === "directory-counterparties"
+      ? "Справочник контрагентов"
+      : currentScreen === "directory-products"
+      ? "Справочник изделий"
+      : currentScreen === "directory-materials"
+      ? "Справочник материалов"
+      : currentScreen === "directory-consumables"
+      ? "Справочник расходников"
+      : currentScreen === "directory-operations"
+      ? "Справочник производственных операций"
+      : currentScreen === "directory-variants"
+      ? "Справочник цветов и размеров"
+      : currentScreen === "directory-units"
+      ? "Справочник единиц измерения"
+      : currentScreen === "directory-statuses"
+      ? "Справочник статусов"
       : "Сканирование кодов";
+
+  const canGoBack = useMemo(() => {
+    return currentScreen !== "dashboard";
+  }, [currentScreen]);
 
   useEffect(() => {
     document.body.style.overflow = menuOpen ? "hidden" : "auto";
@@ -56,242 +134,321 @@ function App() {
     };
   }, [menuOpen]);
 
-  function renderDashboard() {
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (session) {
+      loadEmployees();
+    }
+  }, [session]);
+
+  async function loadEmployees() {
+    try {
+      setEmployeesLoading(true);
+      setEmployeesError("");
+
+      const { data, error } = await supabase
+        .from("employees")
+        .select("*")
+        .order("created_at", { ascending: true });
+
+      if (error) {
+        throw error;
+      }
+
+      setEmployees((data as Employee[]) || []);
+    } catch (error) {
+      setEmployeesError(
+        error instanceof Error ? error.message : "Ошибка загрузки сотрудников"
+      );
+    } finally {
+      setEmployeesLoading(false);
+    }
+  }
+
+  async function handleLogin(email: string, password: string) {
+    try {
+      setLoginLoading(true);
+      setLoginError("");
+
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        throw error;
+      }
+    } catch (error) {
+      setLoginError(
+        error instanceof Error ? error.message : "Ошибка входа"
+      );
+    } finally {
+      setLoginLoading(false);
+    }
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+  }
+
+  function handleOpenDirectory(directoryKey: string) {
+    switch (directoryKey) {
+      case "employees":
+        setCurrentScreen("directory-employees");
+        break;
+      case "suppliers":
+        setCurrentScreen("directory-suppliers");
+        break;
+      case "counterparties":
+        setCurrentScreen("directory-counterparties");
+        break;
+      case "products":
+        setCurrentScreen("directory-products");
+        break;
+      case "materials":
+        setCurrentScreen("directory-materials");
+        break;
+      case "consumables":
+        setCurrentScreen("directory-consumables");
+        break;
+      case "operations":
+        setCurrentScreen("directory-operations");
+        break;
+      case "variants":
+        setCurrentScreen("directory-variants");
+        break;
+      case "units":
+        setCurrentScreen("directory-units");
+        break;
+      case "statuses":
+        setCurrentScreen("directory-statuses");
+        break;
+      default:
+        setCurrentScreen("directories");
+        break;
+    }
+  }
+
+  function handleGoBack() {
+    if (currentScreen === "production") {
+      setCurrentScreen("dashboard");
+      return;
+    }
+
+    if (currentScreen === "scanner") {
+      setCurrentScreen("dashboard");
+      return;
+    }
+
+    if (currentScreen === "directories") {
+      setCurrentScreen("dashboard");
+      return;
+    }
+
+    if (
+      currentScreen === "directory-employees" ||
+      currentScreen === "directory-suppliers" ||
+      currentScreen === "directory-counterparties" ||
+      currentScreen === "directory-products" ||
+      currentScreen === "directory-materials" ||
+      currentScreen === "directory-consumables" ||
+      currentScreen === "directory-operations" ||
+      currentScreen === "directory-variants" ||
+      currentScreen === "directory-units" ||
+      currentScreen === "directory-statuses"
+    ) {
+      setCurrentScreen("directories");
+      return;
+    }
+
+    setCurrentScreen("dashboard");
+  }
+
+  function renderStubDirectory(title: string) {
     return (
-      <>
-        {alerts.length > 0 && (
-          <div
-            style={{
-              background: "#eff6ff",
-              border: "1px solid #93c5fd",
-              borderRadius: 16,
-              overflow: "hidden",
-            }}
-          >
-            <button
-              onClick={() => setAlertsOpen((prev) => !prev)}
-              style={{
-                width: "100%",
-                background: "transparent",
-                border: "none",
-                padding: 16,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                fontSize: 16,
-                fontWeight: 700,
-                color: "#1d4ed8",
-              }}
-            >
-              <span>Требует внимания: {alerts.length}</span>
-              <span>{alertsOpen ? "▲" : "▼"}</span>
-            </button>
-
-            {alertsOpen && (
-              <div
-                style={{
-                  padding: "0 16px 16px 16px",
-                  display: "grid",
-                  gap: 10,
-                }}
-              >
-                {alerts.map((item) => (
-                  <div
-                    key={item}
-                    style={{
-                      background: "#ffffff",
-                      borderRadius: 12,
-                      padding: 12,
-                      border: "1px solid #bfdbfe",
-                    }}
-                  >
-                    {item}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
+      <div
+        style={{
+          background: "#ffffff",
+          borderRadius: 20,
+          padding: 24,
+          border: "1px solid #dbe4f0",
+          boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 24,
+            fontWeight: 700,
+            color: "#0f172a",
+          }}
+        >
+          {title}
+        </div>
 
         <div
           style={{
-            background: "#fff",
-            borderRadius: 16,
-            overflow: "hidden",
+            color: "#64748b",
+            lineHeight: 1.6,
           }}
         >
+          Этот справочник ещё не настроен. Дальше будем добавлять его отдельно.
+        </div>
+
+        <div>
           <button
-            onClick={() => setEmployeesOpen((prev) => !prev)}
+            onClick={() => setCurrentScreen("directories")}
             style={{
-              width: "100%",
-              background: "transparent",
-              border: "none",
-              padding: 16,
+              border: "1px solid #cbd5e1",
+              background: "#ffffff",
+              borderRadius: 12,
+              padding: "10px 14px",
               cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              fontSize: 22,
-              fontWeight: 700,
-              color: "#111827",
+              fontWeight: 600,
+              color: "#0f172a",
             }}
           >
-            <span>Сотрудники</span>
-            <span style={{ fontSize: 16 }}>{employeesOpen ? "▲" : "▼"}</span>
+            Назад к справочникам
           </button>
-
-          {employeesOpen && (
-            <div
-              style={{
-                padding: "0 16px 16px 16px",
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
-                gap: 10,
-              }}
-            >
-              {employees.map((emp) => (
-                <div
-                  key={emp.name}
-                  style={{
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 12,
-                    padding: 12,
-                    background: "#fff",
-                    minHeight: 120,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 16,
-                      fontWeight: 700,
-                      color: "#111827",
-                      marginBottom: 6,
-                    }}
-                  >
-                    {emp.name}
-                  </div>
-
-                  <div
-                    style={{
-                      fontSize: 13,
-                      color: "#6b7280",
-                      marginBottom: 4,
-                    }}
-                  >
-                    {emp.status}
-                  </div>
-
-                  <div
-                    style={{
-                      fontSize: 13,
-                      color: "#6b7280",
-                      marginBottom: 6,
-                    }}
-                  >
-                    {emp.done} шт
-                  </div>
-
-                  <div
-                    style={{
-                      fontSize: 15,
-                      fontWeight: 700,
-                      color: "#111827",
-                    }}
-                  >
-                    {emp.pay}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-            gap: 16,
-          }}
-        >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 16,
-              padding: 18,
-            }}
-          >
-            <div style={{ fontSize: 16, color: "#6b7280" }}>Заданий в работе</div>
-            <div
-              style={{
-                fontSize: 30,
-                fontWeight: 700,
-                color: "#111827",
-                marginTop: 8,
-              }}
-            >
-              14
-            </div>
-          </div>
-
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 16,
-              padding: 18,
-            }}
-          >
-            <div style={{ fontSize: 16, color: "#6b7280" }}>Готово сегодня</div>
-            <div
-              style={{
-                fontSize: 30,
-                fontWeight: 700,
-                color: "#111827",
-                marginTop: 8,
-              }}
-            >
-              86
-            </div>
-          </div>
-
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 16,
-              padding: 18,
-            }}
-          >
-            <div style={{ fontSize: 16, color: "#6b7280" }}>
-              Просроченные заказы
-            </div>
-            <div
-              style={{
-                fontSize: 30,
-                fontWeight: 700,
-                color: "#111827",
-                marginTop: 8,
-              }}
-            >
-              2
-            </div>
-          </div>
-        </div>
-      </>
+      </div>
     );
   }
 
   function renderContent() {
-    if (currentScreen === "dashboard") return renderDashboard();
-    if (currentScreen === "production") return <Production />;
-    if (currentScreen === "scanner") return <QRScanner />;
+    if (currentScreen === "dashboard") {
+      return (
+        <DashboardPage
+          alerts={alerts}
+          alertsOpen={alertsOpen}
+          setAlertsOpen={setAlertsOpen}
+          employeesOpen={employeesOpen}
+          setEmployeesOpen={setEmployeesOpen}
+          employees={employees}
+          employeesLoading={employeesLoading}
+          employeesError={employeesError}
+        />
+      );
+    }
+
+    if (currentScreen === "production") {
+      return <Production />;
+    }
+
+    if (currentScreen === "directories") {
+      return <DirectoriesPage onOpenDirectory={handleOpenDirectory} />;
+    }
+
+    if (currentScreen === "directory-employees") {
+      return <EmployeesDirectory />;
+    }
+
+    if (currentScreen === "directory-suppliers") {
+      return renderStubDirectory("Поставщики");
+    }
+
+    if (currentScreen === "directory-counterparties") {
+      return renderStubDirectory("Контрагенты");
+    }
+
+    if (currentScreen === "directory-products") {
+      return renderStubDirectory("Изделия");
+    }
+
+    if (currentScreen === "directory-materials") {
+      return renderStubDirectory("Материалы");
+    }
+
+    if (currentScreen === "directory-consumables") {
+      return renderStubDirectory("Расходники");
+    }
+
+    if (currentScreen === "directory-operations") {
+      return renderStubDirectory("Операции");
+    }
+
+    if (currentScreen === "directory-variants") {
+      return renderStubDirectory("Цвета и размеры");
+    }
+
+    if (currentScreen === "directory-units") {
+      return renderStubDirectory("Единицы измерения");
+    }
+
+    if (currentScreen === "directory-statuses") {
+      return renderStubDirectory("Статусы");
+    }
+
+    if (currentScreen === "scanner") {
+      return <QRScanner />;
+    }
+
     return null;
+  }
+
+  if (authLoading) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background: "linear-gradient(180deg, #eef4ff 0%, #f8fafc 100%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontFamily: "Arial, sans-serif",
+        }}
+      >
+        <div
+          style={{
+            background: "#fff",
+            padding: 24,
+            borderRadius: 18,
+            border: "1px solid #dbe4f0",
+            minWidth: 320,
+            textAlign: "center",
+            boxShadow: "0 10px 24px rgba(15, 23, 42, 0.08)",
+          }}
+        >
+          Загрузка...
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <AuthPage
+        onLogin={handleLogin}
+        loginLoading={loginLoading}
+        loginError={loginError}
+      />
+    );
   }
 
   return (
     <div
       style={{
         minHeight: "100vh",
-        background: "#f3f4f6",
+        background: "linear-gradient(180deg, #eef4ff 0%, #f8fafc 100%)",
         fontFamily: "Arial, sans-serif",
       }}
     >
@@ -301,25 +458,26 @@ function App() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(17, 24, 39, 0.55)",
+            background: "rgba(15, 23, 42, 0.42)",
             zIndex: 9999,
             display: "flex",
             justifyContent: "flex-start",
             alignItems: "stretch",
+            backdropFilter: "blur(2px)",
           }}
         >
           <aside
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: 280,
-              maxWidth: "82vw",
+              width: 300,
+              maxWidth: "84vw",
               height: "100%",
-              background: "#111827",
+              background: "linear-gradient(180deg, #0f172a 0%, #172554 100%)",
               color: "#fff",
               padding: 20,
               boxSizing: "border-box",
               overflowY: "auto",
-              boxShadow: "0 16px 40px rgba(0,0,0,0.35)",
+              boxShadow: "0 18px 40px rgba(0,0,0,0.35)",
             }}
           >
             <div
@@ -330,16 +488,16 @@ function App() {
                 marginBottom: 20,
               }}
             >
-              <div style={{ fontSize: 22, fontWeight: 700 }}>ERP</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>ERP-система</div>
 
               <button
                 onClick={() => setMenuOpen(false)}
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  background: "#1f2937",
+                  width: 40,
+                  height: 40,
+                  borderRadius: 12,
+                  border: "1px solid rgba(255,255,255,0.14)",
+                  background: "rgba(255,255,255,0.08)",
                   color: "#fff",
                   cursor: "pointer",
                   fontSize: 18,
@@ -351,7 +509,22 @@ function App() {
 
             <div style={{ display: "grid", gap: 10 }}>
               {menuItems.map((item) => {
-                const isActive = item.key === currentScreen;
+                const isActive =
+                  (item.key === "dashboard" && currentScreen === "dashboard") ||
+                  (item.key === "production" && currentScreen === "production") ||
+                  (item.key === "directories" &&
+                    (currentScreen === "directories" ||
+                      currentScreen === "directory-employees" ||
+                      currentScreen === "directory-suppliers" ||
+                      currentScreen === "directory-counterparties" ||
+                      currentScreen === "directory-products" ||
+                      currentScreen === "directory-materials" ||
+                      currentScreen === "directory-consumables" ||
+                      currentScreen === "directory-operations" ||
+                      currentScreen === "directory-variants" ||
+                      currentScreen === "directory-units" ||
+                      currentScreen === "directory-statuses")) ||
+                  (item.key === "scanner" && currentScreen === "scanner");
 
                 return (
                   <button
@@ -364,6 +537,9 @@ function App() {
                         case "production":
                           setCurrentScreen("production");
                           break;
+                        case "directories":
+                          setCurrentScreen("directories");
+                          break;
                         case "scanner":
                           setCurrentScreen("scanner");
                           break;
@@ -374,15 +550,22 @@ function App() {
                       setMenuOpen(false);
                     }}
                     style={{
-                      background: isActive ? "#2563eb" : "#1f2937",
+                      background: isActive
+                        ? "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)"
+                        : "rgba(255,255,255,0.07)",
                       color: "#fff",
-                      border: "none",
-                      borderRadius: 12,
-                      padding: "12px 14px",
+                      border: isActive
+                        ? "1px solid rgba(147, 197, 253, 0.7)"
+                        : "1px solid rgba(255,255,255,0.04)",
+                      borderRadius: 14,
+                      padding: "14px 16px",
                       textAlign: "left",
                       cursor: "pointer",
-                      fontSize: 15,
+                      fontSize: 16,
                       fontWeight: isActive ? 700 : 500,
+                      boxShadow: isActive
+                        ? "0 8px 18px rgba(37, 99, 235, 0.28)"
+                        : "none",
                     }}
                   >
                     {item.label}
@@ -410,24 +593,26 @@ function App() {
         >
           <div
             style={{
-              background: "#fff",
-              borderRadius: 16,
-              padding: 16,
+              background: "#ffffff",
+              borderRadius: 22,
+              padding: 18,
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
               gap: 12,
+              border: "1px solid #dbe4f0",
+              boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <button
                 onClick={() => setMenuOpen(true)}
                 style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 10,
-                  border: "1px solid #d1d5db",
-                  background: "#fff",
+                  width: 48,
+                  height: 48,
+                  borderRadius: 14,
+                  border: "1px solid #cbd5e1",
+                  background: "#ffffff",
                   cursor: "pointer",
                   display: "flex",
                   flexDirection: "column",
@@ -436,6 +621,7 @@ function App() {
                   gap: 4,
                   padding: 0,
                   flexShrink: 0,
+                  boxShadow: "0 6px 14px rgba(15, 23, 42, 0.06)",
                 }}
               >
                 <span
@@ -443,7 +629,7 @@ function App() {
                     display: "block",
                     width: 18,
                     height: 2,
-                    background: "#111827",
+                    background: "#0f172a",
                     borderRadius: 2,
                   }}
                 />
@@ -452,7 +638,7 @@ function App() {
                     display: "block",
                     width: 18,
                     height: 2,
-                    background: "#111827",
+                    background: "#0f172a",
                     borderRadius: 2,
                   }}
                 />
@@ -461,21 +647,52 @@ function App() {
                     display: "block",
                     width: 18,
                     height: 2,
-                    background: "#111827",
+                    background: "#0f172a",
                     borderRadius: 2,
                   }}
                 />
               </button>
 
+              {canGoBack && (
+                <button
+                  onClick={handleGoBack}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 14,
+                    border: "1px solid #cbd5e1",
+                    background: "#ffffff",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    boxShadow: "0 6px 14px rgba(15, 23, 42, 0.06)",
+                    fontSize: 22,
+                    color: "#0f172a",
+                    fontWeight: 700,
+                  }}
+                  title="Назад"
+                >
+                  ←
+                </button>
+              )}
+
               <div>
-                <div style={{ fontSize: 28, fontWeight: 700, color: "#111827" }}>
+                <div
+                  style={{
+                    fontSize: 28,
+                    fontWeight: 700,
+                    color: "#0f172a",
+                  }}
+                >
                   {pageTitle}
                 </div>
 
                 <div
                   style={{
-                    fontSize: 14,
-                    color: "#6b7280",
+                    fontSize: 15,
+                    color: "#64748b",
                     marginTop: 4,
                   }}
                 >
@@ -486,16 +703,42 @@ function App() {
 
             <div
               style={{
-                background: "#eff6ff",
-                border: "1px solid #bfdbfe",
-                borderRadius: 12,
-                padding: "10px 14px",
-                fontSize: 14,
-                color: "#1d4ed8",
-                whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
               }}
             >
-              Сегодня
+              <div
+                style={{
+                  background: "#eff6ff",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: 14,
+                  padding: "11px 16px",
+                  fontSize: 14,
+                  color: "#1d4ed8",
+                  whiteSpace: "nowrap",
+                  fontWeight: 600,
+                }}
+              >
+                {session.user?.email}
+              </div>
+
+              <button
+                onClick={handleLogout}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  background: "#ffffff",
+                  borderRadius: 14,
+                  padding: "11px 16px",
+                  cursor: "pointer",
+                  fontSize: 14,
+                  fontWeight: 700,
+                  color: "#0f172a",
+                  boxShadow: "0 6px 14px rgba(15, 23, 42, 0.04)",
+                }}
+              >
+                Выйти
+              </button>
             </div>
           </div>
 
