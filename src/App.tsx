@@ -126,6 +126,9 @@ function App() {
     return currentScreen !== "dashboard";
   }, [currentScreen]);
 
+  const userEmail = session?.user?.email || "";
+  const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
+
   useEffect(() => {
     document.body.style.overflow = menuOpen ? "hidden" : "auto";
 
@@ -602,9 +605,18 @@ function App() {
               gap: 12,
               border: "1px solid #dbe4f0",
               boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+              flexWrap: "wrap",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                minWidth: 0,
+                flex: "1 1 380px",
+              }}
+            >
               <button
                 onClick={() => setMenuOpen(true)}
                 style={{
@@ -678,12 +690,14 @@ function App() {
                 </button>
               )}
 
-              <div>
+              <div style={{ minWidth: 0 }}>
                 <div
                   style={{
                     fontSize: 28,
                     fontWeight: 700,
                     color: "#0f172a",
+                    lineHeight: 1.1,
+                    wordBreak: "break-word",
                   }}
                 >
                   {pageTitle}
@@ -694,6 +708,8 @@ function App() {
                     fontSize: 15,
                     color: "#64748b",
                     marginTop: 4,
+                    lineHeight: 1.4,
+                    wordBreak: "break-word",
                   }}
                 >
                   {pageSubtitle}
@@ -706,22 +722,28 @@ function App() {
                 display: "flex",
                 alignItems: "center",
                 gap: 10,
+                flexShrink: 0,
+                marginLeft: "auto",
               }}
             >
-              <div
+              <button
+                title={userEmail}
                 style={{
-                  background: "#eff6ff",
+                  width: 48,
+                  height: 48,
+                  borderRadius: 999,
                   border: "1px solid #bfdbfe",
-                  borderRadius: 14,
-                  padding: "11px 16px",
-                  fontSize: 14,
+                  background: "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)",
                   color: "#1d4ed8",
-                  whiteSpace: "nowrap",
-                  fontWeight: 600,
+                  fontSize: 20,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  boxShadow: "0 6px 14px rgba(37, 99, 235, 0.08)",
+                  flexShrink: 0,
                 }}
               >
-                {session.user?.email}
-              </div>
+                {userInitial}
+              </button>
 
               <button
                 onClick={handleLogout}
@@ -735,6 +757,7 @@ function App() {
                   fontWeight: 700,
                   color: "#0f172a",
                   boxShadow: "0 6px 14px rgba(15, 23, 42, 0.04)",
+                  flexShrink: 0,
                 }}
               >
                 Выйти
