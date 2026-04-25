@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Production from "./Production";
 import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
+import UnitsDirectory from "./directories/UnitsDirectory";
+import MaterialsDirectory from "./directories/MaterialsDirectory";
+import ConsumablesDirectory from "./directories/ConsumablesDirectory";
+import ProductsDirectory from "./directories/ProductsDirectory";
 import { supabase } from "./supabase";
 
 type Screen =
@@ -40,6 +44,7 @@ function App() {
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
   const [currentScreen, setCurrentScreen] = useState<Screen>("dashboard");
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const [session, setSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -50,6 +55,8 @@ function App() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [employeesError, setEmployeesError] = useState("");
+
+  const userMenuRef = useRef<HTMLDivElement | null>(null);
 
   const alerts = [
     "Пачка №124 зависла",
@@ -138,6 +145,25 @@ function App() {
   }, [menuOpen]);
 
   useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        userMenuRef.current &&
+        !userMenuRef.current.contains(event.target as Node)
+      ) {
+        setUserMenuOpen(false);
+      }
+    }
+
+    if (userMenuOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [userMenuOpen]);
+
+  useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthLoading(false);
@@ -199,15 +225,14 @@ function App() {
         throw error;
       }
     } catch (error) {
-      setLoginError(
-        error instanceof Error ? error.message : "Ошибка входа"
-      );
+      setLoginError(error instanceof Error ? error.message : "Ошибка входа");
     } finally {
       setLoginLoading(false);
     }
   }
 
   async function handleLogout() {
+    setUserMenuOpen(false);
     await supabase.auth.signOut();
   }
 
@@ -365,6 +390,18 @@ function App() {
       return <EmployeesDirectory />;
     }
 
+    if (currentScreen === "directory-units") {
+      return <UnitsDirectory />;
+    }
+
+    if (currentScreen === "directory-materials") {
+      return <MaterialsDirectory />;
+    }
+
+    if (currentScreen === "directory-consumables") {
+      return <ConsumablesDirectory />;
+    }
+
     if (currentScreen === "directory-suppliers") {
       return renderStubDirectory("Поставщики");
     }
@@ -374,15 +411,7 @@ function App() {
     }
 
     if (currentScreen === "directory-products") {
-      return renderStubDirectory("Изделия");
-    }
-
-    if (currentScreen === "directory-materials") {
-      return renderStubDirectory("Материалы");
-    }
-
-    if (currentScreen === "directory-consumables") {
-      return renderStubDirectory("Расходники");
+      return <ProductsDirectory />;
     }
 
     if (currentScreen === "directory-operations") {
@@ -391,10 +420,6 @@ function App() {
 
     if (currentScreen === "directory-variants") {
       return renderStubDirectory("Цвета и размеры");
-    }
-
-    if (currentScreen === "directory-units") {
-      return renderStubDirectory("Единицы измерения");
     }
 
     if (currentScreen === "directory-statuses") {
@@ -514,7 +539,8 @@ function App() {
               {menuItems.map((item) => {
                 const isActive =
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
-                  (item.key === "production" && currentScreen === "production") ||
+                  (item.key === "production" &&
+                    currentScreen === "production") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -718,22 +744,25 @@ function App() {
             </div>
 
             <div
+              ref={userMenuRef}
               style={{
+                position: "relative",
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
                 flexShrink: 0,
                 marginLeft: "auto",
               }}
             >
               <button
                 title={userEmail}
+                onClick={() => setUserMenuOpen((prev) => !prev)}
                 style={{
                   width: 48,
                   height: 48,
                   borderRadius: 999,
                   border: "1px solid #bfdbfe",
-                  background: "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)",
+                  background:
+                    "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)",
                   color: "#1d4ed8",
                   fontSize: 20,
                   fontWeight: 700,
@@ -745,23 +774,69 @@ function App() {
                 {userInitial}
               </button>
 
-              <button
-                onClick={handleLogout}
-                style={{
-                  border: "1px solid #cbd5e1",
-                  background: "#ffffff",
-                  borderRadius: 14,
-                  padding: "11px 16px",
-                  cursor: "pointer",
-                  fontSize: 14,
-                  fontWeight: 700,
-                  color: "#0f172a",
-                  boxShadow: "0 6px 14px rgba(15, 23, 42, 0.04)",
-                  flexShrink: 0,
-                }}
-              >
-                Выйти
-              </button>
+              {userMenuOpen && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 58,
+                    right: 0,
+                    minWidth: 180,
+                    background: "#ffffff",
+                    border: "1px solid #dbe4f0",
+                    borderRadius: 14,
+                    boxShadow: "0 14px 30px rgba(15, 23, 42, 0.12)",
+                    padding: 8,
+                    zIndex: 1000,
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: "8px 10px 10px 10px",
+                      borderBottom: "1px solid #eef2f7",
+                      marginBottom: 8,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "#64748b",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Пользователь
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "#0f172a",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {userEmail}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleLogout}
+                    style={{
+                      width: "100%",
+                      border: "none",
+                      background: "#ffffff",
+                      borderRadius: 10,
+                      padding: "10px 12px",
+                      cursor: "pointer",
+                      fontSize: 14,
+                      fontWeight: 700,
+                      color: "#dc2626",
+                      textAlign: "left",
+                    }}
+                  >
+                    Выйти
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
