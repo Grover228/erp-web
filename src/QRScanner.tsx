@@ -558,27 +558,63 @@ export default function QRScanner({
             position: "fixed",
             inset: 0,
             zIndex: 10000,
-            background: "rgba(15, 23, 42, 0.6)",
+            background: "rgba(15, 23, 42, 0.45)",
             display: "flex",
-            alignItems: "center",
+            alignItems: "flex-end",
             justifyContent: "center",
-            padding: 16,
+            padding: 0,
+            animation: "fadeIn 0.18s ease-out",
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
-              maxWidth: 560,
+              maxWidth: 620,
+              maxHeight: "88vh",
               background: "#ffffff",
-              borderRadius: 22,
-              padding: 20,
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              padding: 18,
               border: "1px solid #bfdbfe",
-              boxShadow: "0 22px 50px rgba(15, 23, 42, 0.25)",
-              display: "grid",
-              gap: 14,
+              boxShadow: "0 -16px 40px rgba(15, 23, 42, 0.25)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              animation: "slideUp 0.22s ease-out",
             }}
           >
+            <style>
+              {`
+                @keyframes fadeIn {
+                  from { opacity: 0; }
+                  to { opacity: 1; }
+                }
+
+                @keyframes slideUp {
+                  from {
+                    transform: translateY(40px);
+                    opacity: 0.7;
+                  }
+                  to {
+                    transform: translateY(0);
+                    opacity: 1;
+                  }
+                }
+              `}
+            </style>
+
+            <div
+              style={{
+                width: 52,
+                height: 5,
+                borderRadius: 999,
+                background: "#cbd5e1",
+                alignSelf: "center",
+                marginBottom: 4,
+              }}
+            />
+
             <div
               style={{
                 display: "flex",
@@ -590,7 +626,7 @@ export default function QRScanner({
               <div>
                 <div
                   style={{
-                    fontSize: 24,
+                    fontSize: 22,
                     fontWeight: 900,
                     color: "#111827",
                   }}
@@ -598,7 +634,7 @@ export default function QRScanner({
                   Пачка {modalBatch.batch_number}
                 </div>
 
-                <div style={{ marginTop: 4, color: "#64748b" }}>
+                <div style={{ marginTop: 4, color: "#64748b", fontSize: 14 }}>
                   QR успешно прочитан
                 </div>
               </div>
@@ -623,17 +659,18 @@ export default function QRScanner({
 
             <div
               style={{
+                overflowY: "auto",
                 display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
                 gap: 10,
+                paddingRight: 2,
               }}
             >
-              <InfoBox
+              <CompactRow
                 label="Заказ"
                 value={scannedBatchData.order?.order_number || "—"}
               />
 
-              <InfoBox
+              <CompactRow
                 label="Изделие"
                 value={
                   modalBatch.product_name ||
@@ -642,7 +679,7 @@ export default function QRScanner({
                 }
               />
 
-              <InfoBox
+              <CompactRow
                 label="Артикул"
                 value={
                   modalBatch.product_article ||
@@ -651,20 +688,26 @@ export default function QRScanner({
                 }
               />
 
-              <InfoBox label="Цвет" value={modalBatch.color_name || "—"} />
+              <CompactRow label="Цвет" value={modalBatch.color_name || "—"} />
 
-              <InfoBox label="Всего в пачке" value={`${batchQuantity} шт`} />
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 8,
+                }}
+              >
+                <MiniBox label="Всего" value={`${batchQuantity} шт`} />
+                <MiniBox label="Сделано" value={`${batchCompleted} шт`} />
+                <MiniBox label="Осталось" value={`${batchLeft} шт`} />
+              </div>
 
-              <InfoBox label="Уже сделано" value={`${batchCompleted} шт`} />
-
-              <InfoBox label="Осталось" value={`${batchLeft} шт`} />
-
-              <InfoBox
+              <CompactRow
                 label="Статус пачки"
                 value={getStatusLabel(modalBatch.status)}
               />
 
-              <InfoBox
+              <CompactRow
                 label="Операция"
                 value={
                   modalOperation
@@ -672,74 +715,76 @@ export default function QRScanner({
                     : "операция не найдена"
                 }
               />
+
+              {!modalOperation && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#991b1b",
+                    fontWeight: 700,
+                  }}
+                >
+                  Не найдена операция для этой пачки.
+                </div>
+              )}
+
+              {modalBatch.status === "in_progress" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#eff6ff",
+                    border: "1px solid #bfdbfe",
+                    color: "#1d4ed8",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка уже находится в работе.
+                </div>
+              )}
+
+              {modalBatch.status === "done" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#f0fdf4",
+                    border: "1px solid #86efac",
+                    color: "#166534",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка уже завершена на текущей операции.
+                </div>
+              )}
             </div>
 
-            {modalBatch.status !== "in_progress" &&
-              modalBatch.status !== "done" &&
-              modalOperation && (
+            {modalOperation &&
+              modalBatch.status !== "in_progress" &&
+              modalBatch.status !== "done" && (
                 <button
                   onClick={handleTakeBatchToWork}
                   disabled={actionLoading}
                   style={{
                     border: "none",
-                    borderRadius: 14,
-                    padding: "16px 18px",
+                    borderRadius: 16,
+                    padding: "17px 18px",
                     background: actionLoading ? "#93c5fd" : "#2563eb",
                     color: "#ffffff",
                     fontWeight: 900,
                     cursor: actionLoading ? "default" : "pointer",
                     width: "100%",
                     fontSize: 17,
+                    flexShrink: 0,
+                    boxShadow: "0 10px 22px rgba(37, 99, 235, 0.25)",
                   }}
                 >
                   {actionLoading ? "Сохраняю..." : "Взять пачку в работу"}
                 </button>
               )}
-
-            {modalBatch.status === "in_progress" && (
-              <div
-                style={{
-                  padding: 14,
-                  borderRadius: 14,
-                  background: "#eff6ff",
-                  border: "1px solid #bfdbfe",
-                  color: "#1d4ed8",
-                  fontWeight: 700,
-                }}
-              >
-                Эта пачка уже находится в работе.
-              </div>
-            )}
-
-            {modalBatch.status === "done" && (
-              <div
-                style={{
-                  padding: 14,
-                  borderRadius: 14,
-                  background: "#f0fdf4",
-                  border: "1px solid #86efac",
-                  color: "#166534",
-                  fontWeight: 700,
-                }}
-              >
-                Эта пачка уже завершена на текущей операции.
-              </div>
-            )}
-
-            {!modalOperation && (
-              <div
-                style={{
-                  padding: 14,
-                  borderRadius: 14,
-                  background: "#fef2f2",
-                  border: "1px solid #fecaca",
-                  color: "#991b1b",
-                  fontWeight: 700,
-                }}
-              >
-                Не найдена операция для этой пачки.
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -747,17 +792,54 @@ export default function QRScanner({
   );
 }
 
-function InfoBox({ label, value }: { label: string; value: string }) {
+function CompactRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 12,
+        alignItems: "center",
+        background: "#f8fbff",
+        border: "1px solid #e0edff",
+        borderRadius: 14,
+        padding: "12px 14px",
+      }}
+    >
+      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
+      <div
+        style={{
+          color: "#111827",
+          fontWeight: 800,
+          textAlign: "right",
+          wordBreak: "break-word",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function MiniBox({ label, value }: { label: string; value: string }) {
   return (
     <div
       style={{
         background: "#eff6ff",
-        borderRadius: 12,
+        borderRadius: 14,
         padding: 12,
+        textAlign: "center",
       }}
     >
-      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
-      <div style={{ marginTop: 4, fontWeight: 800, color: "#111827" }}>
+      <div style={{ fontSize: 12, color: "#64748b" }}>{label}</div>
+      <div
+        style={{
+          marginTop: 4,
+          fontWeight: 900,
+          color: "#111827",
+          fontSize: 16,
+        }}
+      >
         {value}
       </div>
     </div>
