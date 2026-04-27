@@ -2,11 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
 import { supabase } from "./supabase";
 
-type CameraItem = {
-  id: string;
-  label: string;
-};
-
 type QrPayload = {
   batch_number?: string;
   order_number?: string;
@@ -22,6 +17,7 @@ type BatchInfo = {
   source_operation_id: string | null;
   batch_number: string;
   quantity: number;
+  completed_quantity: number | null;
   current_operation_order: number | null;
   status: string | null;
   qr_code: string | null;
@@ -30,6 +26,10 @@ type BatchInfo = {
   color_name: string | null;
   qr_payload: QrPayload | null;
   comment: string | null;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string | null;
 };
 
@@ -65,8 +65,7 @@ type ScannedBatchData = {
 
 function parseQrText(text: string): QrPayload {
   try {
-    const parsed = JSON.parse(text) as QrPayload;
-    return parsed;
+    return JSON.parse(text) as QrPayload;
   } catch {
     return {
       batch_number: text.trim(),
@@ -82,6 +81,8 @@ function getStatusLabel(status: string | null | undefined) {
       return "Ожидает";
     case "waiting":
       return "Ожидает";
+    case "partial":
+      return "Частично выполнено";
     case "in_progress":
       return "В работе";
     case "done":
@@ -105,52 +106,17 @@ export default function QRScanner({
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const lastScannedRef = useRef("");
+  const isStartingRef = useRef(false);
 
   const [isStarting, setIsStarting] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const [result, setResult] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
-  const [selectedFileName, setSelectedFileName] = useState("");
-  const [cameras, setCameras] = useState<CameraItem[]>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState("");
 
   const [loadingBatch, setLoadingBatch] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [scannedBatchData, setScannedBatchData] =
     useState<ScannedBatchData | null>(null);
-
-  async function loadCameras() {
-    try {
-      const devices = await Html5Qrcode.getCameras();
-
-      const mapped = devices.map((cam) => ({
-        id: cam.id,
-        label: cam.label || `Камера ${cam.id}`,
-      }));
-
-      setCameras(mapped);
-
-      if (mapped.length > 0 && !selectedCameraId) {
-        const backCamera =
-          mapped.find((cam) => cam.label.toLowerCase().includes("back")) ||
-          mapped.find((cam) => cam.label.toLowerCase().includes("rear")) ||
-          mapped.find((cam) =>
-            cam.label.toLowerCase().includes("environment")
-          ) ||
-          mapped[0];
-
-        setSelectedCameraId(backCamera.id);
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Не удалось получить список камер";
-
-      setErrorMessage(`Ошибка получения камер: ${message}`);
-    }
-  }
 
   async function ensureScannerInstance() {
     if (!scannerRef.current) {
@@ -183,6 +149,7 @@ export default function QRScanner({
     }
 
     scannerRef.current = null;
+    setIsScanning(false);
   }
 
   async function pauseScannerAfterScan() {
@@ -197,7 +164,26 @@ export default function QRScanner({
 
       setIsScanning(false);
     } catch {
-      await stopScanner();
+      await stopAndClearScanner();
+    }
+  }
+
+  async function resumeScanner() {
+    try {
+      if (!scannerRef.current) {
+        await startScanner();
+        return;
+      }
+
+      const state = scannerRef.current.getState();
+
+      if (state === Html5QrcodeScannerState.PAUSED) {
+        scannerRef.current.resume();
+        setIsScanning(true);
+        lastScannedRef.current = "";
+      }
+    } catch {
+      await startScanner();
     }
   }
 
@@ -288,42 +274,30 @@ export default function QRScanner({
     if (lastScannedRef.current === decodedText) return;
     lastScannedRef.current = decodedText;
 
-    setResult(decodedText);
-
     await pauseScannerAfterScan();
     await findBatchByQr(decodedText);
   }
 
   async function startScanner() {
+    if (isStartingRef.current) return;
+
     try {
+      isStartingRef.current = true;
       setErrorMessage("");
       setSuccessMessage("");
-      setResult("");
       setScannedBatchData(null);
       setIsStarting(true);
       lastScannedRef.current = "";
 
       await stopAndClearScanner();
 
-      if (!selectedCameraId) {
-        await loadCameras();
-      }
-
-      const cameraIdToUse = selectedCameraId || cameras[0]?.id;
-
-      if (!cameraIdToUse) {
-        throw new Error(
-          "Камеры не найдены. Проверь разрешение на камеру в браузере."
-        );
-      }
-
       const scanner = await ensureScannerInstance();
 
       await scanner.start(
-        cameraIdToUse,
+        { facingMode: "environment" },
         {
           fps: 10,
-          qrbox: { width: 240, height: 240 },
+          qrbox: { width: 250, height: 250 },
           aspectRatio: 1,
         },
         (decodedText) => {
@@ -344,48 +318,16 @@ export default function QRScanner({
       setErrorMessage(`Ошибка камеры: ${message}`);
       setIsScanning(false);
     } finally {
+      isStartingRef.current = false;
       setIsStarting(false);
     }
   }
 
-  async function stopScanner() {
-    await stopAndClearScanner();
-    setIsScanning(false);
-  }
-
-  async function handleFileScan(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    try {
-      setErrorMessage("");
-      setSuccessMessage("");
-      setResult("");
-      setScannedBatchData(null);
-      setSelectedFileName(file.name);
-      lastScannedRef.current = "";
-
-      await stopAndClearScanner();
-
-      const tempScanner = new Html5Qrcode(scannerRegionId);
-      const decoded = await tempScanner.scanFile(file, true);
-
-      setResult(decoded);
-      await findBatchByQr(decoded);
-
-      try {
-        await tempScanner.clear();
-      } catch {
-        // игнорируем
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Не удалось прочитать QR с изображения";
-
-      setErrorMessage(`Ошибка файла: ${message}`);
-    }
+  async function handleCloseModal() {
+    setScannedBatchData(null);
+    setErrorMessage("");
+    setSuccessMessage("");
+    await resumeScanner();
   }
 
   async function handleTakeBatchToWork() {
@@ -400,13 +342,13 @@ export default function QRScanner({
       return;
     }
 
-    if (operation.status === "in_progress") {
-      setErrorMessage("Эта операция уже находится в работе.");
+    if (batch.status === "in_progress") {
+      setErrorMessage("Эта пачка уже находится в работе.");
       return;
     }
 
-    if (operation.status === "done") {
-      setErrorMessage("Эта операция уже завершена.");
+    if (batch.status === "done") {
+      setErrorMessage("Эта пачка уже завершена на текущей операции.");
       return;
     }
 
@@ -424,26 +366,31 @@ export default function QRScanner({
 
       const now = new Date().toISOString();
 
-      const { error: operationError } = await supabase
-        .from("production_order_operations")
+      const { error: batchError } = await supabase
+        .from("production_batches")
         .update({
           status: "in_progress",
           assigned_user_id: user?.id || null,
           assigned_at: now,
           started_at: now,
         })
-        .eq("id", operation.id);
-
-      if (operationError) throw operationError;
-
-      const { error: batchError } = await supabase
-        .from("production_batches")
-        .update({
-          status: "in_progress",
-        })
         .eq("id", batch.id);
 
       if (batchError) throw batchError;
+
+      if (operation.status !== "in_progress") {
+        const { error: operationError } = await supabase
+          .from("production_order_operations")
+          .update({
+            status: "in_progress",
+            assigned_user_id: user?.id || null,
+            assigned_at: now,
+            started_at: now,
+          })
+          .eq("id", operation.id);
+
+        if (operationError) throw operationError;
+      }
 
       if (order?.status === "draft") {
         const { error: orderError } = await supabase
@@ -460,30 +407,9 @@ export default function QRScanner({
         `Пачка ${batch.batch_number} взята в работу: ${operation.operation_name}`
       );
 
-      setScannedBatchData({
-        ...scannedBatchData,
-        batch: {
-          ...batch,
-          status: "in_progress",
-        },
-        operation: {
-          ...operation,
-          status: "in_progress",
-          assigned_user_id: user?.id || null,
-          assigned_at: now,
-          started_at: now,
-        },
-        order: order
-          ? {
-              ...order,
-              status: order.status === "draft" ? "in_progress" : order.status,
-            }
-          : order,
-      });
-
       window.setTimeout(() => {
         onTakenToWork?.();
-      }, 600);
+      }, 500);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Не удалось взять пачку в работу";
@@ -494,8 +420,15 @@ export default function QRScanner({
     }
   }
 
+  const modalBatch = scannedBatchData?.batch || null;
+  const modalOperation = scannedBatchData?.operation || null;
+
+  const batchQuantity = Number(modalBatch?.quantity || 0);
+  const batchCompleted = Number(modalBatch?.completed_quantity || 0);
+  const batchLeft = Math.max(0, batchQuantity - batchCompleted);
+
   useEffect(() => {
-    loadCameras();
+    startScanner();
 
     return () => {
       stopAndClearScanner().catch(() => {});
@@ -530,115 +463,13 @@ export default function QRScanner({
           lineHeight: 1.5,
         }}
       >
-        Сканируй QR-код пачки. После чтения система найдёт пачку и предложит
-        взять её в работу.
+        Наведи камеру на QR-код пачки. Камера запускается автоматически.
       </p>
 
       <div
         style={{
-          display: "flex",
-          gap: 12,
-          flexWrap: "wrap",
-          marginBottom: 16,
-          alignItems: "center",
-        }}
-      >
-        <select
-          value={selectedCameraId}
-          onChange={(e) => setSelectedCameraId(e.target.value)}
-          style={{
-            border: "1px solid #d1d5db",
-            borderRadius: 12,
-            padding: "12px 14px",
-            background: "#fff",
-            color: "#111827",
-            minWidth: 220,
-          }}
-        >
-          <option value="">Выбери камеру</option>
-          {cameras.map((camera) => (
-            <option key={camera.id} value={camera.id}>
-              {camera.label}
-            </option>
-          ))}
-        </select>
-
-        <button
-          onClick={startScanner}
-          disabled={isStarting || isScanning}
-          style={{
-            border: "none",
-            borderRadius: 12,
-            padding: "12px 16px",
-            background: isStarting || isScanning ? "#93c5fd" : "#2563eb",
-            color: "#fff",
-            fontWeight: 700,
-            cursor: isStarting || isScanning ? "default" : "pointer",
-          }}
-        >
-          {isStarting
-            ? "Запуск..."
-            : isScanning
-            ? "Камера активна"
-            : "Включить камеру"}
-        </button>
-
-        <button
-          onClick={stopScanner}
-          disabled={!isScanning}
-          style={{
-            border: "1px solid #d1d5db",
-            borderRadius: 12,
-            padding: "12px 16px",
-            background: !isScanning ? "#f3f4f6" : "#fff",
-            color: "#111827",
-            fontWeight: 700,
-            cursor: !isScanning ? "default" : "pointer",
-          }}
-        >
-          Остановить
-        </button>
-
-        <button
-          onClick={loadCameras}
-          style={{
-            border: "1px solid #d1d5db",
-            borderRadius: 12,
-            padding: "12px 16px",
-            background: "#fff",
-            color: "#111827",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          Обновить камеры
-        </button>
-
-        <label
-          style={{
-            border: "1px solid #d1d5db",
-            borderRadius: 12,
-            padding: "12px 16px",
-            background: "#fff",
-            color: "#111827",
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          Загрузить фото QR
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleFileScan}
-            style={{ display: "none" }}
-          />
-        </label>
-      </div>
-
-      <div
-        style={{
           width: "100%",
-          maxWidth: 420,
+          maxWidth: 520,
           marginBottom: 16,
         }}
       >
@@ -646,8 +477,8 @@ export default function QRScanner({
           id={scannerRegionId}
           style={{
             width: "100%",
-            minHeight: 320,
-            borderRadius: 16,
+            minHeight: 360,
+            borderRadius: 18,
             border: "2px solid #cbd5e1",
             background: "#0f172a",
             overflow: "hidden",
@@ -655,42 +486,21 @@ export default function QRScanner({
           }}
         />
 
-        {!isScanning && (
-          <div
-            style={{
-              marginTop: 10,
-              color: "#64748b",
-              fontSize: 14,
-            }}
-          >
-            После запуска здесь должно появиться изображение с камеры.
-          </div>
-        )}
+        <div
+          style={{
+            marginTop: 10,
+            color: isScanning ? "#166534" : "#64748b",
+            fontSize: 14,
+            fontWeight: 700,
+          }}
+        >
+          {isStarting
+            ? "Запускаю камеру..."
+            : isScanning
+            ? "Камера активна. Наведи на QR-код."
+            : "Камера временно остановлена."}
+        </div>
       </div>
-
-      {cameras.length > 0 && (
-        <div
-          style={{
-            marginBottom: 12,
-            color: "#475569",
-            fontSize: 14,
-          }}
-        >
-          Найдено камер: {cameras.length}
-        </div>
-      )}
-
-      {selectedFileName && (
-        <div
-          style={{
-            marginBottom: 12,
-            color: "#475569",
-            fontSize: 14,
-          }}
-        >
-          Загружен файл: {selectedFileName}
-        </div>
-      )}
 
       {loadingBatch && (
         <div
@@ -725,23 +535,6 @@ export default function QRScanner({
         </div>
       )}
 
-      {result && (
-        <div
-          style={{
-            padding: 16,
-            borderRadius: 14,
-            background: "#f8fafc",
-            border: "1px solid #e5e7eb",
-            color: "#475569",
-            fontWeight: 600,
-            wordBreak: "break-word",
-            marginBottom: 12,
-          }}
-        >
-          Прочитанный QR: {result}
-        </div>
-      )}
-
       {errorMessage && (
         <div
           style={{
@@ -758,14 +551,14 @@ export default function QRScanner({
         </div>
       )}
 
-      {scannedBatchData && (
+      {scannedBatchData && modalBatch && (
         <div
-          onClick={() => setScannedBatchData(null)}
+          onClick={handleCloseModal}
           style={{
             position: "fixed",
             inset: 0,
             zIndex: 10000,
-            background: "rgba(15, 23, 42, 0.55)",
+            background: "rgba(15, 23, 42, 0.6)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -776,9 +569,9 @@ export default function QRScanner({
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
-              maxWidth: 520,
+              maxWidth: 560,
               background: "#ffffff",
-              borderRadius: 20,
+              borderRadius: 22,
               padding: 20,
               border: "1px solid #bfdbfe",
               boxShadow: "0 22px 50px rgba(15, 23, 42, 0.25)",
@@ -797,12 +590,12 @@ export default function QRScanner({
               <div>
                 <div
                   style={{
-                    fontSize: 22,
-                    fontWeight: 800,
+                    fontSize: 24,
+                    fontWeight: 900,
                     color: "#111827",
                   }}
                 >
-                  Пачка {scannedBatchData.batch.batch_number}
+                  Пачка {modalBatch.batch_number}
                 </div>
 
                 <div style={{ marginTop: 4, color: "#64748b" }}>
@@ -811,16 +604,17 @@ export default function QRScanner({
               </div>
 
               <button
-                onClick={() => setScannedBatchData(null)}
+                onClick={handleCloseModal}
                 style={{
-                  width: 40,
-                  height: 40,
+                  width: 42,
+                  height: 42,
                   borderRadius: 12,
                   border: "1px solid #cbd5e1",
                   background: "#ffffff",
                   cursor: "pointer",
                   fontSize: 20,
                   color: "#0f172a",
+                  flexShrink: 0,
                 }}
               >
                 ×
@@ -842,7 +636,7 @@ export default function QRScanner({
               <InfoBox
                 label="Изделие"
                 value={
-                  scannedBatchData.batch.product_name ||
+                  modalBatch.product_name ||
                   scannedBatchData.order?.product?.name ||
                   "—"
                 }
@@ -851,65 +645,58 @@ export default function QRScanner({
               <InfoBox
                 label="Артикул"
                 value={
-                  scannedBatchData.batch.product_article ||
+                  modalBatch.product_article ||
                   scannedBatchData.order?.product?.article ||
                   "—"
                 }
               />
 
-              <InfoBox
-                label="Цвет"
-                value={scannedBatchData.batch.color_name || "—"}
-              />
+              <InfoBox label="Цвет" value={modalBatch.color_name || "—"} />
 
-              <InfoBox
-                label="Количество"
-                value={`${scannedBatchData.batch.quantity} шт`}
-              />
+              <InfoBox label="Всего в пачке" value={`${batchQuantity} шт`} />
+
+              <InfoBox label="Уже сделано" value={`${batchCompleted} шт`} />
+
+              <InfoBox label="Осталось" value={`${batchLeft} шт`} />
 
               <InfoBox
                 label="Статус пачки"
-                value={getStatusLabel(scannedBatchData.batch.status)}
+                value={getStatusLabel(modalBatch.status)}
               />
 
               <InfoBox
                 label="Операция"
                 value={
-                  scannedBatchData.operation
-                    ? `${scannedBatchData.operation.sort_order}. ${scannedBatchData.operation.operation_name}`
+                  modalOperation
+                    ? `${modalOperation.sort_order}. ${modalOperation.operation_name}`
                     : "операция не найдена"
                 }
               />
-
-              <InfoBox
-                label="Статус операции"
-                value={getStatusLabel(scannedBatchData.operation?.status)}
-              />
             </div>
 
-            {scannedBatchData.operation &&
-              scannedBatchData.operation.status !== "in_progress" &&
-              scannedBatchData.operation.status !== "done" && (
+            {modalBatch.status !== "in_progress" &&
+              modalBatch.status !== "done" &&
+              modalOperation && (
                 <button
                   onClick={handleTakeBatchToWork}
                   disabled={actionLoading}
                   style={{
                     border: "none",
                     borderRadius: 14,
-                    padding: "15px 18px",
+                    padding: "16px 18px",
                     background: actionLoading ? "#93c5fd" : "#2563eb",
                     color: "#ffffff",
-                    fontWeight: 800,
+                    fontWeight: 900,
                     cursor: actionLoading ? "default" : "pointer",
                     width: "100%",
-                    fontSize: 16,
+                    fontSize: 17,
                   }}
                 >
-                  {actionLoading ? "Сохраняю..." : "Взять в работу"}
+                  {actionLoading ? "Сохраняю..." : "Взять пачку в работу"}
                 </button>
               )}
 
-            {scannedBatchData.operation?.status === "in_progress" && (
+            {modalBatch.status === "in_progress" && (
               <div
                 style={{
                   padding: 14,
@@ -920,11 +707,11 @@ export default function QRScanner({
                   fontWeight: 700,
                 }}
               >
-                Эта операция уже находится в работе.
+                Эта пачка уже находится в работе.
               </div>
             )}
 
-            {scannedBatchData.operation?.status === "done" && (
+            {modalBatch.status === "done" && (
               <div
                 style={{
                   padding: 14,
@@ -935,7 +722,22 @@ export default function QRScanner({
                   fontWeight: 700,
                 }}
               >
-                Эта операция уже завершена.
+                Эта пачка уже завершена на текущей операции.
+              </div>
+            )}
+
+            {!modalOperation && (
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 14,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#991b1b",
+                  fontWeight: 700,
+                }}
+              >
+                Не найдена операция для этой пачки.
               </div>
             )}
           </div>
