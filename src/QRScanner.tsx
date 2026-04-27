@@ -93,7 +93,11 @@ function getStatusLabel(status: string | null | undefined) {
   }
 }
 
-export default function QRScanner() {
+export default function QRScanner({
+  onTakenToWork,
+}: {
+  onTakenToWork?: () => void;
+}) {
   const scannerRegionId = useMemo(
     () => `qr-reader-${Math.random().toString(36).slice(2, 9)}`,
     []
@@ -152,6 +156,7 @@ export default function QRScanner() {
     if (!scannerRef.current) {
       scannerRef.current = new Html5Qrcode(scannerRegionId);
     }
+
     return scannerRef.current;
   }
 
@@ -178,6 +183,22 @@ export default function QRScanner() {
     }
 
     scannerRef.current = null;
+  }
+
+  async function pauseScannerAfterScan() {
+    try {
+      if (!scannerRef.current) return;
+
+      const state = scannerRef.current.getState();
+
+      if (state === Html5QrcodeScannerState.SCANNING) {
+        scannerRef.current.pause(true);
+      }
+
+      setIsScanning(false);
+    } catch {
+      await stopScanner();
+    }
   }
 
   async function findBatchByQr(decodedText: string) {
@@ -241,6 +262,7 @@ export default function QRScanner() {
       const operations = (operationsResult.data as OperationInfo[]) || [];
 
       const currentOperationOrder = Number(batch.current_operation_order || 0);
+
       const operation =
         operations.find((item) => item.sort_order === currentOperationOrder) ||
         null;
@@ -267,7 +289,8 @@ export default function QRScanner() {
     lastScannedRef.current = decodedText;
 
     setResult(decodedText);
-    await stopScanner();
+
+    await pauseScannerAfterScan();
     await findBatchByQr(decodedText);
   }
 
@@ -346,6 +369,7 @@ export default function QRScanner() {
 
       const tempScanner = new Html5Qrcode(scannerRegionId);
       const decoded = await tempScanner.scanFile(file, true);
+
       setResult(decoded);
       await findBatchByQr(decoded);
 
@@ -456,6 +480,10 @@ export default function QRScanner() {
             }
           : order,
       });
+
+      window.setTimeout(() => {
+        onTakenToWork?.();
+      }, 600);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Не удалось взять пачку в работу";
@@ -680,75 +708,6 @@ export default function QRScanner() {
         </div>
       )}
 
-      {scannedBatchData && (
-        <div
-          style={{
-            padding: 16,
-            borderRadius: 14,
-            background: "#f8fbff",
-            border: "1px solid #bfdbfe",
-            marginBottom: 12,
-            display: "grid",
-            gap: 12,
-          }}
-        >
-          <div style={{ fontSize: 20, fontWeight: 800, color: "#111827" }}>
-            Пачка {scannedBatchData.batch.batch_number}
-          </div>
-
-          <div style={{ color: "#334155", lineHeight: 1.7 }}>
-            <div>
-              Заказ: {scannedBatchData.order?.order_number || "—"}
-            </div>
-            <div>
-              Изделие:{" "}
-              {scannedBatchData.batch.product_name ||
-                scannedBatchData.order?.product?.name ||
-                "—"}
-            </div>
-            <div>
-              Артикул:{" "}
-              {scannedBatchData.batch.product_article ||
-                scannedBatchData.order?.product?.article ||
-                "—"}
-            </div>
-            <div>Цвет: {scannedBatchData.batch.color_name || "—"}</div>
-            <div>Количество в пачке: {scannedBatchData.batch.quantity} шт</div>
-            <div>Статус пачки: {getStatusLabel(scannedBatchData.batch.status)}</div>
-            <div>
-              Следующая операция:{" "}
-              {scannedBatchData.operation
-                ? `${scannedBatchData.operation.sort_order}. ${scannedBatchData.operation.operation_name}`
-                : "операция не найдена"}
-            </div>
-            <div>
-              Статус операции: {getStatusLabel(scannedBatchData.operation?.status)}
-            </div>
-          </div>
-
-          {scannedBatchData.operation &&
-            scannedBatchData.operation.status !== "in_progress" &&
-            scannedBatchData.operation.status !== "done" && (
-              <button
-                onClick={handleTakeBatchToWork}
-                disabled={actionLoading}
-                style={{
-                  border: "none",
-                  borderRadius: 12,
-                  padding: "14px 18px",
-                  background: actionLoading ? "#93c5fd" : "#2563eb",
-                  color: "#ffffff",
-                  fontWeight: 800,
-                  cursor: actionLoading ? "default" : "pointer",
-                  width: "fit-content",
-                }}
-              >
-                {actionLoading ? "Сохраняю..." : "Взять пачку в работу"}
-              </button>
-            )}
-        </div>
-      )}
-
       {successMessage && (
         <div
           style={{
@@ -798,6 +757,207 @@ export default function QRScanner() {
           {errorMessage}
         </div>
       )}
+
+      {scannedBatchData && (
+        <div
+          onClick={() => setScannedBatchData(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(15, 23, 42, 0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              background: "#ffffff",
+              borderRadius: 20,
+              padding: 20,
+              border: "1px solid #bfdbfe",
+              boxShadow: "0 22px 50px rgba(15, 23, 42, 0.25)",
+              display: "grid",
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "flex-start",
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 800,
+                    color: "#111827",
+                  }}
+                >
+                  Пачка {scannedBatchData.batch.batch_number}
+                </div>
+
+                <div style={{ marginTop: 4, color: "#64748b" }}>
+                  QR успешно прочитан
+                </div>
+              </div>
+
+              <button
+                onClick={() => setScannedBatchData(null)}
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 12,
+                  border: "1px solid #cbd5e1",
+                  background: "#ffffff",
+                  cursor: "pointer",
+                  fontSize: 20,
+                  color: "#0f172a",
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                gap: 10,
+              }}
+            >
+              <InfoBox
+                label="Заказ"
+                value={scannedBatchData.order?.order_number || "—"}
+              />
+
+              <InfoBox
+                label="Изделие"
+                value={
+                  scannedBatchData.batch.product_name ||
+                  scannedBatchData.order?.product?.name ||
+                  "—"
+                }
+              />
+
+              <InfoBox
+                label="Артикул"
+                value={
+                  scannedBatchData.batch.product_article ||
+                  scannedBatchData.order?.product?.article ||
+                  "—"
+                }
+              />
+
+              <InfoBox
+                label="Цвет"
+                value={scannedBatchData.batch.color_name || "—"}
+              />
+
+              <InfoBox
+                label="Количество"
+                value={`${scannedBatchData.batch.quantity} шт`}
+              />
+
+              <InfoBox
+                label="Статус пачки"
+                value={getStatusLabel(scannedBatchData.batch.status)}
+              />
+
+              <InfoBox
+                label="Операция"
+                value={
+                  scannedBatchData.operation
+                    ? `${scannedBatchData.operation.sort_order}. ${scannedBatchData.operation.operation_name}`
+                    : "операция не найдена"
+                }
+              />
+
+              <InfoBox
+                label="Статус операции"
+                value={getStatusLabel(scannedBatchData.operation?.status)}
+              />
+            </div>
+
+            {scannedBatchData.operation &&
+              scannedBatchData.operation.status !== "in_progress" &&
+              scannedBatchData.operation.status !== "done" && (
+                <button
+                  onClick={handleTakeBatchToWork}
+                  disabled={actionLoading}
+                  style={{
+                    border: "none",
+                    borderRadius: 14,
+                    padding: "15px 18px",
+                    background: actionLoading ? "#93c5fd" : "#2563eb",
+                    color: "#ffffff",
+                    fontWeight: 800,
+                    cursor: actionLoading ? "default" : "pointer",
+                    width: "100%",
+                    fontSize: 16,
+                  }}
+                >
+                  {actionLoading ? "Сохраняю..." : "Взять в работу"}
+                </button>
+              )}
+
+            {scannedBatchData.operation?.status === "in_progress" && (
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 14,
+                  background: "#eff6ff",
+                  border: "1px solid #bfdbfe",
+                  color: "#1d4ed8",
+                  fontWeight: 700,
+                }}
+              >
+                Эта операция уже находится в работе.
+              </div>
+            )}
+
+            {scannedBatchData.operation?.status === "done" && (
+              <div
+                style={{
+                  padding: 14,
+                  borderRadius: 14,
+                  background: "#f0fdf4",
+                  border: "1px solid #86efac",
+                  color: "#166534",
+                  fontWeight: 700,
+                }}
+              >
+                Эта операция уже завершена.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InfoBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        background: "#eff6ff",
+        borderRadius: 12,
+        padding: 12,
+      }}
+    >
+      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
+      <div style={{ marginTop: 4, fontWeight: 800, color: "#111827" }}>
+        {value}
+      </div>
     </div>
   );
 }

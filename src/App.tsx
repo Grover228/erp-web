@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import Production from "./Production";
+import Production, { type ProductionTab } from "./Production";
 import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -44,6 +44,8 @@ function App() {
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
   const [currentScreen, setCurrentScreen] = useState<Screen>("dashboard");
+  const [productionInitialTab, setProductionInitialTab] =
+    useState<ProductionTab>("jobs");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const [session, setSession] = useState<any>(null);
@@ -276,6 +278,7 @@ function App() {
 
   function handleGoBack() {
     if (currentScreen === "production") {
+      setProductionInitialTab("jobs");
       setCurrentScreen("dashboard");
       return;
     }
@@ -379,7 +382,7 @@ function App() {
     }
 
     if (currentScreen === "production") {
-      return <Production />;
+      return <Production initialTab={productionInitialTab} />;
     }
 
     if (currentScreen === "directories") {
@@ -427,7 +430,14 @@ function App() {
     }
 
     if (currentScreen === "scanner") {
-      return <QRScanner />;
+      return (
+        <QRScanner
+          onTakenToWork={() => {
+            setProductionInitialTab("active");
+            setCurrentScreen("production");
+          }}
+        />
+      );
     }
 
     return null;
@@ -564,6 +574,7 @@ function App() {
                           setCurrentScreen("dashboard");
                           break;
                         case "production":
+                          setProductionInitialTab("jobs");
                           setCurrentScreen("production");
                           break;
                         case "directories":

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
 
-type ProductionTab = "jobs" | "active" | "techcards";
+export type ProductionTab = "jobs" | "active" | "techcards";
 
 type ProductionOrder = {
   id: string;
@@ -231,8 +231,12 @@ function ProgressBar({ value }: { value: number }) {
   );
 }
 
-export default function Production() {
-  const [tab, setTab] = useState<ProductionTab>("jobs");
+export default function Production({
+  initialTab = "jobs",
+}: {
+  initialTab?: ProductionTab;
+}) {
+  const [tab, setTab] = useState<ProductionTab>(initialTab);
 
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [operations, setOperations] = useState<ProductionOrderOperation[]>([]);
@@ -267,11 +271,16 @@ export default function Production() {
   const [finishError, setFinishError] = useState("");
 
   const [generatedQr, setGeneratedQr] = useState<GeneratedQr | null>(null);
-  const [qrHistoryOrder, setQrHistoryOrder] = useState<ProductionOrder | null>(null);
+  const [qrHistoryOrder, setQrHistoryOrder] =
+    useState<ProductionOrder | null>(null);
   const [qrHistoryItems, setQrHistoryItems] = useState<GeneratedQr[]>([]);
   const [qrHistoryLoading, setQrHistoryLoading] = useState(false);
 
   const [nowTick, setNowTick] = useState(Date.now());
+
+  useEffect(() => {
+    setTab(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     loadAll();
@@ -460,7 +469,9 @@ export default function Production() {
     e.preventDefault();
 
     const product = products.find((item) => item.id === selectedProductId);
-    const techCard = techCards.find((item) => item.product_id === selectedProductId);
+    const techCard = techCards.find(
+      (item) => item.product_id === selectedProductId
+    );
 
     if (!product) {
       setError("Выбери изделие");
@@ -520,21 +531,22 @@ export default function Production() {
       const materialIds = techMaterials.map((item) => item.material_id);
       const consumableIds = techConsumables.map((item) => item.consumable_id);
 
-      const [materialsPricesResult, consumablesPricesResult] = await Promise.all([
-        materialIds.length > 0
-          ? supabase
-              .from("materials")
-              .select("id, default_price")
-              .in("id", materialIds)
-          : Promise.resolve({ data: [], error: null }),
+      const [materialsPricesResult, consumablesPricesResult] =
+        await Promise.all([
+          materialIds.length > 0
+            ? supabase
+                .from("materials")
+                .select("id, default_price")
+                .in("id", materialIds)
+            : Promise.resolve({ data: [], error: null }),
 
-        consumableIds.length > 0
-          ? supabase
-              .from("consumables")
-              .select("id, default_price")
-              .in("id", consumableIds)
-          : Promise.resolve({ data: [], error: null }),
-      ]);
+          consumableIds.length > 0
+            ? supabase
+                .from("consumables")
+                .select("id, default_price")
+                .in("id", consumableIds)
+            : Promise.resolve({ data: [], error: null }),
+        ]);
 
       if (materialsPricesResult.error) throw materialsPricesResult.error;
       if (consumablesPricesResult.error) throw consumablesPricesResult.error;
@@ -548,7 +560,10 @@ export default function Production() {
       );
 
       const consumablePriceMap = new Map(
-        consumablePrices.map((item) => [item.id, Number(item.default_price || 0)])
+        consumablePrices.map((item) => [
+          item.id,
+          Number(item.default_price || 0),
+        ])
       );
 
       const plannedMaterialsCost = techMaterials.reduce((sum, item) => {
@@ -783,7 +798,9 @@ export default function Production() {
       setMessage(`Операция "${operation.operation_name}" взята в работу.`);
       await loadProductionOrders();
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Не удалось взять операцию в работу");
+      setError(
+        error instanceof Error ? error.message : "Не удалось взять операцию в работу"
+      );
     } finally {
       setActionLoading(false);
     }
@@ -833,8 +850,10 @@ export default function Production() {
           const fallbackPayload: GeneratedQr["payload"] = {
             batch_number: batch.batch_number,
             order_number: order.order_number || order.id.slice(0, 8),
-            product_name: batch.product_name || order.product?.name || "Без названия",
-            product_article: batch.product_article || order.product?.article || null,
+            product_name:
+              batch.product_name || order.product?.name || "Без названия",
+            product_article:
+              batch.product_article || order.product?.article || null,
             color_name: batch.color_name || null,
             quantity: Number(batch.quantity || 0),
           };
@@ -845,7 +864,9 @@ export default function Production() {
 
       setQrHistoryItems(qrItems);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Не удалось открыть историю QR");
+      setError(
+        error instanceof Error ? error.message : "Не удалось открыть историю QR"
+      );
     } finally {
       setQrHistoryLoading(false);
     }
@@ -975,7 +996,8 @@ export default function Production() {
       );
 
       const allDone = refreshedOperations.every(
-        (item) => Number(item.completed_quantity || 0) >= Number(order.quantity || 0)
+        (item) =>
+          Number(item.completed_quantity || 0) >= Number(order.quantity || 0)
       );
 
       if (allDone) {
@@ -1035,7 +1057,9 @@ export default function Production() {
       await loadProductionOrders();
       await loadTodayShiftStats();
     } catch (error) {
-      setFinishError(error instanceof Error ? error.message : "Не удалось завершить операцию");
+      setFinishError(
+        error instanceof Error ? error.message : "Не удалось завершить операцию"
+      );
     } finally {
       setActionLoading(false);
     }
@@ -1146,11 +1170,17 @@ export default function Production() {
           flexWrap: "wrap",
         }}
       >
-        <button onClick={() => setTab("jobs")} style={tabButtonStyle(tab === "jobs")}>
+        <button
+          onClick={() => setTab("jobs")}
+          style={tabButtonStyle(tab === "jobs")}
+        >
           Задания
         </button>
 
-        <button onClick={() => setTab("active")} style={tabButtonStyle(tab === "active")}>
+        <button
+          onClick={() => setTab("active")}
+          style={tabButtonStyle(tab === "active")}
+        >
           В работе
         </button>
 
@@ -1206,9 +1236,18 @@ export default function Production() {
           marginBottom: 16,
         }}
       >
-        <InfoBox label="Моя смена: заработано" value={formatMoney(shiftStats.totalEarned)} />
-        <InfoBox label="Операций закрыто" value={`${shiftStats.operationsCount} шт`} />
-        <InfoBox label="Количество сделано" value={`${shiftStats.totalQuantity} шт`} />
+        <InfoBox
+          label="Моя смена: заработано"
+          value={formatMoney(shiftStats.totalEarned)}
+        />
+        <InfoBox
+          label="Операций закрыто"
+          value={`${shiftStats.operationsCount} шт`}
+        />
+        <InfoBox
+          label="Количество сделано"
+          value={`${shiftStats.totalQuantity} шт`}
+        />
         <InfoBox
           label="Время в работе"
           value={formatTimer(shiftStats.totalDurationSeconds)}
@@ -1344,14 +1383,21 @@ export default function Production() {
                       <div
                         style={{
                           display: "grid",
-                          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                          gridTemplateColumns:
+                            "repeat(auto-fit, minmax(180px, 1fr))",
                           gap: 10,
                         }}
                       >
                         <InfoBox label="Создано" value={job.issuedAt} />
-                        <InfoBox label="Плановое время" value={formatTime(job.timeMin)} />
+                        <InfoBox
+                          label="Плановое время"
+                          value={formatTime(job.timeMin)}
+                        />
                         <InfoBox label="Количество" value={`${job.qty} шт`} />
-                        <InfoBox label="Себестоимость" value={formatMoney(job.cost)} />
+                        <InfoBox
+                          label="Себестоимость"
+                          value={formatMoney(job.cost)}
+                        />
                       </div>
 
                       <div style={{ marginTop: 14 }}>
@@ -1391,7 +1437,13 @@ export default function Production() {
                           >
                             Пачки после раскроя
                           </div>
-                          <div style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              color: "#64748b",
+                              marginTop: 4,
+                            }}
+                          >
                             Распечатано QR: {jobBatches.length} шт.
                           </div>
                         </div>
@@ -1417,7 +1469,9 @@ export default function Production() {
                         </div>
 
                         {job.operations.length === 0 ? (
-                          <div style={emptySmallStyle}>Операции пока не добавлены</div>
+                          <div style={emptySmallStyle}>
+                            Операции пока не добавлены
+                          </div>
                         ) : (
                           <div style={{ display: "grid", gap: 8 }}>
                             {job.operations.map((operation) => {
@@ -1438,7 +1492,8 @@ export default function Production() {
                                 operation
                               );
 
-                              const isInProgress = operation.status === "in_progress";
+                              const isInProgress =
+                                operation.status === "in_progress";
                               const isDone = operation.status === "done";
                               const earned =
                                 Number(operation.completed_quantity || 0) *
@@ -1464,17 +1519,34 @@ export default function Production() {
                                     }}
                                   >
                                     <div>
-                                      <div style={{ fontWeight: 700, color: "#111827" }}>
-                                        {operation.sort_order}. {operation.operation_name}
+                                      <div
+                                        style={{
+                                          fontWeight: 700,
+                                          color: "#111827",
+                                        }}
+                                      >
+                                        {operation.sort_order}.{" "}
+                                        {operation.operation_name}
                                       </div>
 
-                                      <div style={{ color: "#6b7280", marginTop: 4 }}>
+                                      <div
+                                        style={{
+                                          color: "#6b7280",
+                                          marginTop: 4,
+                                        }}
+                                      >
                                         Статус: {getStatusLabel(operation.status)}
                                       </div>
 
                                       {!isDone && (
-                                        <div style={{ color: "#64748b", marginTop: 4 }}>
-                                          Доступно к выполнению сейчас: {availableQuantity} шт
+                                        <div
+                                          style={{
+                                            color: "#64748b",
+                                            marginTop: 4,
+                                          }}
+                                        >
+                                          Доступно к выполнению сейчас:{" "}
+                                          {availableQuantity} шт
                                         </div>
                                       )}
 
@@ -1488,21 +1560,31 @@ export default function Production() {
                                         >
                                           В работе:{" "}
                                           {formatTimer(
-                                            getElapsedSeconds(operation.started_at, nowTick)
+                                            getElapsedSeconds(
+                                              operation.started_at,
+                                              nowTick
+                                            )
                                           )}
                                         </div>
                                       )}
 
                                       {isDone && (
-                                        <div style={{ color: "#166534", marginTop: 4 }}>
-                                          Выполнено: {operation.completed_quantity} шт ·
+                                        <div
+                                          style={{
+                                            color: "#166534",
+                                            marginTop: 4,
+                                          }}
+                                        >
+                                          Выполнено:{" "}
+                                          {operation.completed_quantity} шт ·
                                           Заработано: {formatMoney(earned)}
                                         </div>
                                       )}
                                     </div>
 
                                     <span style={{ color: "#4b5563" }}>
-                                      {operation.completed_quantity || 0} / {job.qty}
+                                      {operation.completed_quantity || 0} /{" "}
+                                      {job.qty}
                                     </span>
                                   </div>
 
@@ -1519,7 +1601,10 @@ export default function Production() {
                                     {canStart && (
                                       <button
                                         onClick={() =>
-                                          handleStartOperation(sourceOrder, operation)
+                                          handleStartOperation(
+                                            sourceOrder,
+                                            operation
+                                          )
                                         }
                                         disabled={actionLoading}
                                         style={primaryBlueButtonStyle}
@@ -1530,7 +1615,9 @@ export default function Production() {
 
                                     {isInProgress && (
                                       <button
-                                        onClick={() => openFinishOperation(operation)}
+                                        onClick={() =>
+                                          openFinishOperation(operation)
+                                        }
                                         disabled={actionLoading}
                                         style={primaryGreenButtonStyle}
                                       >
@@ -1549,7 +1636,8 @@ export default function Production() {
                                           fontWeight: 600,
                                         }}
                                       >
-                                        Ждёт доступное количество с предыдущей операции
+                                        Ждёт доступное количество с предыдущей
+                                        операции
                                       </div>
                                     )}
                                   </div>
@@ -1596,7 +1684,9 @@ export default function Production() {
                   padding: 14,
                 }}
               >
-                <div style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}>
+                <div
+                  style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}
+                >
                   {operation.operation_name}
                 </div>
                 <div style={{ fontSize: 14, color: "#4b5563", marginTop: 8 }}>
@@ -1613,7 +1703,10 @@ export default function Production() {
                     fontWeight: 700,
                   }}
                 >
-                  В работе: {formatTimer(getElapsedSeconds(operation.started_at, nowTick))}
+                  В работе:{" "}
+                  {formatTimer(
+                    getElapsedSeconds(operation.started_at, nowTick)
+                  )}
                 </div>
 
                 <div style={{ marginTop: 12 }}>
@@ -1670,9 +1763,12 @@ export default function Production() {
           <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
             <div style={modalHeaderStyle}>
               <div>
-                <div style={modalTitleStyle}>Создать производственное задание</div>
+                <div style={modalTitleStyle}>
+                  Создать производственное задание
+                </div>
                 <div style={{ marginTop: 4, color: "#64748b" }}>
-                  Выбери изделие, количество и система подтянет активную техкарту.
+                  Выбери изделие, количество и система подтянет активную
+                  техкарту.
                 </div>
               </div>
 
@@ -1684,7 +1780,10 @@ export default function Production() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateProductionOrder} style={{ display: "grid", gap: 12 }}>
+            <form
+              onSubmit={handleCreateProductionOrder}
+              style={{ display: "grid", gap: 12 }}
+            >
               <Field label="Изделие">
                 <select
                   value={selectedProductId}
@@ -1739,7 +1838,9 @@ export default function Production() {
                 />
               </Field>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <div
+                style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}
+              >
                 <button
                   type="button"
                   onClick={() => setIsCreateOpen(false)}
@@ -1783,7 +1884,10 @@ export default function Production() {
               </button>
             </div>
 
-            <form onSubmit={handleFinishOperation} style={{ display: "grid", gap: 12 }}>
+            <form
+              onSubmit={handleFinishOperation}
+              style={{ display: "grid", gap: 12 }}
+            >
               <div
                 style={{
                   padding: 12,
@@ -1856,7 +1960,9 @@ export default function Production() {
                 />
               </Field>
 
-              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <div
+                style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}
+              >
                 <button
                   type="button"
                   onClick={() => setFinishOperation(null)}
@@ -1883,12 +1989,18 @@ export default function Production() {
 
       {qrHistoryOrder && (
         <div onClick={() => setQrHistoryOrder(null)} style={modalOverlayStyle}>
-          <div onClick={(e) => e.stopPropagation()} style={{ ...modalBoxStyle, maxWidth: 760 }}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ ...modalBoxStyle, maxWidth: 760 }}
+          >
             <div style={modalHeaderStyle}>
               <div>
                 <div style={modalTitleStyle}>История QR / пачки</div>
                 <div style={{ marginTop: 4, color: "#64748b" }}>
-                  Заказ: {qrHistoryOrder.order_number || qrHistoryOrder.id.slice(0, 8)} · {qrHistoryOrder.product?.name || "Без названия"}
+                  Заказ:{" "}
+                  {qrHistoryOrder.order_number ||
+                    qrHistoryOrder.id.slice(0, 8)}{" "}
+                  · {qrHistoryOrder.product?.name || "Без названия"}
                 </div>
               </div>
 
@@ -1900,7 +2012,9 @@ export default function Production() {
               </button>
             </div>
 
-            {qrHistoryLoading && <div style={emptyStyle}>Загрузка QR-кодов...</div>}
+            {qrHistoryLoading && (
+              <div style={emptyStyle}>Загрузка QR-кодов...</div>
+            )}
 
             {!qrHistoryLoading && qrHistoryItems.length === 0 && (
               <div style={emptyStyle}>
@@ -1909,7 +2023,14 @@ export default function Production() {
             )}
 
             {!qrHistoryLoading && qrHistoryItems.length > 0 && (
-              <div style={{ display: "grid", gap: 12, maxHeight: "70vh", overflow: "auto" }}>
+              <div
+                style={{
+                  display: "grid",
+                  gap: 12,
+                  maxHeight: "70vh",
+                  overflow: "auto",
+                }}
+              >
                 {qrHistoryItems.map((item) => (
                   <div
                     key={item.batchNumber}
@@ -1934,7 +2055,14 @@ export default function Production() {
 
 function QrCard({ item }: { item: GeneratedQr }) {
   return (
-    <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+    <div
+      style={{
+        display: "flex",
+        gap: 16,
+        flexWrap: "wrap",
+        alignItems: "center",
+      }}
+    >
       <img
         src={item.dataUrl}
         alt="QR-код пачки"
