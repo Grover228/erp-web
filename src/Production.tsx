@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
 
-export type ProductionTab = "jobs" | "active" | "techcards";
+export type ProductionTab = "jobs" | "active" | "history" | "techcards";
 
 type ProductionOrder = {
   id: string;
@@ -43,6 +43,7 @@ type ProductionBatch = {
   source_operation_id: string | null;
   batch_number: string;
   quantity: number;
+  completed_quantity: number | null;
   current_operation_order: number | null;
   status: string | null;
   qr_code: string | null;
@@ -51,6 +52,10 @@ type ProductionBatch = {
   color_name: string | null;
   qr_payload: GeneratedQr["payload"] | null;
   comment: string | null;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string | null;
 };
 
@@ -112,6 +117,7 @@ type Job = {
   qty: number;
   completed: number;
   status: string;
+  rawStatus: string;
   cost: number;
   timeMin: number;
   operations: ProductionOrderOperation[];
@@ -135,6 +141,12 @@ type ShiftStats = {
   totalQuantity: number;
   totalEarned: number;
   totalDurationSeconds: number;
+};
+
+type ActiveBatchItem = {
+  batch: ProductionBatch;
+  order: ProductionOrder | null;
+  operation: ProductionOrderOperation | null;
 };
 
 function getProgress(completed: number, total: number) {
@@ -188,7 +200,7 @@ function getElapsedSeconds(startedAt: string | null, nowTick: number) {
   return Math.floor((nowTick - new Date(startedAt).getTime()) / 1000);
 }
 
-function getStatusLabel(status: string) {
+function getStatusLabel(status: string | null | undefined) {
   switch (status) {
     case "draft":
       return "Черновик";
@@ -196,12 +208,16 @@ function getStatusLabel(status: string) {
       return "Ожидает";
     case "waiting":
       return "Ожидает";
+    case "partial":
+      return "Частично выполнено";
     case "in_progress":
       return "В работе";
     case "done":
       return "Готово";
     case "cancelled":
       return "Отменён";
+    case "archived":
+      return "Архив";
     default:
       return status || "Черновик";
   }
@@ -241,6 +257,8 @@ export default function Production({
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [operations, setOperations] = useState<ProductionOrderOperation[]>([]);
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
   const [shiftStats, setShiftStats] = useState<ShiftStats>({
     operationsCount: 0,
     totalQuantity: 0,
@@ -254,6 +272,7 @@ export default function Production({
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [deletingOrderId, setDeletingOrderId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -269,6 +288,12 @@ export default function Production({
   const [finishQuantity, setFinishQuantity] = useState("");
   const [finishComment, setFinishComment] = useState("");
   const [finishError, setFinishError] = useState("");
+
+  const [finishBatchItem, setFinishBatchItem] =
+    useState<ActiveBatchItem | null>(null);
+  const [finishBatchQuantity, setFinishBatchQuantity] = useState("");
+  const [finishBatchComment, setFinishBatchComment] = useState("");
+  const [finishBatchError, setFinishBatchError] = useState("");
 
   const [generatedQr, setGeneratedQr] = useState<GeneratedQr | null>(null);
   const [qrHistoryOrder, setQrHistoryOrder] =
@@ -298,10 +323,19 @@ export default function Production({
 
   async function loadAll() {
     await Promise.all([
+      loadCurrentUser(),
       loadProductionOrders(),
       loadProductsAndTechCards(),
       loadTodayShiftStats(),
     ]);
+  }
+
+  async function loadCurrentUser() {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+
+    setCurrentUserId(user?.id || null);
   }
 
   async function loadTodayShiftStats() {
@@ -806,6 +840,71 @@ export default function Production({
     }
   }
 
+  async function handleDeleteOrder(order: ProductionOrder) {
+    const title = order.order_number || order.id.slice(0, 8);
+    const productName = order.product?.name || "Без названия";
+
+    const confirmed = window.confirm(
+      `Удалить производственное задание ${title}?\n\nИзделие: ${productName}\n\nБудут удалены операции, пачки, материалы, расходники и статистика по этому заданию. Это действие нельзя отменить.`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeletingOrderId(order.id);
+      setError("");
+      setMessage("");
+
+      const deleteSteps = [
+        supabase
+          .from("production_operation_logs")
+          .delete()
+          .eq("production_order_id", order.id),
+
+        supabase
+          .from("production_batches")
+          .delete()
+          .eq("production_order_id", order.id),
+
+        supabase
+          .from("production_order_operations")
+          .delete()
+          .eq("production_order_id", order.id),
+
+        supabase
+          .from("production_order_materials")
+          .delete()
+          .eq("production_order_id", order.id),
+
+        supabase
+          .from("production_order_consumables")
+          .delete()
+          .eq("production_order_id", order.id),
+      ];
+
+      for (const step of deleteSteps) {
+        const { error } = await step;
+        if (error) throw error;
+      }
+
+      const { error: orderError } = await supabase
+        .from("production_orders")
+        .delete()
+        .eq("id", order.id);
+
+      if (orderError) throw orderError;
+
+      setMessage(`Задание ${title} удалено.`);
+      await loadAll();
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Не удалось удалить задание"
+      );
+    } finally {
+      setDeletingOrderId("");
+    }
+  }
+
   function openFinishOperation(operation: ProductionOrderOperation) {
     setFinishOperation(operation);
     setFinishQuantity("");
@@ -816,6 +915,86 @@ export default function Production({
     setGeneratedQr(null);
   }
 
+  function openFinishBatch(item: ActiveBatchItem) {
+    setFinishBatchItem(item);
+    setFinishBatchQuantity("");
+    setFinishBatchComment("");
+    setFinishBatchError("");
+    setError("");
+    setMessage("");
+  }
+
+  async function printQrLabel(item: GeneratedQr) {
+    try {
+      setMessage("");
+      setError("");
+
+      const response = await fetch("http://localhost:3001/print-label", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          printerName: "Xprinter XP-365B",
+          batchNumber: item.batchNumber,
+          productName: item.payload.product_name,
+          article: item.payload.product_article || "",
+          quantity: item.payload.quantity,
+          qrDataUrl: item.dataUrl,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || "Ошибка печати QR");
+      }
+
+      setMessage(`QR пачки ${item.batchNumber} отправлен на печать`);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка печати QR"
+      );
+    }
+  }
+
+  async function handleTestPrint() {
+    try {
+    setMessage("");
+    setError("");
+
+    const response = await fetch("http://localhost:3001/print-test", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        printerName: "Xprinter XP-365B",
+        batchNumber: "PK-TEST-001",
+        productName: "Шапка бини",
+        article: "bini-black-52",
+        quantity: 15,
+        operation: "Стачивание",
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Ошибка печати");
+    }
+
+    setMessage("Тестовая этикетка отправлена на принтер");
+  } catch (error) {
+    setError(
+      error instanceof Error
+        ? error.message
+        : "Ошибка тестовой печати"
+    );
+  }
+}
   async function makeQrFromPayload(payload: GeneratedQr["payload"]) {
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
       width: 600,
@@ -1032,6 +1211,7 @@ export default function Production({
             source_operation_id: finishOperation.id,
             batch_number: batchNumber,
             quantity: addedQuantity,
+            completed_quantity: 0,
             current_operation_order: 2,
             status: "waiting",
             qr_code: batchNumber,
@@ -1065,6 +1245,224 @@ export default function Production({
     }
   }
 
+  async function handleFinishBatch(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!finishBatchItem) return;
+
+    const { batch, order, operation } = finishBatchItem;
+
+    if (!order) {
+      setFinishBatchError("Не найден производственный заказ");
+      return;
+    }
+
+    if (!operation) {
+      setFinishBatchError("Не найдена операция для пачки");
+      return;
+    }
+
+    const batchQuantity = Number(batch.quantity || 0);
+    const batchCompleted = Number(batch.completed_quantity || 0);
+    const batchLeft = Math.max(0, batchQuantity - batchCompleted);
+    const finishQuantityNumber = Number(finishBatchQuantity);
+
+    if (!finishBatchQuantity || finishQuantityNumber <= 0) {
+      setFinishBatchError("Укажи количество больше 0");
+      return;
+    }
+
+    if (!Number.isInteger(finishQuantityNumber)) {
+      setFinishBatchError("Количество должно быть целым числом");
+      return;
+    }
+
+    if (finishQuantityNumber > batchLeft) {
+      setFinishBatchError(
+        `Нельзя закрыть ${finishQuantityNumber} шт. В пачке осталось только ${batchLeft} шт.`
+      );
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      setFinishBatchError("");
+      setError("");
+      setMessage("");
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      const finishedAt = new Date().toISOString();
+      const startedAt = batch.started_at || operation.started_at;
+      const durationSeconds = startedAt
+        ? Math.max(
+            0,
+            Math.floor(
+              (new Date(finishedAt).getTime() -
+                new Date(startedAt).getTime()) /
+                1000
+            )
+          )
+        : 0;
+
+      const pricePerUnit = Number(operation.price_per_unit || 0);
+      const earned = finishQuantityNumber * pricePerUnit;
+      const newBatchCompleted = batchCompleted + finishQuantityNumber;
+      const isBatchOperationDone = newBatchCompleted >= batchQuantity;
+
+      const orderOperations = operations
+        .filter((item) => item.production_order_id === order.id)
+        .sort((a, b) => a.sort_order - b.sort_order);
+
+      const newOperationCompleted =
+        Number(operation.completed_quantity || 0) + finishQuantityNumber;
+
+      const operationTarget = getOperationTarget(
+        order,
+        orderOperations,
+        operation
+      );
+
+      const operationNextStatus =
+        newOperationCompleted >= operationTarget ? "done" : "pending";
+
+      const { error: operationError } = await supabase
+        .from("production_order_operations")
+        .update({
+          status: operationNextStatus,
+          completed_quantity: newOperationCompleted,
+          completed_at:
+            operationNextStatus === "done" ? finishedAt : operation.completed_at,
+        })
+        .eq("id", operation.id);
+
+      if (operationError) throw operationError;
+
+      const nextOperation = orderOperations.find(
+        (item) => item.sort_order > Number(batch.current_operation_order || 0)
+      );
+
+      let nextBatchData: Record<string, unknown> = {};
+
+      if (isBatchOperationDone && nextOperation) {
+        nextBatchData = {
+          status: "waiting",
+          completed_quantity: 0,
+          current_operation_order: nextOperation.sort_order,
+          assigned_user_id: null,
+          assigned_at: null,
+          started_at: null,
+          completed_at: null,
+        };
+      } else if (isBatchOperationDone && !nextOperation) {
+        nextBatchData = {
+          status: "done",
+          completed_quantity: batchQuantity,
+          assigned_user_id: null,
+          completed_at: finishedAt,
+        };
+      } else {
+        nextBatchData = {
+          status: "partial",
+          completed_quantity: newBatchCompleted,
+          assigned_user_id: null,
+          assigned_at: null,
+          started_at: null,
+          completed_at: null,
+        };
+      }
+
+      const { error: batchError } = await supabase
+        .from("production_batches")
+        .update(nextBatchData)
+        .eq("id", batch.id);
+
+      if (batchError) throw batchError;
+
+      const { error: logError } = await supabase
+        .from("production_operation_logs")
+        .insert({
+          production_order_id: order.id,
+          production_order_operation_id: operation.id,
+          user_id: user?.id || null,
+          operation_name: operation.operation_name,
+          quantity: finishQuantityNumber,
+          price_per_unit: pricePerUnit,
+          earned_amount: earned,
+          started_at: startedAt,
+          finished_at: finishedAt,
+          duration_seconds: durationSeconds,
+          comment: finishBatchComment.trim() || null,
+        });
+
+      if (logError) throw logError;
+
+      const refreshedOperations = orderOperations.map((item) =>
+        item.id === operation.id
+          ? {
+              ...item,
+              status: operationNextStatus,
+              completed_quantity: newOperationCompleted,
+            }
+          : item
+      );
+
+      const allOperationsDone = refreshedOperations.every(
+        (item) =>
+          Number(item.completed_quantity || 0) >= Number(order.quantity || 0)
+      );
+
+      const orderBatches = batches.filter(
+        (item) => item.production_order_id === order.id
+      );
+
+      const refreshedBatches = orderBatches.map((item) =>
+        item.id === batch.id
+          ? {
+              ...item,
+              ...nextBatchData,
+            }
+          : item
+      );
+
+      const allBatchesDone =
+        refreshedBatches.length > 0 &&
+        refreshedBatches.every((item) => item.status === "done");
+
+      if (allOperationsDone && allBatchesDone) {
+        const { error: orderError } = await supabase
+          .from("production_orders")
+          .update({
+            status: "done",
+          })
+          .eq("id", order.id);
+
+        if (orderError) throw orderError;
+      }
+
+      setMessage(
+        `Пачка ${batch.batch_number} сохранена. Сделано: ${finishQuantityNumber} шт. Заработано: ${formatMoney(earned)}.`
+      );
+
+      setFinishBatchItem(null);
+      setFinishBatchQuantity("");
+      setFinishBatchComment("");
+
+      await loadAll();
+    } catch (error) {
+      setFinishBatchError(
+        error instanceof Error ? error.message : "Не удалось завершить пачку"
+      );
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   const jobs: Job[] = useMemo(() => {
     return orders.map((order) => {
       const orderOperations = operations
@@ -1090,6 +1488,7 @@ export default function Production({
         qty: Number(order.quantity || 0),
         completed: completedQuantity,
         status: getStatusLabel(order.status),
+        rawStatus: order.status,
         cost: Number(order.planned_total_cost || 0),
         timeMin: Number(order.planned_time_min || 0),
         operations: orderOperations,
@@ -1097,9 +1496,49 @@ export default function Production({
     });
   }, [orders, operations]);
 
-  const activeOperations = operations.filter(
-    (operation) => operation.status === "in_progress"
-  );
+  const activeJobs = jobs.filter((job) => {
+    return !["done", "cancelled", "archived"].includes(job.rawStatus);
+  });
+
+  const historyJobs = jobs.filter((job) => {
+    return ["done", "cancelled", "archived"].includes(job.rawStatus);
+  });
+
+  const activeBatchItems: ActiveBatchItem[] = useMemo(() => {
+    return batches
+      .filter((batch) => {
+        if (batch.status !== "in_progress") return false;
+
+        if (currentUserId && batch.assigned_user_id) {
+          return batch.assigned_user_id === currentUserId;
+        }
+
+        return true;
+      })
+      .map((batch) => {
+        const order =
+          orders.find((item) => item.id === batch.production_order_id) || null;
+
+        const operation =
+          operations.find(
+            (item) =>
+              item.production_order_id === batch.production_order_id &&
+              item.sort_order === Number(batch.current_operation_order || 0)
+          ) || null;
+
+        return {
+          batch,
+          order,
+          operation,
+        };
+      })
+      .sort((a, b) => {
+        return (
+          new Date(b.batch.started_at || b.batch.assigned_at || 0).getTime() -
+          new Date(a.batch.started_at || a.batch.assigned_at || 0).getTime()
+        );
+      });
+  }, [batches, operations, orders, currentUserId]);
 
   const techcards = useMemo(() => {
     return techCards.map((card) => {
@@ -1154,442 +1593,394 @@ export default function Production({
       ? getOperationLimit(finishOrder, finishOrderOperations, finishOperation)
       : 0;
 
-  return (
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: 16,
-        padding: 16,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          gap: 10,
-          marginBottom: 16,
-          flexWrap: "wrap",
-        }}
-      >
-        <button
-          onClick={() => setTab("jobs")}
-          style={tabButtonStyle(tab === "jobs")}
-        >
-          Задания
-        </button>
+  const finishBatchTotal = Number(finishBatchItem?.batch.quantity || 0);
+  const finishBatchCompleted = Number(
+    finishBatchItem?.batch.completed_quantity || 0
+  );
+  const finishBatchLeft = Math.max(0, finishBatchTotal - finishBatchCompleted);
+  const finishBatchEarned =
+    Number(finishBatchQuantity || 0) *
+    Number(finishBatchItem?.operation?.price_per_unit || 0);
 
-        <button
-          onClick={() => setTab("active")}
-          style={tabButtonStyle(tab === "active")}
-        >
-          В работе
-        </button>
-
-        <button
-          onClick={() => setTab("techcards")}
-          style={tabButtonStyle(tab === "techcards")}
-        >
-          Техкарты
-        </button>
-      </div>
-
-      {(message || error) && (
+  function renderJobsList(items: Job[], variant: "active" | "history") {
+    return (
+      <div style={{ display: "grid", gap: 14 }}>
         <div
           style={{
-            background: message ? "#dcfce7" : "#fef2f2",
-            border: message ? "1px solid #86efac" : "1px solid #fecaca",
-            color: message ? "#166534" : "#991b1b",
-            borderRadius: 14,
-            padding: 14,
-            fontWeight: 600,
-            marginBottom: 14,
-          }}
-        >
-          {message || error}
-        </div>
-      )}
-
-      {generatedQr && (
-        <div
-          style={{
-            border: "1px solid #bfdbfe",
-            background: "#eff6ff",
-            borderRadius: 16,
-            padding: 16,
-            marginBottom: 14,
-            display: "grid",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
             gap: 12,
+            flexWrap: "wrap",
           }}
         >
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>
-            QR-код для пачки {generatedQr.batchNumber}
+          <div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: "#111827" }}>
+              {variant === "active"
+                ? "Задания в производство"
+                : "История заданий"}
+            </div>
+            <div style={{ fontSize: 14, color: "#6b7280", marginTop: 4 }}>
+              {variant === "active"
+                ? "Активные производственные заказы"
+                : "Завершённые, отменённые и архивные заказы"}
+            </div>
           </div>
 
-          <QrCard item={generatedQr} />
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={expandAllJobs} style={secondaryBlueButtonStyle()}>
+              Развернуть все
+            </button>
+
+            <button onClick={collapseAllJobs} style={secondaryBlueButtonStyle()}>
+              Свернуть все
+            </button>
+
+            <button onClick={loadAll} style={secondaryBlueButtonStyle()}>
+              Обновить
+            </button>
+
+            {variant === "active" && (
+              <>
+                <button
+                  onClick={() => {
+                    setError("");
+                    setMessage("");
+                    setIsCreateOpen(true);
+                  }}
+                  style={primaryBlueButtonStyle}
+                >
+                  + Создать задание
+                </button>
+
+                <button
+                  onClick={handleTestPrint}
+                  style={secondaryBlueButtonStyle()}
+                >
+                  Тест печати
+                </button>
+              </>
+            )}
+          </div>
         </div>
-      )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: 10,
-          marginBottom: 16,
-        }}
-      >
-        <InfoBox
-          label="Моя смена: заработано"
-          value={formatMoney(shiftStats.totalEarned)}
-        />
-        <InfoBox
-          label="Операций закрыто"
-          value={`${shiftStats.operationsCount} шт`}
-        />
-        <InfoBox
-          label="Количество сделано"
-          value={`${shiftStats.totalQuantity} шт`}
-        />
-        <InfoBox
-          label="Время в работе"
-          value={formatTimer(shiftStats.totalDurationSeconds)}
-        />
-      </div>
+        {loading && (
+          <div style={emptyStyle}>Загрузка производственных заказов...</div>
+        )}
 
-      {tab === "jobs" && (
-        <div style={{ display: "grid", gap: 14 }}>
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 12,
-              flexWrap: "wrap",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: 22, fontWeight: 700, color: "#111827" }}>
-                Задания в производство
-              </div>
-              <div style={{ fontSize: 14, color: "#6b7280", marginTop: 4 }}>
-                Список производственных заказов, созданных из техкарт
-              </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button onClick={expandAllJobs} style={secondaryBlueButtonStyle()}>
-                Развернуть все
-              </button>
-
-              <button onClick={collapseAllJobs} style={secondaryBlueButtonStyle()}>
-                Свернуть все
-              </button>
-
-              <button onClick={loadAll} style={secondaryBlueButtonStyle()}>
-                Обновить
-              </button>
-
-              <button
-                onClick={() => {
-                  setError("");
-                  setMessage("");
-                  setIsCreateOpen(true);
-                }}
-                style={primaryBlueButtonStyle}
-              >
-                + Создать задание
-              </button>
-            </div>
+        {!loading && items.length === 0 && (
+          <div style={emptyStyle}>
+            {variant === "active"
+              ? "Активных производственных заданий пока нет."
+              : "История производственных заданий пока пустая."}
           </div>
+        )}
 
-          {loading && (
-            <div style={emptyStyle}>Загрузка производственных заказов...</div>
-          )}
+        {!loading &&
+          items.map((job) => {
+            const progress = getProgress(job.completed, job.qty);
+            const isOpen = !!openJobs[job.realId];
+            const sourceOrder = orders.find((order) => order.id === job.realId);
+            const jobBatches = batches.filter(
+              (batch) => batch.production_order_id === job.realId
+            );
 
-          {!loading && jobs.length === 0 && (
-            <div style={emptyStyle}>
-              Производственных заказов пока нет. Нажми “Создать задание”.
-            </div>
-          )}
-
-          {!loading &&
-            jobs.map((job) => {
-              const progress = getProgress(job.completed, job.qty);
-              const isOpen = !!openJobs[job.realId];
-              const sourceOrder = orders.find((order) => order.id === job.realId);
-              const jobBatches = batches.filter(
-                (batch) => batch.production_order_id === job.realId
-              );
-
-              return (
-                <div
-                  key={job.realId}
+            return (
+              <div
+                key={job.realId}
+                style={{
+                  border: "1px solid #dbeafe",
+                  borderRadius: 16,
+                  background: "#ffffff",
+                  overflow: "hidden",
+                }}
+              >
+                <button
+                  onClick={() => toggleJob(job.realId)}
                   style={{
-                    border: "1px solid #dbeafe",
-                    borderRadius: 16,
-                    background: "#ffffff",
-                    overflow: "hidden",
+                    width: "100%",
+                    background: "transparent",
+                    border: "none",
+                    padding: 16,
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                    textAlign: "left",
                   }}
                 >
-                  <button
-                    onClick={() => toggleJob(job.realId)}
-                    style={{
-                      width: "100%",
-                      background: "transparent",
-                      border: "none",
-                      padding: 16,
-                      cursor: "pointer",
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      gap: 12,
-                      textAlign: "left",
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: 18,
-                          fontWeight: 700,
-                          color: "#111827",
-                        }}
-                      >
-                        {job.product}
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: 13,
-                          color: "#6b7280",
-                          marginTop: 4,
-                        }}
-                      >
-                        {job.id} · {job.status} · {progress}%
-                      </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 700,
+                        color: "#111827",
+                      }}
+                    >
+                      {job.product}
                     </div>
 
                     <div
                       style={{
-                        flexShrink: 0,
-                        fontSize: 18,
-                        color: "#2563eb",
-                        fontWeight: 700,
+                        fontSize: 13,
+                        color: "#6b7280",
+                        marginTop: 4,
                       }}
                     >
-                      {isOpen ? "▲" : "▼"}
+                      {job.id} · {job.status} · {progress}%
                     </div>
-                  </button>
+                  </div>
 
-                  {isOpen && sourceOrder && (
-                    <div style={{ padding: "0 16px 16px 16px" }}>
+                  <div
+                    style={{
+                      flexShrink: 0,
+                      fontSize: 18,
+                      color: "#2563eb",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {isOpen ? "▲" : "▼"}
+                  </div>
+                </button>
+
+                {isOpen && sourceOrder && (
+                  <div style={{ padding: "0 16px 16px 16px" }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fit, minmax(180px, 1fr))",
+                        gap: 10,
+                      }}
+                    >
+                      <InfoBox label="Создано" value={job.issuedAt} />
+                      <InfoBox
+                        label="Плановое время"
+                        value={formatTime(job.timeMin)}
+                      />
+                      <InfoBox label="Количество" value={`${job.qty} шт`} />
+                      <InfoBox
+                        label="Себестоимость"
+                        value={formatMoney(job.cost)}
+                      />
+                    </div>
+
+                    <div style={{ marginTop: 14 }}>
                       <div
                         style={{
-                          display: "grid",
-                          gridTemplateColumns:
-                            "repeat(auto-fit, minmax(180px, 1fr))",
-                          gap: 10,
-                        }}
-                      >
-                        <InfoBox label="Создано" value={job.issuedAt} />
-                        <InfoBox
-                          label="Плановое время"
-                          value={formatTime(job.timeMin)}
-                        />
-                        <InfoBox label="Количество" value={`${job.qty} шт`} />
-                        <InfoBox
-                          label="Себестоимость"
-                          value={formatMoney(job.cost)}
-                        />
-                      </div>
-
-                      <div style={{ marginTop: 14 }}>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            marginBottom: 8,
-                            fontSize: 14,
-                            color: "#374151",
-                          }}
-                        >
-                          <span>Общий прогресс задания</span>
-                          <span>{progress}%</span>
-                        </div>
-
-                        <ProgressBar value={progress} />
-                      </div>
-
-                      <div
-                        style={{
-                          marginTop: 16,
                           display: "flex",
                           justifyContent: "space-between",
-                          gap: 10,
-                          alignItems: "center",
+                          marginBottom: 8,
+                          fontSize: 14,
+                          color: "#374151",
+                        }}
+                      >
+                        <span>Общий прогресс задания</span>
+                        <span>{progress}%</span>
+                      </div>
+
+                      <ProgressBar value={progress} />
+                    </div>
+
+                    <div
+                      style={{
+                        marginTop: 16,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 10,
+                        alignItems: "center",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 15,
+                            fontWeight: 700,
+                            color: "#111827",
+                          }}
+                        >
+                          Пачки после раскроя
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            color: "#64748b",
+                            marginTop: 4,
+                          }}
+                        >
+                          Распечатано QR: {jobBatches.length} шт.
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 8,
                           flexWrap: "wrap",
                         }}
                       >
-                        <div>
-                          <div
-                            style={{
-                              fontSize: 15,
-                              fontWeight: 700,
-                              color: "#111827",
-                            }}
-                          >
-                            Пачки после раскроя
-                          </div>
-                          <div
-                            style={{
-                              fontSize: 13,
-                              color: "#64748b",
-                              marginTop: 4,
-                            }}
-                          >
-                            Распечатано QR: {jobBatches.length} шт.
-                          </div>
-                        </div>
-
                         <button
                           onClick={() => openQrHistory(sourceOrder)}
                           style={secondaryBlueButtonStyle()}
                         >
                           История QR / пачки
                         </button>
+
+                        {variant === "active" && (
+                          <button
+                            onClick={() => handleDeleteOrder(sourceOrder)}
+                            disabled={deletingOrderId === sourceOrder.id}
+                            style={{
+                              ...dangerButtonStyle,
+                              opacity:
+                                deletingOrderId === sourceOrder.id ? 0.7 : 1,
+                            }}
+                          >
+                            {deletingOrderId === sourceOrder.id
+                              ? "Удаление..."
+                              : "Удалить"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: 16 }}>
+                      <div
+                        style={{
+                          fontSize: 15,
+                          fontWeight: 700,
+                          color: "#111827",
+                          marginBottom: 10,
+                        }}
+                      >
+                        Операции
                       </div>
 
-                      <div style={{ marginTop: 16 }}>
-                        <div
-                          style={{
-                            fontSize: 15,
-                            fontWeight: 700,
-                            color: "#111827",
-                            marginBottom: 10,
-                          }}
-                        >
-                          Операции
+                      {job.operations.length === 0 ? (
+                        <div style={emptySmallStyle}>
+                          Операции пока не добавлены
                         </div>
+                      ) : (
+                        <div style={{ display: "grid", gap: 8 }}>
+                          {job.operations.map((operation) => {
+                            const operationProgress = getProgress(
+                              Number(operation.completed_quantity || 0),
+                              job.qty
+                            );
 
-                        {job.operations.length === 0 ? (
-                          <div style={emptySmallStyle}>
-                            Операции пока не добавлены
-                          </div>
-                        ) : (
-                          <div style={{ display: "grid", gap: 8 }}>
-                            {job.operations.map((operation) => {
-                              const operationProgress = getProgress(
-                                Number(operation.completed_quantity || 0),
-                                job.qty
-                              );
+                            const availableQuantity = getOperationLimit(
+                              sourceOrder,
+                              job.operations,
+                              operation
+                            );
 
-                              const availableQuantity = getOperationLimit(
-                                sourceOrder,
-                                job.operations,
-                                operation
-                              );
+                            const canStart = canStartOperation(
+                              sourceOrder,
+                              job.operations,
+                              operation
+                            );
 
-                              const canStart = canStartOperation(
-                                sourceOrder,
-                                job.operations,
-                                operation
-                              );
+                            const isInProgress =
+                              operation.status === "in_progress";
+                            const isDone = operation.status === "done";
+                            const earned =
+                              Number(operation.completed_quantity || 0) *
+                              Number(operation.price_per_unit || 0);
 
-                              const isInProgress =
-                                operation.status === "in_progress";
-                              const isDone = operation.status === "done";
-                              const earned =
-                                Number(operation.completed_quantity || 0) *
-                                Number(operation.price_per_unit || 0);
-
-                              return (
+                            return (
+                              <div
+                                key={operation.id}
+                                style={{
+                                  border: "1px solid #e5e7eb",
+                                  borderRadius: 12,
+                                  padding: 12,
+                                }}
+                              >
                                 <div
-                                  key={operation.id}
                                   style={{
-                                    border: "1px solid #e5e7eb",
-                                    borderRadius: 12,
-                                    padding: 12,
+                                    display: "flex",
+                                    justifyContent: "space-between",
+                                    gap: 12,
+                                    marginBottom: 8,
+                                    fontSize: 14,
+                                    flexWrap: "wrap",
                                   }}
                                 >
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      justifyContent: "space-between",
-                                      gap: 12,
-                                      marginBottom: 8,
-                                      fontSize: 14,
-                                      flexWrap: "wrap",
-                                    }}
-                                  >
-                                    <div>
-                                      <div
-                                        style={{
-                                          fontWeight: 700,
-                                          color: "#111827",
-                                        }}
-                                      >
-                                        {operation.sort_order}.{" "}
-                                        {operation.operation_name}
-                                      </div>
+                                  <div>
+                                    <div
+                                      style={{
+                                        fontWeight: 700,
+                                        color: "#111827",
+                                      }}
+                                    >
+                                      {operation.sort_order}.{" "}
+                                      {operation.operation_name}
+                                    </div>
 
+                                    <div
+                                      style={{
+                                        color: "#6b7280",
+                                        marginTop: 4,
+                                      }}
+                                    >
+                                      Статус: {getStatusLabel(operation.status)}
+                                    </div>
+
+                                    {!isDone && (
                                       <div
                                         style={{
-                                          color: "#6b7280",
+                                          color: "#64748b",
                                           marginTop: 4,
                                         }}
                                       >
-                                        Статус: {getStatusLabel(operation.status)}
+                                        Доступно к выполнению сейчас:{" "}
+                                        {availableQuantity} шт
                                       </div>
+                                    )}
 
-                                      {!isDone && (
-                                        <div
-                                          style={{
-                                            color: "#64748b",
-                                            marginTop: 4,
-                                          }}
-                                        >
-                                          Доступно к выполнению сейчас:{" "}
-                                          {availableQuantity} шт
-                                        </div>
-                                      )}
+                                    {isInProgress && (
+                                      <div
+                                        style={{
+                                          color: "#2563eb",
+                                          marginTop: 4,
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        В работе:{" "}
+                                        {formatTimer(
+                                          getElapsedSeconds(
+                                            operation.started_at,
+                                            nowTick
+                                          )
+                                        )}
+                                      </div>
+                                    )}
 
-                                      {isInProgress && (
-                                        <div
-                                          style={{
-                                            color: "#2563eb",
-                                            marginTop: 4,
-                                            fontWeight: 700,
-                                          }}
-                                        >
-                                          В работе:{" "}
-                                          {formatTimer(
-                                            getElapsedSeconds(
-                                              operation.started_at,
-                                              nowTick
-                                            )
-                                          )}
-                                        </div>
-                                      )}
-
-                                      {isDone && (
-                                        <div
-                                          style={{
-                                            color: "#166534",
-                                            marginTop: 4,
-                                          }}
-                                        >
-                                          Выполнено:{" "}
-                                          {operation.completed_quantity} шт ·
-                                          Заработано: {formatMoney(earned)}
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    <span style={{ color: "#4b5563" }}>
-                                      {operation.completed_quantity || 0} /{" "}
-                                      {job.qty}
-                                    </span>
+                                    {isDone && (
+                                      <div
+                                        style={{
+                                          color: "#166534",
+                                          marginTop: 4,
+                                        }}
+                                      >
+                                        Выполнено:{" "}
+                                        {operation.completed_quantity} шт ·
+                                        Заработано: {formatMoney(earned)}
+                                      </div>
+                                    )}
                                   </div>
 
-                                  <ProgressBar value={operationProgress} />
+                                  <span style={{ color: "#4b5563" }}>
+                                    {operation.completed_quantity || 0} /{" "}
+                                    {job.qty}
+                                  </span>
+                                </div>
 
+                                <ProgressBar value={operationProgress} />
+
+                                {variant === "active" && (
                                   <div
                                     style={{
                                       display: "flex",
@@ -1641,19 +2032,132 @@ export default function Production({
                                       </div>
                                     )}
                                   </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        background: "#fff",
+        borderRadius: 16,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          marginBottom: 16,
+          flexWrap: "wrap",
+        }}
+      >
+        <button
+          onClick={() => setTab("jobs")}
+          style={tabButtonStyle(tab === "jobs")}
+        >
+          Задания
+        </button>
+
+        <button
+          onClick={() => setTab("active")}
+          style={tabButtonStyle(tab === "active")}
+        >
+          В работе
+        </button>
+
+        <button
+          onClick={() => setTab("history")}
+          style={tabButtonStyle(tab === "history")}
+        >
+          История
+        </button>
+
+        <button
+          onClick={() => setTab("techcards")}
+          style={tabButtonStyle(tab === "techcards")}
+        >
+          Техкарты
+        </button>
+      </div>
+
+      {(message || error) && (
+        <div
+          style={{
+            background: message ? "#dcfce7" : "#fef2f2",
+            border: message ? "1px solid #86efac" : "1px solid #fecaca",
+            color: message ? "#166534" : "#991b1b",
+            borderRadius: 14,
+            padding: 14,
+            fontWeight: 600,
+            marginBottom: 14,
+          }}
+        >
+          {message || error}
         </div>
       )}
+
+      {generatedQr && (
+        <div
+          style={{
+            border: "1px solid #bfdbfe",
+            background: "#eff6ff",
+            borderRadius: 16,
+            padding: 16,
+            marginBottom: 14,
+            display: "grid",
+            gap: 12,
+          }}
+        >
+          <div style={{ fontSize: 18, fontWeight: 700, color: "#111827" }}>
+            QR-код для пачки {generatedQr.batchNumber}
+          </div>
+
+          <QrCard item={generatedQr} onPrint={printQrLabel} />
+        </div>
+      )}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+          gap: 10,
+          marginBottom: 16,
+        }}
+      >
+        <InfoBox
+          label="Моя смена: заработано"
+          value={formatMoney(shiftStats.totalEarned)}
+        />
+        <InfoBox
+          label="Операций закрыто"
+          value={`${shiftStats.operationsCount} шт`}
+        />
+        <InfoBox
+          label="Количество сделано"
+          value={`${shiftStats.totalQuantity} шт`}
+        />
+        <InfoBox
+          label="Время в работе"
+          value={formatTimer(shiftStats.totalDurationSeconds)}
+        />
+      </div>
+
+      {tab === "jobs" && renderJobsList(activeJobs, "active")}
+
+      {tab === "history" && renderJobsList(historyJobs, "history")}
 
       {tab === "active" && (
         <div style={{ display: "grid", gap: 12 }}>
@@ -1662,56 +2166,117 @@ export default function Production({
               В работе
             </div>
             <div style={{ fontSize: 14, color: "#6b7280", marginTop: 4 }}>
-              Операции, которые сейчас выполняются
+              Пачки, которые сейчас находятся в работе у сотрудника
             </div>
           </div>
 
-          {activeOperations.length === 0 && (
-            <div style={emptyStyle}>Сейчас нет операций в работе</div>
+          {activeBatchItems.length === 0 && (
+            <div style={emptyStyle}>Сейчас нет пачек в работе</div>
           )}
 
-          {activeOperations.map((operation) => {
-            const order = orders.find(
-              (item) => item.id === operation.production_order_id
-            );
+          {activeBatchItems.map((item) => {
+            const batch = item.batch;
+            const order = item.order;
+            const operation = item.operation;
+
+            const total = Number(batch.quantity || 0);
+            const completed = Number(batch.completed_quantity || 0);
+            const left = Math.max(0, total - completed);
 
             return (
               <div
-                key={operation.id}
+                key={batch.id}
                 style={{
                   border: "1px solid #dbeafe",
-                  borderRadius: 14,
+                  borderRadius: 16,
                   padding: 14,
+                  background: "#ffffff",
+                  display: "grid",
+                  gap: 12,
                 }}
               >
                 <div
-                  style={{ fontSize: 16, fontWeight: 700, color: "#111827" }}
-                >
-                  {operation.operation_name}
-                </div>
-                <div style={{ fontSize: 14, color: "#4b5563", marginTop: 8 }}>
-                  Изделие: {order?.product?.name || "—"}
-                </div>
-                <div style={{ fontSize: 14, color: "#4b5563", marginTop: 4 }}>
-                  Заказ: {order?.order_number || order?.id.slice(0, 8) || "—"}
-                </div>
-                <div
                   style={{
-                    fontSize: 14,
-                    color: "#2563eb",
-                    marginTop: 4,
-                    fontWeight: 700,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
                   }}
                 >
-                  В работе:{" "}
-                  {formatTimer(
-                    getElapsedSeconds(operation.started_at, nowTick)
-                  )}
+                  <div>
+                    <div
+                      style={{
+                        fontSize: 18,
+                        fontWeight: 800,
+                        color: "#111827",
+                      }}
+                    >
+                      Пачка {batch.batch_number}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 14,
+                        color: "#64748b",
+                        marginTop: 4,
+                      }}
+                    >
+                      {operation
+                        ? `${operation.sort_order}. ${operation.operation_name}`
+                        : "Операция не найдена"}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      background: "#eff6ff",
+                      color: "#1d4ed8",
+                      borderRadius: 999,
+                      padding: "8px 12px",
+                      fontWeight: 800,
+                      height: "fit-content",
+                    }}
+                  >
+                    {getStatusLabel(batch.status)}
+                  </div>
                 </div>
 
-                <div style={{ marginTop: 12 }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                    gap: 10,
+                  }}
+                >
+                  <InfoBox
+                    label="Изделие"
+                    value={
+                      batch.product_name ||
+                      order?.product?.name ||
+                      "Без названия"
+                    }
+                  />
+                  <InfoBox
+                    label="Заказ"
+                    value={order?.order_number || order?.id.slice(0, 8) || "—"}
+                  />
+                  <InfoBox label="Всего в пачке" value={`${total} шт`} />
+                  <InfoBox label="Уже сделано" value={`${completed} шт`} />
+                  <InfoBox label="Осталось" value={`${left} шт`} />
+                  <InfoBox
+                    label="В работе"
+                    value={formatTimer(
+                      getElapsedSeconds(batch.started_at, nowTick)
+                    )}
+                  />
+                </div>
+
+                <ProgressBar value={getProgress(completed, total)} />
+
+                <div>
                   <button
-                    onClick={() => openFinishOperation(operation)}
+                    onClick={() => openFinishBatch(item)}
+                    disabled={actionLoading || !operation}
                     style={primaryGreenButtonStyle}
                   >
                     Закончить работу
@@ -1987,6 +2552,129 @@ export default function Production({
         </div>
       )}
 
+      {finishBatchItem && (
+        <div onClick={() => setFinishBatchItem(null)} style={modalOverlayStyle}>
+          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>Закончить работу по пачке</div>
+                <div style={{ marginTop: 4, color: "#64748b" }}>
+                  Пачка {finishBatchItem.batch.batch_number} ·{" "}
+                  {finishBatchItem.operation?.operation_name || "Операция"}
+                </div>
+              </div>
+
+              <button
+                onClick={() => setFinishBatchItem(null)}
+                style={closeButtonStyle}
+              >
+                ×
+              </button>
+            </div>
+
+            <form
+              onSubmit={handleFinishBatch}
+              style={{ display: "grid", gap: 12 }}
+            >
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                <InfoBox label="Всего в пачке" value={`${finishBatchTotal} шт`} />
+                <InfoBox
+                  label="Уже сделано"
+                  value={`${finishBatchCompleted} шт`}
+                />
+                <InfoBox label="Осталось" value={`${finishBatchLeft} шт`} />
+              </div>
+
+              {finishBatchError && (
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid #fecaca",
+                    background: "#fef2f2",
+                    color: "#991b1b",
+                    fontWeight: 700,
+                  }}
+                >
+                  {finishBatchError}
+                </div>
+              )}
+
+              <Field label="Сколько изделий сделал сейчас?">
+                <input
+                  value={finishBatchQuantity}
+                  onChange={(e) => {
+                    setFinishBatchQuantity(e.target.value);
+                    setFinishBatchError("");
+                  }}
+                  type="number"
+                  step="1"
+                  min="1"
+                  max={finishBatchLeft || undefined}
+                  placeholder="Например: 20"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid #dbeafe",
+                  background: "#f8fbff",
+                  color: "#0f172a",
+                  fontWeight: 700,
+                }}
+              >
+                Ставка:{" "}
+                {formatMoney(finishBatchItem.operation?.price_per_unit || 0)} /
+                шт
+                <br />
+                Заработано: {formatMoney(finishBatchEarned)}
+              </div>
+
+              <Field label="Комментарий">
+                <input
+                  value={finishBatchComment}
+                  onChange={(e) => setFinishBatchComment(e.target.value)}
+                  placeholder="Необязательно"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <div
+                style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setFinishBatchItem(null)}
+                  style={secondaryBlueButtonStyle()}
+                >
+                  Отмена
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  style={{
+                    ...primaryGreenButtonStyle,
+                    opacity: actionLoading ? 0.7 : 1,
+                  }}
+                >
+                  {actionLoading ? "Сохранение..." : "Сохранить результат"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {qrHistoryOrder && (
         <div onClick={() => setQrHistoryOrder(null)} style={modalOverlayStyle}>
           <div
@@ -2041,7 +2729,7 @@ export default function Production({
                       background: "#f8fbff",
                     }}
                   >
-                    <QrCard item={item} />
+                    <QrCard item={item} onPrint={printQrLabel} />
                   </div>
                 ))}
               </div>
@@ -2053,7 +2741,13 @@ export default function Production({
   );
 }
 
-function QrCard({ item }: { item: GeneratedQr }) {
+function QrCard({
+  item,
+  onPrint,
+}: {
+  item: GeneratedQr;
+  onPrint?: (item: GeneratedQr) => void;
+}) {
   return (
     <div
       style={{
@@ -2079,28 +2773,55 @@ function QrCard({ item }: { item: GeneratedQr }) {
         <div style={{ fontWeight: 800, color: "#111827" }}>
           Пачка: {item.batchNumber}
         </div>
+
         <div>Заказ: {item.payload.order_number}</div>
         <div>Изделие: {item.payload.product_name}</div>
         <div>Артикул: {item.payload.product_article || "—"}</div>
         <div>Цвет: {item.payload.color_name || "—"}</div>
         <div>Количество в пачке: {item.payload.quantity} шт</div>
 
-        <a
-          href={item.dataUrl}
-          download={`${item.batchNumber}.png`}
+        <div
           style={{
-            display: "inline-flex",
-            marginTop: 10,
-            background: "#2563eb",
-            color: "#fff",
-            borderRadius: 10,
-            padding: "10px 14px",
-            fontWeight: 700,
-            textDecoration: "none",
+            display: "flex",
+            gap: 10,
+            flexWrap: "wrap",
+            marginTop: 12,
           }}
         >
-          Скачать QR
-        </a>
+          <a
+            href={item.dataUrl}
+            download={`${item.batchNumber}.png`}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              background: "#2563eb",
+              color: "#fff",
+              borderRadius: 10,
+              padding: "10px 14px",
+              fontWeight: 700,
+              textDecoration: "none",
+            }}
+          >
+            Скачать QR
+          </a>
+
+          {onPrint && (
+            <button
+              onClick={() => onPrint(item)}
+              style={{
+                background: "#16a34a",
+                color: "#fff",
+                border: "none",
+                borderRadius: 10,
+                padding: "10px 14px",
+                cursor: "pointer",
+                fontWeight: 700,
+              }}
+            >
+              Печать QR
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2180,6 +2901,16 @@ const primaryGreenButtonStyle: React.CSSProperties = {
   border: "none",
   borderRadius: 10,
   padding: "12px 16px",
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+const dangerButtonStyle: React.CSSProperties = {
+  background: "#fef2f2",
+  color: "#dc2626",
+  border: "1px solid #fecaca",
+  borderRadius: 10,
+  padding: "12px 14px",
   cursor: "pointer",
   fontWeight: 700,
 };

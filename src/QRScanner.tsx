@@ -94,6 +94,24 @@ function getStatusLabel(status: string | null | undefined) {
   }
 }
 
+function canResumeBatch(status: string | null | undefined) {
+  return (
+    status === null ||
+    status === undefined ||
+    status === "waiting" ||
+    status === "partial" ||
+    status === "pending"
+  );
+}
+
+function getTakeBatchButtonText(status: string | null | undefined) {
+  if (status === "partial") {
+    return "Продолжить работу над пачкой";
+  }
+
+  return "Взять пачку в работу";
+}
+
 export default function QRScanner({
   onTakenToWork,
 }: {
@@ -330,6 +348,10 @@ export default function QRScanner({
     await resumeScanner();
   }
 
+  function handleContinueWork() {
+    onTakenToWork?.();
+  }
+
   async function handleTakeBatchToWork() {
     if (!scannedBatchData) return;
 
@@ -343,12 +365,33 @@ export default function QRScanner({
     }
 
     if (batch.status === "in_progress") {
-      setErrorMessage("Эта пачка уже находится в работе.");
+      onTakenToWork?.();
       return;
     }
 
     if (batch.status === "done") {
       setErrorMessage("Эта пачка уже завершена на текущей операции.");
+      return;
+    }
+
+    if (batch.status === "cancelled") {
+      setErrorMessage("Эта пачка отменена. Продолжить работу нельзя.");
+      return;
+    }
+
+    const totalQuantity = Number(batch.quantity || 0);
+    const completedQuantity = Number(batch.completed_quantity || 0);
+    const leftQuantity = Math.max(0, totalQuantity - completedQuantity);
+
+    if (leftQuantity <= 0) {
+      setErrorMessage("В этой пачке не осталось изделий для выполнения.");
+      return;
+    }
+
+    if (!canResumeBatch(batch.status)) {
+      setErrorMessage(
+        `Пачку со статусом "${getStatusLabel(batch.status)}" нельзя взять в работу.`
+      );
       return;
     }
 
@@ -404,7 +447,9 @@ export default function QRScanner({
       }
 
       setSuccessMessage(
-        `Пачка ${batch.batch_number} взята в работу: ${operation.operation_name}`
+        batch.status === "partial"
+          ? `Работа по пачке ${batch.batch_number} продолжена. Осталось: ${leftQuantity} шт.`
+          : `Пачка ${batch.batch_number} взята в работу: ${operation.operation_name}`
       );
 
       window.setTimeout(() => {
@@ -426,6 +471,15 @@ export default function QRScanner({
   const batchQuantity = Number(modalBatch?.quantity || 0);
   const batchCompleted = Number(modalBatch?.completed_quantity || 0);
   const batchLeft = Math.max(0, batchQuantity - batchCompleted);
+
+  const canTakeModalBatch =
+    !!modalOperation &&
+    !!modalBatch &&
+    canResumeBatch(modalBatch.status) &&
+    batchLeft > 0;
+
+  const canContinueModalBatch =
+    !!modalOperation && !!modalBatch && modalBatch.status === "in_progress";
 
   useEffect(() => {
     startScanner();
@@ -742,7 +796,24 @@ export default function QRScanner({
                     fontWeight: 700,
                   }}
                 >
-                  Эта пачка уже находится в работе.
+                  Эта пачка уже находится в работе. Можно перейти к продолжению
+                  работы.
+                </div>
+              )}
+
+              {modalBatch.status === "partial" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#fffbeb",
+                    border: "1px solid #fde68a",
+                    color: "#92400e",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка выполнена частично. Можно продолжить работу:
+                  осталось {batchLeft} шт.
                 </div>
               )}
 
@@ -760,31 +831,67 @@ export default function QRScanner({
                   Эта пачка уже завершена на текущей операции.
                 </div>
               )}
-            </div>
 
-            {modalOperation &&
-              modalBatch.status !== "in_progress" &&
-              modalBatch.status !== "done" && (
-                <button
-                  onClick={handleTakeBatchToWork}
-                  disabled={actionLoading}
+              {modalBatch.status === "cancelled" && (
+                <div
                   style={{
-                    border: "none",
-                    borderRadius: 16,
-                    padding: "17px 18px",
-                    background: actionLoading ? "#93c5fd" : "#2563eb",
-                    color: "#ffffff",
-                    fontWeight: 900,
-                    cursor: actionLoading ? "default" : "pointer",
-                    width: "100%",
-                    fontSize: 17,
-                    flexShrink: 0,
-                    boxShadow: "0 10px 22px rgba(37, 99, 235, 0.25)",
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#991b1b",
+                    fontWeight: 700,
                   }}
                 >
-                  {actionLoading ? "Сохраняю..." : "Взять пачку в работу"}
-                </button>
+                  Эта пачка отменена. Продолжить работу нельзя.
+                </div>
               )}
+            </div>
+
+            {canContinueModalBatch && (
+              <button
+                onClick={handleContinueWork}
+                style={{
+                  border: "none",
+                  borderRadius: 16,
+                  padding: "17px 18px",
+                  background: "#16a34a",
+                  color: "#ffffff",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                  width: "100%",
+                  fontSize: 17,
+                  flexShrink: 0,
+                  boxShadow: "0 10px 22px rgba(22, 163, 74, 0.25)",
+                }}
+              >
+                Продолжить работу
+              </button>
+            )}
+
+            {canTakeModalBatch && (
+              <button
+                onClick={handleTakeBatchToWork}
+                disabled={actionLoading}
+                style={{
+                  border: "none",
+                  borderRadius: 16,
+                  padding: "17px 18px",
+                  background: actionLoading ? "#93c5fd" : "#2563eb",
+                  color: "#ffffff",
+                  fontWeight: 900,
+                  cursor: actionLoading ? "default" : "pointer",
+                  width: "100%",
+                  fontSize: 17,
+                  flexShrink: 0,
+                  boxShadow: "0 10px 22px rgba(37, 99, 235, 0.25)",
+                }}
+              >
+                {actionLoading
+                  ? "Сохраняю..."
+                  : getTakeBatchButtonText(modalBatch.status)}
+              </button>
+            )}
           </div>
         </div>
       )}

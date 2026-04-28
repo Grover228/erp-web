@@ -209,14 +209,7 @@ export default function UnitsDirectory() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Например: Штука"
-              style={{
-                height: 42,
-                borderRadius: 10,
-                border: "1px solid #cbd5e1",
-                padding: "0 12px",
-                fontSize: 14,
-                background: "#fff",
-              }}
+              style={inputStyle}
             />
           </div>
 
@@ -241,14 +234,7 @@ export default function UnitsDirectory() {
               value={shortName}
               onChange={(e) => setShortName(e.target.value)}
               placeholder="Например: шт"
-              style={{
-                height: 42,
-                borderRadius: 10,
-                border: "1px solid #cbd5e1",
-                padding: "0 12px",
-                fontSize: 14,
-                background: "#fff",
-              }}
+              style={inputStyle}
             />
           </div>
 
@@ -273,14 +259,7 @@ export default function UnitsDirectory() {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Необязательно"
-              style={{
-                height: 42,
-                borderRadius: 10,
-                border: "1px solid #cbd5e1",
-                padding: "0 12px",
-                fontSize: 14,
-                background: "#fff",
-              }}
+              style={inputStyle}
             />
           </div>
 
@@ -472,3 +451,15 @@ export default function UnitsDirectory() {
     </div>
   );
 }
+
+const inputStyle: React.CSSProperties = {
+  height: 42,
+  borderRadius: 10,
+  border: "1px solid #cbd5e1",
+  padding: "0 12px",
+  fontSize: 16,
+  background: "#ffffff",
+  color: "#0f172a",
+  caretColor: "#0f172a",
+  outline: "none",
+};
