@@ -1,13 +1,11 @@
 {
-  "name": "ERP производства одежды",
+  "name": "ERP производство",
   "short_name": "ERP",
-  "description": "ERP система для управления производством одежды",
-  "theme_color": "#111827",
-  "background_color": "#f3f4f6",
-  "display": "standalone",
-  "orientation": "portrait",
+  "start_url": "/?v=2",
   "scope": "/",
-  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/pwa-192x192.png",
@@ -18,12 +16,6 @@
       "src": "/pwa-512x512.png",
       "sizes": "512x512",
       "type": "image/png"
-    },
-    {
-      "src": "/pwa-512x512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
     }
   ]
 }
