@@ -430,7 +430,7 @@ export default function EmployeeMobilePage() {
 
           <button
             onClick={openShift}
-            className="w-full h-20 rounded-3xl bg-black text-white text-2xl font-bold active:scale-[0.98]"
+            className="w-full h-24 rounded-3xl bg-green-600 text-white text-2xl font-bold shadow-md active:scale-[0.97]"
           >
             Открыть смену
           </button>
