@@ -573,7 +573,11 @@ function App() {
     }
 
     if (currentScreen === "employee-home") {
-      return <EmployeeMobilePage />;
+      return (
+        <EmployeeMobilePage
+          onOpenScanner={() => setCurrentScreen("scanner")}
+        />
+      );
     }
 
     if (currentScreen === "dashboard") {
