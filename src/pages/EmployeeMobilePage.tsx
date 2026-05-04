@@ -182,27 +182,28 @@ export default function EmployeeMobilePage({
       setShiftError("");
 
       const opened = new Date(shift.opened_at).getTime();
-      const closed = Date.now();
       const closedAt = new Date().toISOString();
+      const closed = new Date(closedAt).getTime();
       const hours = Math.max((closed - opened) / 1000 / 60 / 60, 0);
 
       const { data: shiftLogs, error: logsError } = await supabase
         .from("production_operation_logs")
-        .select("operation_name, quantity, finished_at")
-        .eq("user_id", userId || shift.user_id)
+        .select("operation_name, quantity")
+        .eq("user_id", userId)
         .gte("finished_at", shift.opened_at)
         .lte("finished_at", closedAt);
 
       if (logsError) throw logsError;
 
-      const operationsSummary = ((shiftLogs || []) as Array<{
-        operation_name: string | null;
-        quantity: number | string | null;
-      }>).reduce((acc, log) => {
-        const name = log.operation_name || "Операция";
-        acc[name] = (acc[name] || 0) + Number(log.quantity || 0);
-        return acc;
-      }, {} as Record<string, number>);
+      const operationsSummary: Record<string, number> = {};
+
+      (shiftLogs || []).forEach((log) => {
+        const operationName = String(log.operation_name || "Операция");
+        const quantity = Number(log.quantity || 0);
+
+        operationsSummary[operationName] =
+          (operationsSummary[operationName] || 0) + quantity;
+      });
 
       const { data, error } = await supabase
         .from("employee_shifts")
@@ -670,7 +671,7 @@ export default function EmployeeMobilePage({
 
               {Object.entries(closingResult.operations).length === 0 ? (
                 <div style={{ fontSize: 16, color: "#166534" }}>
-                  Нет данных по операциям
+                  Нет выполненных операций
                 </div>
               ) : (
                 <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
@@ -682,7 +683,9 @@ export default function EmployeeMobilePage({
                 </div>
               )}
 
-              <div style={{ marginTop: 10 }}>Заработано: <b>{closingResult.earned.toFixed(2)} ₽</b></div>
+              <div style={{ marginTop: 10 }}>
+                Заработано: <b>{closingResult.earned.toFixed(2)} ₽</b>
+              </div>
               <div>Время: <b>{closingResult.hours.toFixed(1)} ч</b></div>
             </div>
           )}
