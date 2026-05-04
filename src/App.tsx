@@ -4,6 +4,7 @@ import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
+import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
 import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
@@ -15,6 +16,7 @@ type Screen =
   | "dashboard"
   | "production"
   | "scanner"
+  | "employee-home"
   | "directories"
   | "directory-employees"
   | "directory-suppliers"
@@ -82,22 +84,24 @@ function App() {
     isAdmin || currentEmployee?.can_manage_production === true;
   const canManageDirectories =
     isAdmin || currentEmployee?.can_manage_directories === true;
-  const canUseScanner =
-    isAdmin || currentEmployee?.can_use_scanner !== false;
+  const canUseScanner = isAdmin || currentEmployee?.can_use_scanner !== false;
 
-  const menuItems = [
-    ...(canViewDashboard ? [{ key: "dashboard", label: "Дашборд" }] : []),
-    ...(canManageProduction
-      ? [{ key: "production", label: "Производство" }]
-      : []),
-    ...(canManageDirectories
-      ? [{ key: "directories", label: "Справочники" }]
-      : []),
-    ...(canUseScanner ? [{ key: "scanner", label: "Сканер QR" }] : []),
-  ];
+  const menuItems = isAdmin
+    ? [
+        { key: "dashboard", label: "Дашборд" },
+        { key: "production", label: "Производство" },
+        { key: "directories", label: "Справочники" },
+        { key: "scanner", label: "Сканер QR" },
+      ]
+    : [
+        { key: "scanner", label: "Сканер QR" },
+        { key: "employee-home", label: "Моя смена" },
+      ];
 
   const pageTitle =
-    currentScreen === "dashboard"
+    currentScreen === "employee-home"
+      ? "Моя смена"
+      : currentScreen === "dashboard"
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
@@ -126,7 +130,9 @@ function App() {
       : "Сканер QR";
 
   const pageSubtitle =
-    currentScreen === "dashboard"
+    currentScreen === "employee-home"
+      ? "Рабочий экран сотрудника"
+      : currentScreen === "dashboard"
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
@@ -155,8 +161,8 @@ function App() {
       : "Сканирование кодов";
 
   const canGoBack = useMemo(() => {
-    return currentScreen !== "dashboard" && currentScreen !== "scanner";
-  }, [currentScreen]);
+    return currentScreen !== getDefaultScreen() && currentScreen !== "scanner";
+  }, [currentScreen, isAdmin]);
 
   const userEmail = session?.user?.email || "";
   const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
@@ -219,16 +225,18 @@ function App() {
 
   useEffect(() => {
     if (!session || currentEmployeeLoading) return;
-
     if (!currentEmployee) return;
-
     if (currentEmployee.app_role === "admin") return;
+
+    if (currentScreen === "employee-home" || currentScreen === "scanner") {
+      return;
+    }
 
     if (
       currentScreen === "dashboard" &&
       currentEmployee.can_view_dashboard !== true
     ) {
-      setCurrentScreen("scanner");
+      setCurrentScreen("employee-home");
       return;
     }
 
@@ -236,7 +244,7 @@ function App() {
       currentScreen === "production" &&
       currentEmployee.can_manage_production !== true
     ) {
-      setCurrentScreen("scanner");
+      setCurrentScreen("employee-home");
       return;
     }
 
@@ -254,7 +262,7 @@ function App() {
         currentScreen === "directory-statuses") &&
       currentEmployee.can_manage_directories !== true
     ) {
-      setCurrentScreen("scanner");
+      setCurrentScreen("employee-home");
     }
   }, [session, currentEmployee, currentEmployeeLoading, currentScreen]);
 
@@ -384,10 +392,8 @@ function App() {
   }
 
   function getDefaultScreen(): Screen {
-    if (canViewDashboard) return "dashboard";
-    if (canManageProduction) return "production";
-    if (canUseScanner) return "scanner";
-    return "scanner";
+    if (isAdmin) return "dashboard";
+    return "employee-home";
   }
 
   function handleGoBack() {
@@ -566,6 +572,10 @@ function App() {
       );
     }
 
+    if (currentScreen === "employee-home") {
+      return <EmployeeMobilePage />;
+    }
+
     if (currentScreen === "dashboard") {
       if (!canViewDashboard) return renderAccessDenied();
 
@@ -664,7 +674,10 @@ function App() {
             if (canManageProduction) {
               setProductionInitialTab("active");
               setCurrentScreen("production");
+              return;
             }
+
+            setCurrentScreen("employee-home");
           }}
         />
       );
@@ -825,7 +838,9 @@ function App() {
                       currentScreen === "directory-variants" ||
                       currentScreen === "directory-units" ||
                       currentScreen === "directory-statuses")) ||
-                  (item.key === "scanner" && currentScreen === "scanner");
+                  (item.key === "scanner" && currentScreen === "scanner") ||
+                  (item.key === "employee-home" &&
+                    currentScreen === "employee-home");
 
                 return (
                   <button
@@ -844,6 +859,9 @@ function App() {
                           break;
                         case "scanner":
                           setCurrentScreen("scanner");
+                          break;
+                        case "employee-home":
+                          setCurrentScreen("employee-home");
                           break;
                         default:
                           break;
@@ -881,46 +899,276 @@ function App() {
 
       <main
         style={{
-          padding: 16,
+          padding: isAdmin ? 16 : 0,
         }}
       >
         <div
           style={{
-            maxWidth: 1200,
+            maxWidth: isAdmin ? 1200 : "none",
             margin: "0 auto",
             display: "flex",
             flexDirection: "column",
-            gap: 16,
+            gap: isAdmin ? 16 : 0,
           }}
         >
-          <div
-            style={{
-              background: "#ffffff",
-              borderRadius: 22,
-              padding: 18,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 12,
-              border: "1px solid #dbe4f0",
-              boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
-              flexWrap: "wrap",
-            }}
-          >
+          {isAdmin && (
             <div
               style={{
+                background: "#ffffff",
+                borderRadius: 22,
+                padding: 18,
                 display: "flex",
                 alignItems: "center",
+                justifyContent: "space-between",
                 gap: 12,
-                minWidth: 0,
-                flex: "1 1 380px",
+                border: "1px solid #dbe4f0",
+                boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+                flexWrap: "wrap",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  minWidth: 0,
+                  flex: "1 1 380px",
+                }}
+              >
+                <button
+                  onClick={() => setMenuOpen(true)}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 14,
+                    border: "1px solid #cbd5e1",
+                    background: "#ffffff",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 4,
+                    padding: 0,
+                    flexShrink: 0,
+                    boxShadow: "0 6px 14px rgba(15, 23, 42, 0.06)",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "block",
+                      width: 18,
+                      height: 2,
+                      background: "#0f172a",
+                      borderRadius: 2,
+                    }}
+                  />
+                  <span
+                    style={{
+                      display: "block",
+                      width: 18,
+                      height: 2,
+                      background: "#0f172a",
+                      borderRadius: 2,
+                    }}
+                  />
+                  <span
+                    style={{
+                      display: "block",
+                      width: 18,
+                      height: 2,
+                      background: "#0f172a",
+                      borderRadius: 2,
+                    }}
+                  />
+                </button>
+
+                {canGoBack && (
+                  <button
+                    onClick={handleGoBack}
+                    style={{
+                      width: 48,
+                      height: 48,
+                      borderRadius: 14,
+                      border: "1px solid #cbd5e1",
+                      background: "#ffffff",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0,
+                      boxShadow: "0 6px 14px rgba(15, 23, 42, 0.06)",
+                      fontSize: 22,
+                      color: "#0f172a",
+                      fontWeight: 700,
+                    }}
+                    title="Назад"
+                  >
+                    ←
+                  </button>
+                )}
+
+                <div style={{ minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontSize: 28,
+                      fontWeight: 700,
+                      color: "#0f172a",
+                      lineHeight: 1.1,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {pageTitle}
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize: 15,
+                      color: "#64748b",
+                      marginTop: 4,
+                      lineHeight: 1.4,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {pageSubtitle}
+                  </div>
+                </div>
+              </div>
+
+              <div
+                ref={userMenuRef}
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  alignItems: "center",
+                  flexShrink: 0,
+                  marginLeft: "auto",
+                }}
+              >
+                <button
+                  title={userEmail}
+                  onClick={() => setUserMenuOpen((prev) => !prev)}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 999,
+                    border: "1px solid #bfdbfe",
+                    background:
+                      "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)",
+                    color: "#1d4ed8",
+                    fontSize: 20,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    boxShadow: "0 6px 14px rgba(37, 99, 235, 0.08)",
+                    flexShrink: 0,
+                  }}
+                >
+                  {userInitial}
+                </button>
+
+                {userMenuOpen && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: 58,
+                      right: 0,
+                      minWidth: 220,
+                      background: "#ffffff",
+                      border: "1px solid #dbe4f0",
+                      borderRadius: 14,
+                      boxShadow: "0 14px 30px rgba(15, 23, 42, 0.12)",
+                      padding: 8,
+                      zIndex: 1000,
+                    }}
+                  >
+                    <div
+                      style={{
+                        padding: "8px 10px 10px 10px",
+                        borderBottom: "1px solid #eef2f7",
+                        marginBottom: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "#64748b",
+                          marginBottom: 4,
+                        }}
+                      >
+                        Пользователь
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 600,
+                          color: "#0f172a",
+                          wordBreak: "break-word",
+                        }}
+                      >
+                        {userEmail}
+                      </div>
+
+                      {currentEmployee && (
+                        <div
+                          style={{
+                            marginTop: 8,
+                            fontSize: 13,
+                            color: "#64748b",
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {currentEmployee.full_name || "Без имени"} ·{" "}
+                          {currentEmployee.app_role === "admin"
+                            ? "Администратор"
+                            : "Сотрудник"}
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={handleLogout}
+                      style={{
+                        width: "100%",
+                        border: "none",
+                        background: "#ffffff",
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        cursor: "pointer",
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: "#dc2626",
+                        textAlign: "left",
+                      }}
+                    >
+                      Выйти
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {!isAdmin && currentEmployee && (
+            <div
+              style={{
+                background: "#ffffff",
+                borderRadius: 18,
+                padding: "10px 12px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                border: "1px solid #dbeafe",
+                boxShadow: "0 8px 18px rgba(15, 23, 42, 0.06)",
+                margin: "10px 10px 0 10px",
               }}
             >
               <button
                 onClick={() => setMenuOpen(true)}
                 style={{
-                  width: 48,
-                  height: 48,
+                  width: 42,
+                  height: 42,
                   borderRadius: 14,
                   border: "1px solid #cbd5e1",
                   background: "#ffffff",
@@ -932,115 +1180,54 @@ function App() {
                   gap: 4,
                   padding: 0,
                   flexShrink: 0,
-                  boxShadow: "0 6px 14px rgba(15, 23, 42, 0.06)",
                 }}
               >
-                <span
-                  style={{
-                    display: "block",
-                    width: 18,
-                    height: 2,
-                    background: "#0f172a",
-                    borderRadius: 2,
-                  }}
-                />
-                <span
-                  style={{
-                    display: "block",
-                    width: 18,
-                    height: 2,
-                    background: "#0f172a",
-                    borderRadius: 2,
-                  }}
-                />
-                <span
-                  style={{
-                    display: "block",
-                    width: 18,
-                    height: 2,
-                    background: "#0f172a",
-                    borderRadius: 2,
-                  }}
-                />
+                <span style={{ width: 18, height: 2, background: "#0f172a", borderRadius: 2 }} />
+                <span style={{ width: 18, height: 2, background: "#0f172a", borderRadius: 2 }} />
+                <span style={{ width: 18, height: 2, background: "#0f172a", borderRadius: 2 }} />
               </button>
 
-              {canGoBack && (
-                <button
-                  onClick={handleGoBack}
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 14,
-                    border: "1px solid #cbd5e1",
-                    background: "#ffffff",
-                    cursor: "pointer",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                    boxShadow: "0 6px 14px rgba(15, 23, 42, 0.06)",
-                    fontSize: 22,
-                    color: "#0f172a",
-                    fontWeight: 700,
-                  }}
-                  title="Назад"
-                >
-                  ←
-                </button>
-              )}
-
-              <div style={{ minWidth: 0 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
                 <div
                   style={{
-                    fontSize: 28,
-                    fontWeight: 700,
+                    fontSize: 20,
+                    fontWeight: 900,
                     color: "#0f172a",
                     lineHeight: 1.1,
-                    wordBreak: "break-word",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
                   }}
                 >
                   {pageTitle}
                 </div>
-
                 <div
                   style={{
-                    fontSize: 15,
+                    fontSize: 12,
                     color: "#64748b",
-                    marginTop: 4,
-                    lineHeight: 1.4,
-                    wordBreak: "break-word",
+                    marginTop: 3,
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
                   }}
                 >
                   {pageSubtitle}
                 </div>
               </div>
-            </div>
 
-            <div
-              ref={userMenuRef}
-              style={{
-                position: "relative",
-                display: "flex",
-                alignItems: "center",
-                flexShrink: 0,
-                marginLeft: "auto",
-              }}
-            >
               <button
                 title={userEmail}
                 onClick={() => setUserMenuOpen((prev) => !prev)}
                 style={{
-                  width: 48,
-                  height: 48,
+                  width: 42,
+                  height: 42,
                   borderRadius: 999,
                   border: "1px solid #bfdbfe",
-                  background:
-                    "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)",
+                  background: "linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%)",
                   color: "#1d4ed8",
-                  fontSize: 20,
-                  fontWeight: 700,
+                  fontSize: 18,
+                  fontWeight: 900,
                   cursor: "pointer",
-                  boxShadow: "0 6px 14px rgba(37, 99, 235, 0.08)",
                   flexShrink: 0,
                 }}
               >
@@ -1050,9 +1237,9 @@ function App() {
               {userMenuOpen && (
                 <div
                   style={{
-                    position: "absolute",
-                    top: 58,
-                    right: 0,
+                    position: "fixed",
+                    top: 66,
+                    right: 10,
                     minWidth: 220,
                     background: "#ffffff",
                     border: "1px solid #dbe4f0",
@@ -1062,51 +1249,10 @@ function App() {
                     zIndex: 1000,
                   }}
                 >
-                  <div
-                    style={{
-                      padding: "8px 10px 10px 10px",
-                      borderBottom: "1px solid #eef2f7",
-                      marginBottom: 8,
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 12,
-                        color: "#64748b",
-                        marginBottom: 4,
-                      }}
-                    >
-                      Пользователь
-                    </div>
-
-                    <div
-                      style={{
-                        fontSize: 13,
-                        fontWeight: 600,
-                        color: "#0f172a",
-                        wordBreak: "break-word",
-                      }}
-                    >
-                      {userEmail}
-                    </div>
-
-                    {currentEmployee && (
-                      <div
-                        style={{
-                          marginTop: 8,
-                          fontSize: 13,
-                          color: "#64748b",
-                          lineHeight: 1.4,
-                        }}
-                      >
-                        {currentEmployee.full_name || "Без имени"} ·{" "}
-                        {currentEmployee.app_role === "admin"
-                          ? "Администратор"
-                          : "Сотрудник"}
-                      </div>
-                    )}
+                  <div style={{ padding: "8px 10px 10px 10px", borderBottom: "1px solid #eef2f7", marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, color: "#64748b", marginBottom: 4 }}>Пользователь</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#0f172a", wordBreak: "break-word" }}>{userEmail}</div>
                   </div>
-
                   <button
                     onClick={handleLogout}
                     style={{
@@ -1117,7 +1263,7 @@ function App() {
                       padding: "10px 12px",
                       cursor: "pointer",
                       fontSize: 14,
-                      fontWeight: 700,
+                      fontWeight: 800,
                       color: "#dc2626",
                       textAlign: "left",
                     }}
@@ -1127,7 +1273,7 @@ function App() {
                 </div>
               )}
             </div>
-          </div>
+          )}
 
           {renderContent()}
         </div>
