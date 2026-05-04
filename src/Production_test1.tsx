@@ -1,227 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
+import { fetchProductionOrdersBundle } from "./api/productionApi";
+import {
+  getProgress,
+  formatDate,
+  formatMoney,
+  formatTime,
+  formatTimer,
+  getElapsedSeconds,
+  getStatusLabel,
+} from "./production/utils";
 
-export type ProductionTab = "jobs" | "active" | "history" | "techcards";
+import type {
+  ActiveBatchItem,
+  ConsumablePrice,
+  GeneratedQr,
+  Job,
+  MaterialPrice,
+  ProductItem,
+  ProductionBatch,
+  ProductionOrder,
+  ProductionOrderOperation,
+  ProductionTab,
+  ShiftStats,
+  TechCardConsumable,
+  TechCardItem,
+  TechCardMaterial,
+  TechCardOperation,
+} from "./production/types";
 
-type ProductionOrder = {
-  id: string;
-  product_id: string;
-  tech_card_id: string | null;
-  order_number: string | null;
-  quantity: number;
-  status: string;
-  comment: string | null;
-  planned_total_cost: number | null;
-  planned_time_min: number | null;
-  created_at: string | null;
-  product?: {
-    name: string;
-    article: string | null;
-  } | null;
-};
-
-type ProductionOrderOperation = {
-  id: string;
-  production_order_id: string;
-  operation_name: string;
-  sort_order: number;
-  planned_total_time_min: number | null;
-  planned_total_price: number | null;
-  price_per_unit: number | null;
-  status: string;
-  assigned_user_id: string | null;
-  assigned_at: string | null;
-  started_at: string | null;
-  completed_quantity: number;
-  completed_at: string | null;
-};
-
-type ProductionBatch = {
-  id: string;
-  production_order_id: string;
-  source_operation_id: string | null;
-  batch_number: string;
-  quantity: number;
-  completed_quantity: number | null;
-  current_operation_order: number | null;
-  status: string | null;
-  qr_code: string | null;
-  product_name: string | null;
-  product_article: string | null;
-  color_name: string | null;
-  qr_payload: GeneratedQr["payload"] | null;
-  comment: string | null;
-  assigned_user_id: string | null;
-  assigned_at: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  created_at: string | null;
-};
-
-type ProductItem = {
-  id: string;
-  name: string;
-  article: string | null;
-};
-
-type TechCardItem = {
-  id: string;
-  product_id: string;
-  name: string;
-  version: number;
-  is_active: boolean;
-};
-
-type TechCardMaterial = {
-  id: string;
-  tech_card_id: string;
-  material_id: string;
-  quantity: number;
-  comment: string | null;
-};
-
-type TechCardConsumable = {
-  id: string;
-  tech_card_id: string;
-  consumable_id: string;
-  quantity: number;
-  comment: string | null;
-};
-
-type TechCardOperation = {
-  id: string;
-  tech_card_id: string;
-  operation_name: string;
-  sort_order: number;
-  planned_time_min: number | null;
-  price: number | null;
-  comment: string | null;
-};
-
-type MaterialPrice = {
-  id: string;
-  default_price: number | null;
-};
-
-type ConsumablePrice = {
-  id: string;
-  default_price: number | null;
-};
-
-type Job = {
-  id: string;
-  realId: string;
-  product: string;
-  issuedAt: string;
-  qty: number;
-  completed: number;
-  status: string;
-  rawStatus: string;
-  cost: number;
-  timeMin: number;
-  operations: ProductionOrderOperation[];
-};
-
-type GeneratedQr = {
-  batchNumber: string;
-  dataUrl: string;
-  payload: {
-    batch_number: string;
-    order_number: string;
-    product_name: string;
-    product_article: string | null;
-    color_name: string | null;
-    quantity: number;
-  };
-};
-
-type ShiftStats = {
-  operationsCount: number;
-  totalQuantity: number;
-  totalEarned: number;
-  totalDurationSeconds: number;
-};
-
-type ActiveBatchItem = {
-  batch: ProductionBatch;
-  order: ProductionOrder | null;
-  operation: ProductionOrderOperation | null;
-};
-
-function getProgress(completed: number, total: number) {
-  if (total === 0) return 0;
-  return Math.round((completed / total) * 100);
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatMoney(value: number | null | undefined) {
-  return `${Number(value || 0).toFixed(2)} ₽`;
-}
-
-function formatTime(minutes: number | null | undefined) {
-  const totalMinutes = Math.round(Number(minutes || 0));
-
-  if (totalMinutes <= 0) return "0 мин";
-
-  const hours = Math.floor(totalMinutes / 60);
-  const restMinutes = totalMinutes % 60;
-
-  if (hours === 0) return `${restMinutes} мин`;
-  if (restMinutes === 0) return `${hours} ч`;
-
-  return `${hours} ч ${restMinutes} мин`;
-}
-
-function formatTimer(seconds: number) {
-  const safeSeconds = Math.max(0, seconds);
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const restSeconds = safeSeconds % 60;
-
-  return [hours, minutes, restSeconds]
-    .map((item) => String(item).padStart(2, "0"))
-    .join(":");
-}
-
-function getElapsedSeconds(startedAt: string | null, nowTick: number) {
-  if (!startedAt) return 0;
-  return Math.floor((nowTick - new Date(startedAt).getTime()) / 1000);
-}
-
-function getStatusLabel(status: string | null | undefined) {
-  switch (status) {
-    case "draft":
-      return "Черновик";
-    case "pending":
-      return "Ожидает";
-    case "waiting":
-      return "Ожидает";
-    case "partial":
-      return "Частично выполнено";
-    case "in_progress":
-      return "В работе";
-    case "done":
-      return "Готово";
-    case "cancelled":
-      return "Отменён";
-    case "archived":
-      return "Архив";
-    default:
-      return status || "Черновик";
-  }
-}
+export type { ProductionTab };
 
 function ProgressBar({ value }: { value: number }) {
   return (
@@ -431,51 +240,12 @@ export default function Production({
       setLoading(true);
       setError("");
 
-      const { data: ordersData, error: ordersError } = await supabase
-        .from("production_orders")
-        .select(
-          `
-          *,
-          product:products (
-            name,
-            article
-          )
-        `
-        )
-        .order("created_at", { ascending: false });
+      const { orders: safeOrders, operations: safeOperations, batches: safeBatches } =
+        await fetchProductionOrdersBundle();
 
-      if (ordersError) throw ordersError;
-
-      const safeOrders = (ordersData as ProductionOrder[]) || [];
-      setOrders(safeOrders);
-
-      const orderIds = safeOrders.map((item) => item.id);
-
-      if (orderIds.length === 0) {
-        setOperations([]);
-        setBatches([]);
-        return;
-      }
-
-      const [operationsResult, batchesResult] = await Promise.all([
-        supabase
-          .from("production_order_operations")
-          .select("*")
-          .in("production_order_id", orderIds)
-          .order("sort_order", { ascending: true }),
-
-        supabase
-          .from("production_batches")
-          .select("*")
-          .in("production_order_id", orderIds)
-          .order("created_at", { ascending: false }),
-      ]);
-
-      if (operationsResult.error) throw operationsResult.error;
-      if (batchesResult.error) throw batchesResult.error;
-
-      setOperations((operationsResult.data as ProductionOrderOperation[]) || []);
-      setBatches((batchesResult.data as ProductionBatch[]) || []);
+      setOrders(safeOrders as ProductionOrder[]);
+      setOperations(safeOperations as ProductionOrderOperation[]);
+      setBatches(safeBatches as ProductionBatch[]);
 
       setOpenJobs((prev) => {
         const next = { ...prev };
@@ -924,43 +694,7 @@ export default function Production({
     setMessage("");
   }
 
-  async function printQrLabel(item: GeneratedQr) {
-    try {
-      setMessage("");
-      setError("");
-
-      const response = await fetch("http://localhost:3001/print-qr", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          printerName: "Xprinter XP-365B",
-          batchNumber: item.batchNumber,
-          productName: item.payload.product_name,
-          article: item.payload.product_article || "",
-          quantity: item.payload.quantity,
-          qrDataUrl: item.dataUrl,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Ошибка печати QR");
-      }
-
-      setMessage(`QR пачки ${item.batchNumber} отправлен на печать`);
-    } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Ошибка печати QR"
-      );
-    }
-  }
-
-  async function handleTestPrint() {
+   async function handleTestPrint() {
     try {
     setMessage("");
     setError("");
@@ -1348,24 +1082,6 @@ export default function Production({
       );
 
       let nextBatchData: Record<string, unknown> = {};
-      let nextBatchStatusMessage = "";
-
-      /*
-        ВАЖНО ДЛЯ QR-СЦЕНАРИЯ
-        Если сотрудник закрыл не всю пачку, пачка НЕ должна оставаться in_progress.
-        Она должна перейти в статус partial, чтобы при повторном сканировании QR
-        система предложила продолжить работу над остатком.
-
-        Пример:
-        quantity = 15
-        completed_quantity было 0
-        сотрудник сделал 10
-
-        После сохранения в production_batches должно быть:
-        status = partial
-        completed_quantity = 10
-        current_operation_order = текущая операция
-      */
 
       if (isBatchOperationDone && nextOperation) {
         nextBatchData = {
@@ -1377,50 +1093,30 @@ export default function Production({
           started_at: null,
           completed_at: null,
         };
-
-        nextBatchStatusMessage = `Пачка полностью закрыта на текущей операции и передана на операцию ${nextOperation.sort_order}. ${nextOperation.operation_name}.`;
       } else if (isBatchOperationDone && !nextOperation) {
         nextBatchData = {
           status: "done",
           completed_quantity: batchQuantity,
           assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
           completed_at: finishedAt,
         };
-
-        nextBatchStatusMessage = "Пачка полностью завершена.";
       } else {
         nextBatchData = {
           status: "partial",
           completed_quantity: newBatchCompleted,
-          current_operation_order: Number(batch.current_operation_order || operation.sort_order),
           assigned_user_id: null,
           assigned_at: null,
           started_at: null,
           completed_at: null,
         };
-
-        nextBatchStatusMessage = `Пачка выполнена частично. Осталось: ${Math.max(
-          0,
-          batchQuantity - newBatchCompleted
-        )} шт.`;
       }
 
-      const { data: updatedBatch, error: batchError } = await supabase
+      const { error: batchError } = await supabase
         .from("production_batches")
         .update(nextBatchData)
-        .eq("id", batch.id)
-        .select("id, batch_number, quantity, completed_quantity, status, current_operation_order")
-        .maybeSingle();
+        .eq("id", batch.id);
 
       if (batchError) throw batchError;
-
-      if (!updatedBatch) {
-        throw new Error(
-          "Пачка не обновилась в базе. Проверь RLS/права доступа к production_batches."
-        );
-      }
 
       const { error: logError } = await supabase
         .from("production_operation_logs")
@@ -1484,7 +1180,7 @@ export default function Production({
       }
 
       setMessage(
-        `Пачка ${batch.batch_number} сохранена. Сделано: ${finishQuantityNumber} шт. Заработано: ${formatMoney(earned)} ${nextBatchStatusMessage}`
+        `Пачка ${batch.batch_number} сохранена. Сделано: ${finishQuantityNumber} шт. Заработано: ${formatMoney(earned)}.`
       );
 
       setFinishBatchItem(null);
@@ -2163,7 +1859,7 @@ export default function Production({
             QR-код для пачки {generatedQr.batchNumber}
           </div>
 
-          <QrCard item={generatedQr} onPrint={printQrLabel} />
+          <QrCard item={generatedQr} />
         </div>
       )}
 
@@ -2767,7 +2463,7 @@ export default function Production({
                       background: "#f8fbff",
                     }}
                   >
-                    <QrCard item={item} onPrint={printQrLabel} />
+                    <QrCard item={item} />
                   </div>
                 ))}
               </div>
@@ -2779,13 +2475,7 @@ export default function Production({
   );
 }
 
-function QrCard({
-  item,
-  onPrint,
-}: {
-  item: GeneratedQr;
-  onPrint?: (item: GeneratedQr) => void;
-}) {
+function QrCard({ item }: { item: GeneratedQr }) {
   return (
     <div
       style={{
@@ -2811,55 +2501,28 @@ function QrCard({
         <div style={{ fontWeight: 800, color: "#111827" }}>
           Пачка: {item.batchNumber}
         </div>
-
         <div>Заказ: {item.payload.order_number}</div>
         <div>Изделие: {item.payload.product_name}</div>
         <div>Артикул: {item.payload.product_article || "—"}</div>
         <div>Цвет: {item.payload.color_name || "—"}</div>
         <div>Количество в пачке: {item.payload.quantity} шт</div>
 
-        <div
+        <a
+          href={item.dataUrl}
+          download={`${item.batchNumber}.png`}
           style={{
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginTop: 12,
+            display: "inline-flex",
+            marginTop: 10,
+            background: "#2563eb",
+            color: "#fff",
+            borderRadius: 10,
+            padding: "10px 14px",
+            fontWeight: 700,
+            textDecoration: "none",
           }}
         >
-          <a
-            href={item.dataUrl}
-            download={`${item.batchNumber}.png`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              background: "#2563eb",
-              color: "#fff",
-              borderRadius: 10,
-              padding: "10px 14px",
-              fontWeight: 700,
-              textDecoration: "none",
-            }}
-          >
-            Скачать QR
-          </a>
-
-          {onPrint && (
-            <button
-              onClick={() => onPrint(item)}
-              style={{
-                background: "#16a34a",
-                color: "#fff",
-                border: "none",
-                borderRadius: 10,
-                padding: "10px 14px",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-            >
-              Печать QR
-            </button>
-          )}
-        </div>
+          Скачать QR
+        </a>
       </div>
     </div>
   );
@@ -3027,12 +2690,3 @@ const inputStyle: React.CSSProperties = {
   color: "#0f172a",
   outline: "none",
 };
-
-/*
-  CHANGELOG ERP PRODUCTION FIX
-  1. Частично выполненная пачка теперь сохраняется как status = "partial".
-  2. completed_quantity у пачки обновляется сразу после закрытия части пачки.
-  3. current_operation_order сохраняется на текущей операции при частичном выполнении.
-  4. После update production_batches выполняется select, чтобы увидеть ошибку RLS/доступа.
-  5. Это нужно для повторного сканирования QR и кнопки продолжения работы.
-*/
