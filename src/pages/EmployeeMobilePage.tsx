@@ -495,6 +495,18 @@ export default function EmployeeMobilePage({
     }
   }
 
+  function handleOpenScanner() {
+    if (batches.length > 0) {
+      setError(
+        "Сначала закончите текущую операцию. Нельзя взять новую пачку, пока текущая пачка находится в работе."
+      );
+      return;
+    }
+
+    setError("");
+    onOpenScanner();
+  }
+
   const shiftDuration = getShiftDuration(shift?.opened_at || null);
 
   if (shiftLoading) {
@@ -581,7 +593,7 @@ export default function EmployeeMobilePage({
         </div>
       </div>
 
-      <button onClick={onOpenScanner} style={scanButtonStyle}>
+      <button onClick={handleOpenScanner} style={scanButtonStyle}>
         Сканировать QR
       </button>
 
