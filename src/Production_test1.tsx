@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
-import { fetchProductionOrdersBundle } from "./api/productionApi";
 import {
   getProgress,
   formatDate,
@@ -30,7 +29,156 @@ import type {
   TechCardOperation,
 } from "./production/types";
 
-export type { ProductionTab };
+
+type ProductionOrder = {
+  id: string;
+  product_id: string;
+  tech_card_id: string | null;
+  order_number: string | null;
+  quantity: number;
+  status: string;
+  comment: string | null;
+  planned_total_cost: number | null;
+  planned_time_min: number | null;
+  created_at: string | null;
+  product?: {
+    name: string;
+    article: string | null;
+  } | null;
+};
+
+type ProductionOrderOperation = {
+  id: string;
+  production_order_id: string;
+  operation_name: string;
+  sort_order: number;
+  planned_total_time_min: number | null;
+  planned_total_price: number | null;
+  price_per_unit: number | null;
+  status: string;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_quantity: number;
+  completed_at: string | null;
+};
+
+type ProductionBatch = {
+  id: string;
+  production_order_id: string;
+  source_operation_id: string | null;
+  batch_number: string;
+  quantity: number;
+  completed_quantity: number | null;
+  current_operation_order: number | null;
+  status: string | null;
+  qr_code: string | null;
+  product_name: string | null;
+  product_article: string | null;
+  color_name: string | null;
+  qr_payload: GeneratedQr["payload"] | null;
+  comment: string | null;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string | null;
+};
+
+type ProductItem = {
+  id: string;
+  name: string;
+  article: string | null;
+};
+
+type TechCardItem = {
+  id: string;
+  product_id: string;
+  name: string;
+  version: number;
+  is_active: boolean;
+};
+
+type TechCardMaterial = {
+  id: string;
+  tech_card_id: string;
+  material_id: string;
+  quantity: number;
+  comment: string | null;
+};
+
+type TechCardConsumable = {
+  id: string;
+  tech_card_id: string;
+  consumable_id: string;
+  quantity: number;
+  comment: string | null;
+};
+
+type TechCardOperation = {
+  id: string;
+  tech_card_id: string;
+  operation_name: string;
+  sort_order: number;
+  planned_time_min: number | null;
+  price: number | null;
+  comment: string | null;
+};
+
+type MaterialPrice = {
+  id: string;
+  default_price: number | null;
+};
+
+type ConsumablePrice = {
+  id: string;
+  default_price: number | null;
+};
+
+type Job = {
+  id: string;
+  realId: string;
+  product: string;
+  issuedAt: string;
+  qty: number;
+  completed: number;
+  status: string;
+  rawStatus: string;
+  cost: number;
+  timeMin: number;
+  operations: ProductionOrderOperation[];
+};
+
+type GeneratedQr = {
+  batchNumber: string;
+  dataUrl: string;
+  payload: {
+    batch_number: string;
+    order_number: string;
+    product_name: string;
+    product_article: string | null;
+    color_name: string | null;
+    quantity: number;
+  };
+};
+
+type ShiftStats = {
+  operationsCount: number;
+  totalQuantity: number;
+  totalEarned: number;
+  totalDurationSeconds: number;
+};
+
+type ActiveBatchItem = {
+  batch: ProductionBatch;
+  order: ProductionOrder | null;
+  operation: ProductionOrderOperation | null;
+};
+
+  return [hours, minutes, restSeconds]
+    .map((item) => String(item).padStart(2, "0"))
+    .join(":");
+}
 
 function ProgressBar({ value }: { value: number }) {
   return (
@@ -240,12 +388,51 @@ export default function Production({
       setLoading(true);
       setError("");
 
-      const { orders: safeOrders, operations: safeOperations, batches: safeBatches } =
-        await fetchProductionOrdersBundle();
+      const { data: ordersData, error: ordersError } = await supabase
+        .from("production_orders")
+        .select(
+          `
+          *,
+          product:products (
+            name,
+            article
+          )
+        `
+        )
+        .order("created_at", { ascending: false });
 
-      setOrders(safeOrders as ProductionOrder[]);
-      setOperations(safeOperations as ProductionOrderOperation[]);
-      setBatches(safeBatches as ProductionBatch[]);
+      if (ordersError) throw ordersError;
+
+      const safeOrders = (ordersData as ProductionOrder[]) || [];
+      setOrders(safeOrders);
+
+      const orderIds = safeOrders.map((item) => item.id);
+
+      if (orderIds.length === 0) {
+        setOperations([]);
+        setBatches([]);
+        return;
+      }
+
+      const [operationsResult, batchesResult] = await Promise.all([
+        supabase
+          .from("production_order_operations")
+          .select("*")
+          .in("production_order_id", orderIds)
+          .order("sort_order", { ascending: true }),
+
+        supabase
+          .from("production_batches")
+          .select("*")
+          .in("production_order_id", orderIds)
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (operationsResult.error) throw operationsResult.error;
+      if (batchesResult.error) throw batchesResult.error;
+
+      setOperations((operationsResult.data as ProductionOrderOperation[]) || []);
+      setBatches((batchesResult.data as ProductionBatch[]) || []);
 
       setOpenJobs((prev) => {
         const next = { ...prev };
@@ -694,25 +881,98 @@ export default function Production({
     setMessage("");
   }
 
-   async function handleTestPrint() {
-    try {
+  async function handlePrintQrLabel(
+  payload: GeneratedQr["payload"],
+  operationName = "Следующая операция"
+) {
+  try {
     setMessage("");
     setError("");
 
-    const response = await fetch("http://localhost:3001/print-test", {
+    const response = await fetch("http://localhost:3001/print-label", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         printerName: "Xprinter XP-365B",
-        batchNumber: "PK-TEST-001",
-        productName: "Шапка бини",
-        article: "bini-black-52",
-        quantity: 15,
-        operation: "Стачивание",
+        batchNumber: payload.batch_number,
+        orderNumber: payload.order_number,
+        productName: payload.product_name,
+        article: payload.product_article || "—",
+        color: payload.color_name || "—",
+        quantity: payload.quantity,
+        operation: operationName,
+        qrPayload: payload,
       }),
     });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Ошибка печати QR");
+    }
+
+    setMessage(`QR-этикетка ${payload.batch_number} отправлена на печать`);
+  } catch (error) {
+    setError(
+      error instanceof Error ? error.message : "Ошибка печати QR-этикетки"
+    );
+  }
+}
+  async function handlePrintQrLabel(
+    payload: GeneratedQr["payload"],
+    operationName = "Следующая операция"
+  ) {
+    try {
+    setMessage("");
+    setError("");
+
+    const response = await fetch("http://localhost:3001/print-label", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        printerName: "Xprinter XP-365B",
+        batchNumber: payload.batch_number,
+        orderNumber: payload.order_number,
+        productName: payload.product_name,
+        article: payload.product_article || "—",
+        color: payload.color_name || "—",
+        quantity: payload.quantity,
+        operation: operationName,
+        qrPayload: payload,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || "Ошибка печати QR");
+    }
+
+    setMessage(`QR-этикетка ${payload.batch_number} отправлена на печать`);
+  } catch (error) {
+    setError(
+      error instanceof Error ? error.message : "Ошибка печати QR-этикетки"
+    );
+  }
+}
+
+  async function handleTestPrint() {
+    await handlePrintQrLabel(
+      {
+        batch_number: "PK-TEST-001",
+        order_number: "PR-TEST",
+        product_name: "Шапка бини",
+        product_article: "bini-black-52",
+        color_name: null,
+        quantity: 15,
+      },
+      "Стачивание"
+    );
+  }
 
     const result = await response.json();
 
@@ -1375,25 +1635,22 @@ export default function Production({
             </button>
 
             {variant === "active" && (
-              <>
-                <button
-                  onClick={() => {
-                    setError("");
-                    setMessage("");
-                    setIsCreateOpen(true);
-                  }}
-                  style={primaryBlueButtonStyle}
-                >
-                  + Создать задание
-                </button>
-
+              <button
+                onClick={() => {
+                  setError("");
+                  setMessage("");
+                  setIsCreateOpen(true);
+                }}
+                style={primaryBlueButtonStyle}
+              >
+                + Создать задание
                 <button
                   onClick={handleTestPrint}
                   style={secondaryBlueButtonStyle()}
                 >
                   Тест печати
                 </button>
-              </>
+              </button>
             )}
           </div>
         </div>

@@ -10,6 +10,8 @@ type Shift = {
   status: "open" | "closed";
   total_quantity: number;
   total_earned: number;
+  is_paused: boolean | null;
+  paused_at: string | null;
 };
 
 type ProductionBatch = {
@@ -146,6 +148,8 @@ export default function EmployeeMobilePage({
           status: "open",
           total_quantity: 0,
           total_earned: 0,
+          is_paused: false,
+          paused_at: null,
         })
         .select("*")
         .single();
@@ -202,6 +206,37 @@ export default function EmployeeMobilePage({
       );
     } finally {
       setShiftLoading(false);
+    }
+  }
+
+  async function togglePause() {
+    try {
+      if (!shift) return;
+
+      setShiftError("");
+
+      const isPaused = !shift.is_paused;
+      const pausedAt = isPaused ? new Date().toISOString() : null;
+
+      const { error } = await supabase
+        .from("employee_shifts")
+        .update({
+          is_paused: isPaused,
+          paused_at: pausedAt,
+        })
+        .eq("id", shift.id);
+
+      if (error) throw error;
+
+      setShift({
+        ...shift,
+        is_paused: isPaused,
+        paused_at: pausedAt,
+      });
+    } catch (error) {
+      setShiftError(
+        error instanceof Error ? error.message : "Не удалось изменить паузу"
+      );
     }
   }
 
@@ -500,6 +535,36 @@ export default function EmployeeMobilePage({
     );
   }
 
+  if (shift.is_paused) {
+    return (
+      <div style={pausedPageStyle}>
+        <div style={pausedBoxStyle}>
+          <div style={{ fontSize: 18, color: "#64748b", fontWeight: 800 }}>
+            Смена на паузе
+          </div>
+
+          <div style={{ fontSize: 30, fontWeight: 900, color: "#111827" }}>
+            {employeeName}
+          </div>
+
+          <div style={pauseInfoStyle}>
+            Работа остановлена. Сканер и пачки временно недоступны.
+          </div>
+
+          {shiftError && <div style={errorBoxStyle}>{shiftError}</div>}
+
+          <button onClick={togglePause} style={resumeButtonStyle}>
+            Продолжить работу
+          </button>
+
+          <button onClick={closeShift} style={closeShiftButtonStyle}>
+            Закрыть смену
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={pageStyle}>
       <div style={headerCardStyle}>
@@ -518,6 +583,10 @@ export default function EmployeeMobilePage({
 
       <button onClick={onOpenScanner} style={scanButtonStyle}>
         Сканировать QR
+      </button>
+
+      <button onClick={togglePause} style={pauseButtonStyle}>
+        Пауза / перерыв
       </button>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -825,6 +894,60 @@ const scanButtonStyle: CSSProperties = {
   fontWeight: 900,
   cursor: "pointer",
   boxShadow: "0 14px 28px rgba(15, 23, 42, 0.18)",
+};
+
+const pauseButtonStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 70,
+  border: "none",
+  borderRadius: 22,
+  background: "#f59e0b",
+  color: "#ffffff",
+  fontSize: 21,
+  fontWeight: 900,
+  cursor: "pointer",
+  boxShadow: "0 14px 28px rgba(245, 158, 11, 0.22)",
+};
+
+const pausedPageStyle: CSSProperties = {
+  minHeight: "100vh",
+  background: "linear-gradient(180deg, #fffbeb 0%, #f8fafc 100%)",
+  padding: 18,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+};
+
+const pausedBoxStyle: CSSProperties = {
+  width: "100%",
+  maxWidth: 520,
+  display: "grid",
+  gap: 16,
+  textAlign: "center",
+};
+
+const pauseInfoStyle: CSSProperties = {
+  padding: 16,
+  borderRadius: 20,
+  background: "#fef3c7",
+  border: "1px solid #fcd34d",
+  color: "#92400e",
+  fontSize: 17,
+  fontWeight: 800,
+  lineHeight: 1.5,
+};
+
+const resumeButtonStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 96,
+  border: "none",
+  borderRadius: 26,
+  background: "#16a34a",
+  color: "#ffffff",
+  fontSize: 26,
+  fontWeight: 900,
+  cursor: "pointer",
+  boxShadow: "0 16px 32px rgba(22, 163, 74, 0.28)",
 };
 
 const closeShiftButtonStyle: CSSProperties = {
