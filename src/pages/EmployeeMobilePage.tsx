@@ -63,12 +63,18 @@ export default function EmployeeMobilePage({
   } | null>(null);
 
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
+  const [batchOperations, setBatchOperations] = useState<
+    Record<string, ProductionOperation | null>
+  >({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const [closingBatch, setClosingBatch] = useState<ProductionBatch | null>(null);
   const [partialMode, setPartialMode] = useState(false);
   const [confirmNextOperation, setConfirmNextOperation] = useState(false);
+  const [nextOperationPreview, setNextOperationPreview] = useState<ProductionOperation | null>(null);
+  const [lastOperationReady, setLastOperationReady] = useState(false);
+  const [finishedFinalBatch, setFinishedFinalBatch] = useState<{ batchNumber: string } | null>(null);
   const [partialQty, setPartialQty] = useState("");
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState("");
@@ -200,6 +206,7 @@ export default function EmployeeMobilePage({
 
       setShift(null);
       setBatches([]);
+      setBatchOperations({});
     } catch (error) {
       setShiftError(
         error instanceof Error ? error.message : "Не удалось закрыть смену"
@@ -269,7 +276,36 @@ export default function EmployeeMobilePage({
 
       if (error) throw error;
 
-      setBatches((data as ProductionBatch[]) || []);
+      const list = (data as ProductionBatch[]) || [];
+      setBatches(list);
+
+      const operationsMap: Record<string, ProductionOperation | null> = {};
+
+      await Promise.all(
+        list.map(async (batch) => {
+          if (!batch.production_order_id || !batch.current_operation_order) {
+            operationsMap[batch.id] = null;
+            return;
+          }
+
+          const { data: operation, error: operationError } = await supabase
+            .from("production_order_operations")
+            .select("*")
+            .eq("production_order_id", batch.production_order_id)
+            .eq("sort_order", batch.current_operation_order)
+            .maybeSingle();
+
+          if (operationError) {
+            operationsMap[batch.id] = null;
+            return;
+          }
+
+          operationsMap[batch.id] =
+            (operation as ProductionOperation | null) || null;
+        })
+      );
+
+      setBatchOperations(operationsMap);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка загрузки пачек");
     } finally {
@@ -281,6 +317,8 @@ export default function EmployeeMobilePage({
     setClosingBatch(batch);
     setPartialMode(false);
     setConfirmNextOperation(false);
+    setNextOperationPreview(null);
+    setLastOperationReady(false);
     setPartialQty("");
     setClosingError("");
   }
@@ -291,11 +329,56 @@ export default function EmployeeMobilePage({
     setClosingBatch(null);
     setPartialMode(false);
     setConfirmNextOperation(false);
+    setNextOperationPreview(null);
+    setLastOperationReady(false);
     setPartialQty("");
     setClosingError("");
   }
 
-  async function finishBatch(batch: ProductionBatch, mode: "all" | "partial") {
+  async function prepareCompleteCurrentOperation(batch: ProductionBatch) {
+    try {
+      setClosingLoading(true);
+      setClosingError("");
+
+      const currentOperationOrder = Number(batch.current_operation_order || 0);
+
+      const { data, error } = await supabase
+        .from("production_order_operations")
+        .select("*")
+        .eq("production_order_id", batch.production_order_id)
+        .gt("sort_order", currentOperationOrder)
+        .order("sort_order", { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      const nextOperation = (data as ProductionOperation | null) || null;
+      setNextOperationPreview(nextOperation);
+
+      if (nextOperation) {
+        setConfirmNextOperation(true);
+        setLastOperationReady(false);
+      } else {
+        setConfirmNextOperation(false);
+        setLastOperationReady(true);
+      }
+    } catch (error) {
+      setClosingError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось проверить следующую операцию"
+      );
+    } finally {
+      setClosingLoading(false);
+    }
+  }
+
+  async function finishBatch(
+    batch: ProductionBatch,
+    mode: "all" | "partial",
+    nextAction: "self" | "waiting" = "waiting"
+  ) {
     try {
       setClosingLoading(true);
       setClosingError("");
@@ -409,13 +492,15 @@ export default function EmployeeMobilePage({
       let nextBatchData: Record<string, unknown>;
 
       if (isCurrentBatchOperationDone && nextOperation) {
+        const takeNextBySelf = nextAction === "self";
+
         nextBatchData = {
-          status: "waiting",
+          status: takeNextBySelf ? "in_progress" : "waiting",
           completed_quantity: 0,
           current_operation_order: nextOperation.sort_order,
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
+          assigned_user_id: takeNextBySelf ? user.id : null,
+          assigned_at: takeNextBySelf ? finishedAt : null,
+          started_at: takeNextBySelf ? finishedAt : null,
           completed_at: null,
         };
       } else if (isCurrentBatchOperationDone && !nextOperation) {
@@ -484,8 +569,15 @@ export default function EmployeeMobilePage({
         total_earned: newShiftEarned,
       });
 
+      const shouldAskTakeAnother =
+        mode === "all" && isCurrentBatchOperationDone && !nextOperation;
+
       closeModal();
       await loadMyBatches(user.id);
+
+      if (shouldAskTakeAnother) {
+        setFinishedFinalBatch({ batchNumber: batch.batch_number });
+      }
     } catch (error) {
       setClosingError(
         error instanceof Error ? error.message : "Не удалось закрыть пачку"
@@ -498,14 +590,36 @@ export default function EmployeeMobilePage({
   function handleOpenScanner() {
     if (batches.length > 0) {
       setError(
-        "Сначала закончите текущую операцию. Нельзя взять новую пачку, пока текущая пачка находится в работе."
+        "Сначала завершите текущую операцию. Нельзя взять новую пачку, пока старая находится в работе."
       );
       return;
     }
 
-    setError("");
     onOpenScanner();
   }
+
+  function handleCloseShift() {
+    if (batches.length > 0) {
+      setError(
+        "Сначала завершите текущую операцию. Нельзя закрыть смену, пока есть пачка в работе."
+      );
+      return;
+    }
+
+    closeShift();
+  }
+
+  const activeBatch =
+    batches.find((batch) => batch.status === "in_progress") || batches[0] || null;
+
+  const activeOperation = activeBatch
+    ? batchOperations[activeBatch.id] || null
+    : null;
+
+  const currentOperationText = activeBatch
+    ? activeOperation?.operation_name ||
+      `Операция №${activeBatch.current_operation_order || "?"}`
+    : "Нет операции в работе";
 
   const shiftDuration = getShiftDuration(shift?.opened_at || null);
 
@@ -569,7 +683,7 @@ export default function EmployeeMobilePage({
             Продолжить работу
           </button>
 
-          <button onClick={closeShift} style={closeShiftButtonStyle}>
+          <button onClick={handleCloseShift} style={closeShiftButtonStyle}>
             Закрыть смену
           </button>
         </div>
@@ -579,17 +693,51 @@ export default function EmployeeMobilePage({
 
   return (
     <div style={pageStyle}>
-      <div style={headerCardStyle}>
-        <div style={{ fontSize: 18, color: "#64748b", fontWeight: 800 }}>
-          Смена открыта
+      <div style={shiftSummaryCardStyle}>
+        <div style={shiftSummaryLeftStyle}>
+          <div style={{ fontSize: 16, color: "#64748b", fontWeight: 900 }}>
+            Смена открыта
+          </div>
+
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 26,
+              fontWeight: 900,
+              color: "#111827",
+              lineHeight: 1.1,
+            }}
+          >
+            {employeeName}
+          </div>
+
+          <div style={{ marginTop: 8, color: "#64748b", fontWeight: 900 }}>
+            В работе: {shiftDuration}
+          </div>
         </div>
 
-        <div style={{ marginTop: 8, fontSize: 26, fontWeight: 900, color: "#111827" }}>
-          {employeeName}
-        </div>
+        <div style={shiftSummaryRightStyle}>
+          <div style={{ fontSize: 14, color: "#64748b", fontWeight: 900 }}>
+            Текущая операция
+          </div>
 
-        <div style={{ marginTop: 8, color: "#64748b", fontWeight: 800 }}>
-          Время смены: {shiftDuration}
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 20,
+              fontWeight: 900,
+              color: activeBatch ? "#1d4ed8" : "#94a3b8",
+              lineHeight: 1.2,
+            }}
+          >
+            {currentOperationText}
+          </div>
+
+          {activeBatch && (
+            <div style={{ marginTop: 6, fontSize: 13, color: "#64748b", fontWeight: 800 }}>
+              Пачка {activeBatch.batch_number}
+            </div>
+          )}
         </div>
       </div>
 
@@ -693,7 +841,7 @@ export default function EmployeeMobilePage({
         )}
       </div>
 
-      <button onClick={closeShift} style={closeShiftButtonStyle}>
+      <button onClick={handleCloseShift} style={closeShiftButtonStyle}>
         Закрыть смену
       </button>
 
@@ -701,7 +849,11 @@ export default function EmployeeMobilePage({
         <div onClick={closeModal} style={modalOverlayStyle}>
           <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
             <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
-              {confirmNextOperation ? "Передать дальше?" : "Что сделано?"}
+              {lastOperationReady
+                ? "Пачка готова"
+                : confirmNextOperation
+                  ? "Следующая операция"
+                  : "Что сделано?"}
             </div>
 
             <div style={{ color: "#64748b", fontWeight: 700 }}>
@@ -710,14 +862,14 @@ export default function EmployeeMobilePage({
 
             {closingError && <div style={errorBoxStyle}>{closingError}</div>}
 
-            {!partialMode && !confirmNextOperation && (
+            {!partialMode && !confirmNextOperation && !lastOperationReady && (
               <>
                 <button
-                  onClick={() => setConfirmNextOperation(true)}
+                  onClick={() => prepareCompleteCurrentOperation(closingBatch)}
                   disabled={closingLoading}
                   style={bigGreenButtonStyle}
                 >
-                  Всё готово
+                  {closingLoading ? "Проверяю..." : "Всё готово"}
                 </button>
 
                 <button
@@ -730,24 +882,68 @@ export default function EmployeeMobilePage({
               </>
             )}
 
-            {confirmNextOperation && (
+            {confirmNextOperation && nextOperationPreview && (
               <>
                 <div style={infoBoxStyle}>
-                  Текущая операция завершена полностью. Готова ли пачка перейти
-                  к следующей операции?
+                  Текущая операция завершена полностью. Следующая операция:
+                  <div style={{ marginTop: 8, fontSize: 22, fontWeight: 900 }}>
+                    {nextOperationPreview.operation_name}
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    Будете выполнять следующую операцию самостоятельно?
+                  </div>
                 </div>
 
                 <button
-                  onClick={() => finishBatch(closingBatch, "all")}
+                  onClick={() => finishBatch(closingBatch, "all", "self")}
                   disabled={closingLoading}
                   style={bigGreenButtonStyle}
                 >
-                  {closingLoading ? "Сохраняю..." : "Да, передать дальше"}
+                  {closingLoading
+                    ? "Сохраняю..."
+                    : "Да, я буду делать эту операцию"}
+                </button>
+
+                <button
+                  onClick={() => finishBatch(closingBatch, "all", "waiting")}
+                  disabled={closingLoading}
+                  style={bigYellowButtonStyle}
+                >
+                  {closingLoading ? "Сохраняю..." : "Нет, я не буду делать эту операцию"}
                 </button>
 
                 <button
                   onClick={() => {
                     setConfirmNextOperation(false);
+                    setNextOperationPreview(null);
+                    setPartialMode(true);
+                  }}
+                  disabled={closingLoading}
+                  style={cancelButtonStyle}
+                >
+                  Вернуться: готово не всё
+                </button>
+              </>
+            )}
+
+            {lastOperationReady && (
+              <>
+                <div style={infoBoxStyle}>
+                  Это последняя операция по техкарте. После сохранения пачка
+                  будет полностью готова.
+                </div>
+
+                <button
+                  onClick={() => finishBatch(closingBatch, "all", "waiting")}
+                  disabled={closingLoading}
+                  style={bigGreenButtonStyle}
+                >
+                  {closingLoading ? "Сохраняю..." : "Да, пачка готова"}
+                </button>
+
+                <button
+                  onClick={() => {
+                    setLastOperationReady(false);
                     setPartialMode(true);
                   }}
                   disabled={closingLoading}
@@ -785,6 +981,41 @@ export default function EmployeeMobilePage({
               style={cancelButtonStyle}
             >
               Отмена
+            </button>
+          </div>
+        </div>
+      )}
+
+      {finishedFinalBatch && (
+        <div style={modalOverlayStyle}>
+          <div style={modalBoxStyle}>
+            <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
+              Пачка готова
+            </div>
+
+            <div style={{ color: "#64748b", fontWeight: 700 }}>
+              Пачка {finishedFinalBatch.batchNumber} полностью завершена.
+            </div>
+
+            <div style={infoBoxStyle}>
+              Будете брать другую пачку в работу?
+            </div>
+
+            <button
+              onClick={() => {
+                setFinishedFinalBatch(null);
+                handleOpenScanner();
+              }}
+              style={bigGreenButtonStyle}
+            >
+              Да, сканировать QR
+            </button>
+
+            <button
+              onClick={() => setFinishedFinalBatch(null)}
+              style={bigYellowButtonStyle}
+            >
+              Нет, пока не буду
             </button>
           </div>
         </div>
@@ -893,6 +1124,41 @@ const headerCardStyle: CSSProperties = {
   padding: 18,
   border: "1px solid #dbeafe",
   boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+};
+
+const shiftSummaryCardStyle: CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 24,
+  padding: 16,
+  border: "1px solid #dbeafe",
+  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 12,
+  alignItems: "stretch",
+};
+
+const shiftSummaryLeftStyle: CSSProperties = {
+  minHeight: 104,
+  borderRadius: 20,
+  background: "#f8fafc",
+  border: "1px solid #e5e7eb",
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+};
+
+const shiftSummaryRightStyle: CSSProperties = {
+  minHeight: 104,
+  borderRadius: 20,
+  background: "#eff6ff",
+  border: "1px solid #bfdbfe",
+  padding: 14,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  textAlign: "right",
 };
 
 const scanButtonStyle: CSSProperties = {
