@@ -3,6 +3,7 @@ import { supabase } from "../supabase";
 
 type ProductionBatch = {
   id: string;
+  production_order_id: string;
   batch_number: string;
   quantity: number;
   completed_quantity: number | null;
@@ -14,6 +15,22 @@ type ProductionBatch = {
   started_at: string | null;
 };
 
+type ProductionOperation = {
+  id: string;
+  production_order_id: string;
+  operation_name: string;
+  sort_order: number;
+  status: string;
+  completed_quantity: number;
+  price_per_unit: number | null;
+  started_at: string | null;
+};
+
+type ProductionOrder = {
+  id: string;
+  quantity: number;
+};
+
 export default function EmployeeMobilePage({
   onOpenScanner,
 }: {
@@ -22,6 +39,12 @@ export default function EmployeeMobilePage({
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const [closingBatch, setClosingBatch] = useState<ProductionBatch | null>(null);
+  const [partialMode, setPartialMode] = useState(false);
+  const [partialQty, setPartialQty] = useState("");
+  const [closingLoading, setClosingLoading] = useState(false);
+  const [closingError, setClosingError] = useState("");
 
   useEffect(() => {
     loadMyBatches();
@@ -51,11 +74,197 @@ export default function EmployeeMobilePage({
 
       setBatches((data as ProductionBatch[]) || []);
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Ошибка загрузки пачек"
-      );
+      setError(error instanceof Error ? error.message : "Ошибка загрузки пачек");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function openCloseModal(batch: ProductionBatch) {
+    setClosingBatch(batch);
+    setPartialMode(false);
+    setPartialQty("");
+    setClosingError("");
+  }
+
+  function closeModal() {
+    if (closingLoading) return;
+    setClosingBatch(null);
+    setPartialMode(false);
+    setPartialQty("");
+    setClosingError("");
+  }
+
+  async function finishBatch(batch: ProductionBatch, mode: "all" | "partial") {
+    try {
+      setClosingLoading(true);
+      setClosingError("");
+
+      const total = Number(batch.quantity || 0);
+      const completed = Number(batch.completed_quantity || 0);
+      const left = Math.max(0, total - completed);
+
+      const finishQty =
+        mode === "all" ? left : Number(String(partialQty).replace(",", "."));
+
+      if (!finishQty || finishQty <= 0) {
+        throw new Error("Укажи количество больше 0");
+      }
+
+      if (!Number.isInteger(finishQty)) {
+        throw new Error("Количество должно быть целым числом");
+      }
+
+      if (finishQty > left) {
+        throw new Error(`Нельзя закрыть ${finishQty} шт. Осталось только ${left} шт.`);
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+      if (!user) throw new Error("Пользователь не найден");
+
+      const [orderResult, operationsResult] = await Promise.all([
+        supabase
+          .from("production_orders")
+          .select("id, quantity")
+          .eq("id", batch.production_order_id)
+          .maybeSingle(),
+
+        supabase
+          .from("production_order_operations")
+          .select("*")
+          .eq("production_order_id", batch.production_order_id)
+          .order("sort_order", { ascending: true }),
+      ]);
+
+      if (orderResult.error) throw orderResult.error;
+      if (operationsResult.error) throw operationsResult.error;
+
+      const order = orderResult.data as ProductionOrder | null;
+      const operations = (operationsResult.data as ProductionOperation[]) || [];
+
+      if (!order) throw new Error("Производственный заказ не найден");
+
+      const currentOperationOrder = Number(batch.current_operation_order || 0);
+      const operation =
+        operations.find((item) => item.sort_order === currentOperationOrder) ||
+        null;
+
+      if (!operation) {
+        throw new Error("Операция для пачки не найдена");
+      }
+
+      const finishedAt = new Date().toISOString();
+      const startedAt = batch.started_at || operation.started_at;
+      const durationSeconds = startedAt
+        ? Math.max(
+            0,
+            Math.floor(
+              (new Date(finishedAt).getTime() - new Date(startedAt).getTime()) /
+                1000
+            )
+          )
+        : 0;
+
+      const newBatchCompleted = completed + finishQty;
+      const isCurrentBatchOperationDone = newBatchCompleted >= total;
+
+      const newOperationCompleted =
+        Number(operation.completed_quantity || 0) + finishQty;
+
+      const previousOperation = [...operations]
+        .sort((a, b) => b.sort_order - a.sort_order)
+        .find((item) => item.sort_order < operation.sort_order);
+
+      const operationTarget =
+        operation.sort_order === 1
+          ? Number(order.quantity || 0)
+          : Number(previousOperation?.completed_quantity || 0);
+
+      const operationNextStatus =
+        newOperationCompleted >= operationTarget ? "done" : "pending";
+
+      const { error: operationError } = await supabase
+        .from("production_order_operations")
+        .update({
+          status: operationNextStatus,
+          completed_quantity: newOperationCompleted,
+          completed_at: operationNextStatus === "done" ? finishedAt : null,
+        })
+        .eq("id", operation.id);
+
+      if (operationError) throw operationError;
+
+      const nextOperation = operations.find(
+        (item) => item.sort_order > currentOperationOrder
+      );
+
+      let nextBatchData: Record<string, unknown>;
+
+      if (isCurrentBatchOperationDone && nextOperation) {
+        nextBatchData = {
+          status: "waiting",
+          completed_quantity: 0,
+          current_operation_order: nextOperation.sort_order,
+          assigned_user_id: null,
+          assigned_at: null,
+          started_at: null,
+          completed_at: null,
+        };
+      } else if (isCurrentBatchOperationDone && !nextOperation) {
+        nextBatchData = {
+          status: "done",
+          completed_quantity: total,
+          assigned_user_id: null,
+          assigned_at: null,
+          completed_at: finishedAt,
+        };
+      } else {
+        nextBatchData = {
+          status: "partial",
+          completed_quantity: newBatchCompleted,
+          assigned_user_id: null,
+          assigned_at: null,
+          started_at: null,
+          completed_at: null,
+        };
+      }
+
+      const { error: batchError } = await supabase
+        .from("production_batches")
+        .update(nextBatchData)
+        .eq("id", batch.id);
+
+      if (batchError) throw batchError;
+
+      const pricePerUnit = Number(operation.price_per_unit || 0);
+
+      await supabase.from("production_operation_logs").insert({
+        production_order_id: batch.production_order_id,
+        production_order_operation_id: operation.id,
+        user_id: user.id,
+        operation_name: operation.operation_name,
+        quantity: finishQty,
+        price_per_unit: pricePerUnit,
+        earned_amount: finishQty * pricePerUnit,
+        started_at: startedAt,
+        finished_at: finishedAt,
+        duration_seconds: durationSeconds,
+        comment: mode === "all" ? "Всё готово" : "Готово частично",
+      });
+
+      closeModal();
+      await loadMyBatches();
+    } catch (error) {
+      setClosingError(
+        error instanceof Error ? error.message : "Не удалось закрыть пачку"
+      );
+    } finally {
+      setClosingLoading(false);
     }
   }
 
@@ -112,13 +321,7 @@ export default function EmployeeMobilePage({
         Сканировать QR
       </button>
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 10,
-        }}
-      >
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <StatCard label="Сделано сегодня" value={`${totalDone} шт`} />
         <StatCard label="Пачек в работе" value={`${batches.length} шт`} />
       </div>
@@ -160,9 +363,7 @@ export default function EmployeeMobilePage({
           </button>
         </div>
 
-        {loading && (
-          <div style={emptyBoxStyle}>Загружаю пачки...</div>
-        )}
+        {loading && <div style={emptyBoxStyle}>Загружаю пачки...</div>}
 
         {error && (
           <div
@@ -229,6 +430,7 @@ export default function EmployeeMobilePage({
                   </div>
 
                   <button
+                    onClick={() => openCloseModal(batch)}
                     style={{
                       width: "100%",
                       minHeight: 58,
@@ -249,6 +451,125 @@ export default function EmployeeMobilePage({
           </div>
         )}
       </div>
+
+      {closingBatch && (
+        <div
+          onClick={closeModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15, 23, 42, 0.45)",
+            zIndex: 10000,
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 520,
+              background: "#ffffff",
+              borderTopLeftRadius: 28,
+              borderTopRightRadius: 28,
+              padding: 18,
+              display: "grid",
+              gap: 12,
+              boxShadow: "0 -18px 40px rgba(15, 23, 42, 0.22)",
+            }}
+          >
+            <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
+              Что сделано?
+            </div>
+
+            <div style={{ color: "#64748b", fontWeight: 700 }}>
+              Пачка {closingBatch.batch_number}
+            </div>
+
+            {closingError && (
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 14,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#991b1b",
+                  fontWeight: 800,
+                }}
+              >
+                {closingError}
+              </div>
+            )}
+
+            {!partialMode && (
+              <>
+                <button
+                  onClick={() => finishBatch(closingBatch, "all")}
+                  disabled={closingLoading}
+                  style={bigGreenButtonStyle}
+                >
+                  Всё готово
+                </button>
+
+                <button
+                  onClick={() => setPartialMode(true)}
+                  disabled={closingLoading}
+                  style={bigYellowButtonStyle}
+                >
+                  Готово, но не всё
+                </button>
+              </>
+            )}
+
+            {partialMode && (
+              <>
+                <input
+                  value={partialQty}
+                  onChange={(e) => setPartialQty(e.target.value)}
+                  type="number"
+                  inputMode="numeric"
+                  placeholder="Сколько штук готово?"
+                  style={{
+                    height: 58,
+                    borderRadius: 16,
+                    border: "1px solid #cbd5e1",
+                    padding: "0 14px",
+                    fontSize: 18,
+                    fontWeight: 800,
+                    outline: "none",
+                  }}
+                />
+
+                <button
+                  onClick={() => finishBatch(closingBatch, "partial")}
+                  disabled={closingLoading}
+                  style={bigYellowButtonStyle}
+                >
+                  {closingLoading ? "Сохраняю..." : "Сохранить частично"}
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={closeModal}
+              disabled={closingLoading}
+              style={{
+                minHeight: 52,
+                border: "none",
+                borderRadius: 16,
+                background: "#f1f5f9",
+                color: "#0f172a",
+                fontSize: 17,
+                fontWeight: 900,
+                cursor: "pointer",
+              }}
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -294,9 +615,7 @@ function MiniBox({ label, value }: { label: string; value: string }) {
       }}
     >
       <div style={{ fontSize: 12, color: "#64748b" }}>{label}</div>
-      <div style={{ marginTop: 4, fontSize: 18, fontWeight: 900 }}>
-        {value}
-      </div>
+      <div style={{ marginTop: 4, fontSize: 18, fontWeight: 900 }}>{value}</div>
     </div>
   );
 }
@@ -310,4 +629,26 @@ const emptyBoxStyle: React.CSSProperties = {
   color: "#64748b",
   fontWeight: 700,
   lineHeight: 1.5,
+};
+
+const bigGreenButtonStyle: React.CSSProperties = {
+  minHeight: 72,
+  border: "none",
+  borderRadius: 20,
+  background: "#16a34a",
+  color: "#ffffff",
+  fontSize: 22,
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const bigYellowButtonStyle: React.CSSProperties = {
+  minHeight: 72,
+  border: "none",
+  borderRadius: 20,
+  background: "#f59e0b",
+  color: "#ffffff",
+  fontSize: 22,
+  fontWeight: 900,
+  cursor: "pointer",
 };
