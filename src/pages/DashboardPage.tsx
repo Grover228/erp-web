@@ -66,6 +66,19 @@ type ProductionLog = {
   finished_at: string | null;
 };
 
+type EmployeeShift = {
+  id: string;
+  user_id: string;
+  opened_at: string;
+  closed_at: string | null;
+  status: string;
+  total_quantity: number | null;
+  total_earned: number | null;
+  is_paid: boolean | null;
+  paid_at: string | null;
+  paid_by: string | null;
+};
+
 type OperationQueueItem = {
   operationName: string;
   waiting: number;
@@ -80,6 +93,10 @@ type EmployeeTodayStats = {
   quantity: number;
   earned: number;
   durationSeconds: number;
+  unpaidShiftIds: string[];
+  unpaidShiftsCount: number;
+  payableAmount: number;
+  isPaid: boolean;
 };
 
 type RecentAction = {
@@ -156,8 +173,10 @@ export default function DashboardPage({
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
   const [operations, setOperations] = useState<ProductionOperation[]>([]);
   const [logs, setLogs] = useState<ProductionLog[]>([]);
+  const [shifts, setShifts] = useState<EmployeeShift[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [payingUserId, setPayingUserId] = useState<string | null>(null);
   const [dashboardError, setDashboardError] = useState("");
 
   useEffect(() => {
@@ -172,7 +191,7 @@ export default function DashboardPage({
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
-      const [ordersResult, batchesResult, operationsResult, logsResult] =
+      const [ordersResult, batchesResult, operationsResult, logsResult, shiftsResult] =
         await Promise.all([
           supabase
             .from("production_orders")
@@ -200,23 +219,76 @@ export default function DashboardPage({
             )
             .gte("finished_at", startOfDay.toISOString())
             .order("finished_at", { ascending: false }),
+
+          supabase
+            .from("employee_shifts")
+            .select(
+              "id, user_id, opened_at, closed_at, status, total_quantity, total_earned, is_paid, paid_at, paid_by"
+            )
+            .eq("status", "closed")
+            .gte("closed_at", startOfDay.toISOString())
+            .order("closed_at", { ascending: false }),
         ]);
 
       if (ordersResult.error) throw ordersResult.error;
       if (batchesResult.error) throw batchesResult.error;
       if (operationsResult.error) throw operationsResult.error;
       if (logsResult.error) throw logsResult.error;
+      if (shiftsResult.error) throw shiftsResult.error;
 
       setOrders((ordersResult.data as ProductionOrder[]) || []);
       setBatches((batchesResult.data as ProductionBatch[]) || []);
       setOperations((operationsResult.data as ProductionOperation[]) || []);
       setLogs((logsResult.data as ProductionLog[]) || []);
+      setShifts((shiftsResult.data as EmployeeShift[]) || []);
     } catch (error) {
       setDashboardError(
         error instanceof Error ? error.message : "Ошибка загрузки дашборда"
       );
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handlePayEmployeeShifts(item: EmployeeTodayStats) {
+    if (item.unpaidShiftIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Отметить выплату сотруднику ${item.name} на сумму ${formatMoney(item.payableAmount)}?`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setPayingUserId(item.userId);
+      setDashboardError("");
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+      if (!user) throw new Error("Администратор не найден");
+
+      const { error } = await supabase
+        .from("employee_shifts")
+        .update({
+          is_paid: true,
+          paid_at: new Date().toISOString(),
+          paid_by: user.id,
+        })
+        .in("id", item.unpaidShiftIds);
+
+      if (error) throw error;
+
+      await loadDashboardData();
+    } catch (error) {
+      setDashboardError(
+        error instanceof Error ? error.message : "Не удалось отметить выплату"
+      );
+    } finally {
+      setPayingUserId(null);
     }
   }
 
@@ -301,6 +373,10 @@ export default function DashboardPage({
           quantity: 0,
           earned: 0,
           durationSeconds: 0,
+          unpaidShiftIds: [],
+          unpaidShiftsCount: 0,
+          payableAmount: 0,
+          isPaid: false,
         });
       }
 
@@ -313,8 +389,43 @@ export default function DashboardPage({
       item.durationSeconds += Number(log.duration_seconds || 0);
     });
 
-    return Array.from(map.values()).sort((a, b) => b.earned - a.earned);
-  }, [logs, employees]);
+    shifts.forEach((shift) => {
+      const userId = shift.user_id;
+      const employee = employees.find((item) => item.id === userId);
+
+      if (!map.has(userId)) {
+        map.set(userId, {
+          userId,
+          name: employee?.full_name || "Сотрудник",
+          operationsCount: 0,
+          quantity: Number(shift.total_quantity || 0),
+          earned: Number(shift.total_earned || 0),
+          durationSeconds: 0,
+          unpaidShiftIds: [],
+          unpaidShiftsCount: 0,
+          payableAmount: 0,
+          isPaid: false,
+        });
+      }
+
+      const item = map.get(userId);
+      if (!item) return;
+
+      if (!shift.is_paid) {
+        item.unpaidShiftIds.push(shift.id);
+        item.unpaidShiftsCount += 1;
+        item.payableAmount += Number(shift.total_earned || 0);
+      }
+    });
+
+    const result = Array.from(map.values());
+
+    result.forEach((item) => {
+      item.isPaid = item.unpaidShiftsCount === 0 && item.earned > 0;
+    });
+
+    return result.sort((a, b) => b.earned - a.earned);
+  }, [logs, shifts, employees]);
 
   const problemBatches = useMemo(() => {
     return batches
@@ -548,7 +659,7 @@ export default function DashboardPage({
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: 620,
+                minWidth: 760,
               }}
             >
               <thead>
@@ -557,6 +668,7 @@ export default function DashboardPage({
                   <TableHead text="Операций" />
                   <TableHead text="Кол-во" />
                   <TableHead text="Заработано" />
+                  <TableHead text="Оплата" />
                   <TableHead text="Время" />
                 </tr>
               </thead>
@@ -567,7 +679,11 @@ export default function DashboardPage({
                     <TableCell text={item.name} strong />
                     <TableCell text={`${item.operationsCount}`} />
                     <TableCell text={`${item.quantity} шт`} />
-                    <TableCell text={formatMoney(item.earned)} />
+                    <PaymentCell
+                      item={item}
+                      disabled={payingUserId === item.userId || loading}
+                      onPay={handlePayEmployeeShifts}
+                    />
                     <TableCell text={formatTimer(item.durationSeconds)} />
                   </tr>
                 ))}
@@ -832,6 +948,73 @@ function TableCell({ text, strong }: { text: string; strong?: boolean }) {
       }}
     >
       {text}
+    </td>
+  );
+}
+
+function PaymentCell({
+  item,
+  disabled,
+  onPay,
+}: {
+  item: EmployeeTodayStats;
+  disabled: boolean;
+  onPay: (item: EmployeeTodayStats) => void;
+}) {
+  const canPay = item.unpaidShiftIds.length > 0 && item.payableAmount > 0;
+
+  return (
+    <td
+      style={{
+        padding: "10px 8px",
+        borderBottom: "1px solid #f1f5f9",
+        color: "#111827",
+        fontWeight: 500,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontWeight: 800 }}>{formatMoney(item.earned)}</span>
+
+        {canPay ? (
+          <button
+            onClick={() => onPay(item)}
+            disabled={disabled}
+            style={{
+              border: "none",
+              borderRadius: 10,
+              padding: "8px 10px",
+              background: disabled ? "#94a3b8" : "#16a34a",
+              color: "#ffffff",
+              fontWeight: 800,
+              cursor: disabled ? "not-allowed" : "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {disabled ? "Сохраняю..." : "Выплатить"}
+          </button>
+        ) : (
+          <span
+            style={{
+              borderRadius: 999,
+              padding: "6px 10px",
+              background: "#dcfce7",
+              color: "#166534",
+              fontSize: 12,
+              fontWeight: 800,
+              whiteSpace: "nowrap",
+            }}
+          >
+            Оплачено
+          </span>
+        )}
+      </div>
     </td>
   );
 }
