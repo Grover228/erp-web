@@ -60,6 +60,7 @@ export default function EmployeeMobilePage({
     quantity: number;
     earned: number;
     hours: number;
+    operations: Record<string, number>;
   } | null>(null);
 
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
@@ -182,12 +183,31 @@ export default function EmployeeMobilePage({
 
       const opened = new Date(shift.opened_at).getTime();
       const closed = Date.now();
+      const closedAt = new Date().toISOString();
       const hours = Math.max((closed - opened) / 1000 / 60 / 60, 0);
+
+      const { data: shiftLogs, error: logsError } = await supabase
+        .from("production_operation_logs")
+        .select("operation_name, quantity, finished_at")
+        .eq("user_id", userId || shift.user_id)
+        .gte("finished_at", shift.opened_at)
+        .lte("finished_at", closedAt);
+
+      if (logsError) throw logsError;
+
+      const operationsSummary = ((shiftLogs || []) as Array<{
+        operation_name: string | null;
+        quantity: number | string | null;
+      }>).reduce((acc, log) => {
+        const name = log.operation_name || "Операция";
+        acc[name] = (acc[name] || 0) + Number(log.quantity || 0);
+        return acc;
+      }, {} as Record<string, number>);
 
       const { data, error } = await supabase
         .from("employee_shifts")
         .update({
-          closed_at: new Date().toISOString(),
+          closed_at: closedAt,
           status: "closed",
         })
         .eq("id", shift.id)
@@ -202,6 +222,7 @@ export default function EmployeeMobilePage({
         quantity: Number(closedShift.total_quantity || 0),
         earned: Number(closedShift.total_earned || 0),
         hours,
+        operations: operationsSummary,
       });
 
       setShift(null);
@@ -645,8 +666,23 @@ export default function EmployeeMobilePage({
                 Итог смены
               </div>
 
-              <div>Сделано: <b>{closingResult.quantity} шт</b></div>
-              <div>Заработано: <b>{closingResult.earned.toFixed(2)} ₽</b></div>
+              <div style={{ marginTop: 8 }}>Выполнено операций:</div>
+
+              {Object.entries(closingResult.operations).length === 0 ? (
+                <div style={{ fontSize: 16, color: "#166534" }}>
+                  Нет данных по операциям
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 4, marginTop: 6 }}>
+                  {Object.entries(closingResult.operations).map(([name, qty]) => (
+                    <div key={name}>
+                      {name}: <b>{qty} шт</b>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ marginTop: 10 }}>Заработано: <b>{closingResult.earned.toFixed(2)} ₽</b></div>
               <div>Время: <b>{closingResult.hours.toFixed(1)} ч</b></div>
             </div>
           )}
