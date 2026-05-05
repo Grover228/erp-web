@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 
 type Employee = {
@@ -14,14 +14,14 @@ type Employee = {
 };
 
 type DashboardPageProps = {
-  alerts: string[];
-  alertsOpen: boolean;
-  setAlertsOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  employeesOpen: boolean;
-  setEmployeesOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  employees: Employee[];
-  employeesLoading: boolean;
-  employeesError: string;
+  alerts?: string[];
+  alertsOpen?: boolean;
+  setAlertsOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  employeesOpen?: boolean;
+  setEmployeesOpen?: React.Dispatch<React.SetStateAction<boolean>>;
+  employees?: Employee[];
+  employeesLoading?: boolean;
+  employeesError?: string;
 };
 
 type ProductionOrder = {
@@ -93,10 +93,32 @@ type EmployeeTodayStats = {
   quantity: number;
   earned: number;
   durationSeconds: number;
+};
+
+type PayableEmployeeStats = {
+  userId: string;
+  name: string;
   unpaidShiftIds: string[];
   unpaidShiftsCount: number;
+  totalQuantity: number;
   payableAmount: number;
-  isPaid: boolean;
+  firstOpenedAt: string | null;
+  lastClosedAt: string | null;
+};
+
+type EmployeePaymentRow = {
+  userId: string;
+  name: string;
+  operationsCount: number;
+  todayQuantity: number;
+  todayEarned: number;
+  durationSeconds: number;
+  unpaidShiftIds: string[];
+  unpaidShiftsCount: number;
+  payableQuantity: number;
+  payableAmount: number;
+  firstOpenedAt: string | null;
+  lastClosedAt: string | null;
 };
 
 type RecentAction = {
@@ -160,15 +182,23 @@ function getHoursFromNow(value: string | null) {
 }
 
 export default function DashboardPage({
-  alerts,
-  alertsOpen,
-  setAlertsOpen,
-  employeesOpen,
-  setEmployeesOpen,
-  employees,
-  employeesLoading,
-  employeesError,
+  alerts = [],
+  alertsOpen: externalAlertsOpen,
+  setAlertsOpen: externalSetAlertsOpen,
+  employeesOpen: externalEmployeesOpen,
+  setEmployeesOpen: externalSetEmployeesOpen,
+  employees = [],
+  employeesLoading = false,
+  employeesError = "",
 }: DashboardPageProps) {
+  const [localAlertsOpen, setLocalAlertsOpen] = useState(false);
+  const [localEmployeesOpen, setLocalEmployeesOpen] = useState(false);
+  const [productionOpen, setProductionOpen] = useState(true);
+
+  const alertsOpen = externalAlertsOpen ?? localAlertsOpen;
+  const setAlertsOpen = externalSetAlertsOpen ?? setLocalAlertsOpen;
+  const employeesOpen = externalEmployeesOpen ?? localEmployeesOpen;
+  const setEmployeesOpen = externalSetEmployeesOpen ?? setLocalEmployeesOpen;
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
   const [operations, setOperations] = useState<ProductionOperation[]>([]);
@@ -226,7 +256,7 @@ export default function DashboardPage({
               "id, user_id, opened_at, closed_at, status, total_quantity, total_earned, is_paid, paid_at, paid_by"
             )
             .eq("status", "closed")
-            .gte("closed_at", startOfDay.toISOString())
+            .or("is_paid.eq.false,is_paid.is.null")
             .order("closed_at", { ascending: false }),
         ]);
 
@@ -250,11 +280,11 @@ export default function DashboardPage({
     }
   }
 
-  async function handlePayEmployeeShifts(item: EmployeeTodayStats) {
+  async function handlePayEmployeeShifts(item: PayableEmployeeStats) {
     if (item.unpaidShiftIds.length === 0) return;
 
     const confirmed = window.confirm(
-      `Отметить выплату сотруднику ${item.name} на сумму ${formatMoney(item.payableAmount)}?`
+      `Отметить как выплачено: ${item.name}, ${item.unpaidShiftsCount} смен(ы), сумма ${formatMoney(item.payableAmount)}?`
     );
 
     if (!confirmed) return;
@@ -373,10 +403,6 @@ export default function DashboardPage({
           quantity: 0,
           earned: 0,
           durationSeconds: 0,
-          unpaidShiftIds: [],
-          unpaidShiftsCount: 0,
-          payableAmount: 0,
-          isPaid: false,
         });
       }
 
@@ -389,7 +415,15 @@ export default function DashboardPage({
       item.durationSeconds += Number(log.duration_seconds || 0);
     });
 
+    return Array.from(map.values()).sort((a, b) => b.earned - a.earned);
+  }, [logs, employees]);
+
+  const payableEmployees: PayableEmployeeStats[] = useMemo(() => {
+    const map = new Map<string, PayableEmployeeStats>();
+
     shifts.forEach((shift) => {
+      if (shift.is_paid) return;
+
       const userId = shift.user_id;
       const employee = employees.find((item) => item.id === userId);
 
@@ -397,35 +431,95 @@ export default function DashboardPage({
         map.set(userId, {
           userId,
           name: employee?.full_name || "Сотрудник",
-          operationsCount: 0,
-          quantity: Number(shift.total_quantity || 0),
-          earned: Number(shift.total_earned || 0),
-          durationSeconds: 0,
           unpaidShiftIds: [],
           unpaidShiftsCount: 0,
+          totalQuantity: 0,
           payableAmount: 0,
-          isPaid: false,
+          firstOpenedAt: shift.opened_at || null,
+          lastClosedAt: shift.closed_at || null,
         });
       }
 
       const item = map.get(userId);
       if (!item) return;
 
-      if (!shift.is_paid) {
-        item.unpaidShiftIds.push(shift.id);
-        item.unpaidShiftsCount += 1;
-        item.payableAmount += Number(shift.total_earned || 0);
+      item.unpaidShiftIds.push(shift.id);
+      item.unpaidShiftsCount += 1;
+      item.totalQuantity += Number(shift.total_quantity || 0);
+      item.payableAmount += Number(shift.total_earned || 0);
+
+      if (
+        shift.opened_at &&
+        (!item.firstOpenedAt || new Date(shift.opened_at) < new Date(item.firstOpenedAt))
+      ) {
+        item.firstOpenedAt = shift.opened_at;
+      }
+
+      if (
+        shift.closed_at &&
+        (!item.lastClosedAt || new Date(shift.closed_at) > new Date(item.lastClosedAt))
+      ) {
+        item.lastClosedAt = shift.closed_at;
       }
     });
 
-    const result = Array.from(map.values());
+    return Array.from(map.values()).sort(
+      (a, b) => b.payableAmount - a.payableAmount
+    );
+  }, [shifts, employees]);
 
-    result.forEach((item) => {
-      item.isPaid = item.unpaidShiftsCount === 0 && item.earned > 0;
+  const employeePaymentRows: EmployeePaymentRow[] = useMemo(() => {
+    const map = new Map<string, EmployeePaymentRow>();
+
+    function ensureRow(userId: string, name: string) {
+      if (!map.has(userId)) {
+        map.set(userId, {
+          userId,
+          name,
+          operationsCount: 0,
+          todayQuantity: 0,
+          todayEarned: 0,
+          durationSeconds: 0,
+          unpaidShiftIds: [],
+          unpaidShiftsCount: 0,
+          payableQuantity: 0,
+          payableAmount: 0,
+          firstOpenedAt: null,
+          lastClosedAt: null,
+        });
+      }
+
+      return map.get(userId)!;
+    }
+
+    employeeStats.forEach((item) => {
+      const row = ensureRow(item.userId, item.name);
+
+      row.operationsCount = item.operationsCount;
+      row.todayQuantity = item.quantity;
+      row.todayEarned = item.earned;
+      row.durationSeconds = item.durationSeconds;
     });
 
-    return result.sort((a, b) => b.earned - a.earned);
-  }, [logs, shifts, employees]);
+    payableEmployees.forEach((item) => {
+      const row = ensureRow(item.userId, item.name);
+
+      row.unpaidShiftIds = item.unpaidShiftIds;
+      row.unpaidShiftsCount = item.unpaidShiftsCount;
+      row.payableQuantity = item.totalQuantity;
+      row.payableAmount = item.payableAmount;
+      row.firstOpenedAt = item.firstOpenedAt;
+      row.lastClosedAt = item.lastClosedAt;
+    });
+
+    return Array.from(map.values()).sort((a, b) => {
+      if (b.payableAmount !== a.payableAmount) {
+        return b.payableAmount - a.payableAmount;
+      }
+
+      return b.todayEarned - a.todayEarned;
+    });
+  }, [employeeStats, payableEmployees]);
 
   const problemBatches = useMemo(() => {
     return batches
@@ -469,70 +563,62 @@ export default function DashboardPage({
 
   return (
     <>
-      {dynamicAlerts.length > 0 && (
-        <div
-          style={{
-            background: "#eff6ff",
-            border: "1px solid #93c5fd",
-            borderRadius: 16,
-            overflow: "hidden",
-          }}
-        >
-          <button
-            onClick={() => setAlertsOpen((prev) => !prev)}
-            style={sectionButtonStyle("#1d4ed8", 16)}
-          >
-            <span>Требует внимания: {dynamicAlerts.length}</span>
-            <span>{alertsOpen ? "▲" : "▼"}</span>
-          </button>
-
-          {alertsOpen && (
-            <div
-              style={{
-                padding: "0 16px 16px 16px",
-                display: "grid",
-                gap: 10,
-              }}
-            >
-              {dynamicAlerts.map((item) => (
-                <div
-                  key={item}
-                  style={{
-                    background: "#ffffff",
-                    borderRadius: 12,
-                    padding: 12,
-                    border: "1px solid #bfdbfe",
-                  }}
-                >
-                  {item}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       <div
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          alignItems: "center",
-          flexWrap: "wrap",
+          background: "#eff6ff",
+          border: "1px solid #93c5fd",
+          borderRadius: 16,
+          overflow: "hidden",
         }}
       >
-        <div>
-          <div style={{ fontSize: 26, fontWeight: 800, color: "#111827" }}>
-            Дашборд производства
-          </div>
-          <div style={{ color: "#64748b", marginTop: 4 }}>
-            Контроль заказов, пачек, сотрудников и узких мест
-          </div>
-        </div>
-
-        <button onClick={loadDashboardData} style={secondaryButtonStyle}>
-          {loading ? "Обновление..." : "Обновить"}
+        <button
+          onClick={() => setAlertsOpen((prev) => !prev)}
+          style={sectionButtonStyle("#1d4ed8", 16)}
+        >
+          <span>Требует внимания: {dynamicAlerts.length}</span>
+          <span>{alertsOpen ? "▲" : "▼"}</span>
         </button>
+
+        {alertsOpen && (
+          <div
+            style={{
+              padding: "0 16px 16px 16px",
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            {dynamicAlerts.length === 0 && (
+              <div
+                style={{
+                  background: "#ffffff",
+                  borderRadius: 12,
+                  padding: 12,
+                  border: "1px solid #bfdbfe",
+                  color: "#64748b",
+                  fontWeight: 700,
+                }}
+              >
+                Сейчас нет уведомлений.
+              </div>
+            )}
+
+            {dynamicAlerts.map((item) => (
+              <div
+                key={item}
+                style={{
+                  background: "#ffffff",
+                  borderRadius: 12,
+                  padding: 12,
+                  border: "1px solid #bfdbfe",
+                  color: "#1e3a8a",
+                  fontWeight: 700,
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {dashboardError && (
@@ -550,90 +636,7 @@ export default function DashboardPage({
         </div>
       )}
 
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
-          gap: 12,
-        }}
-      >
-        <StatCard label="Активных заказов" value={`${activeOrders.length}`} />
-        <StatCard label="Пачек ждёт" value={`${waitingBatches.length}`} />
-        <StatCard label="Пачек в работе" value={`${inProgressBatches.length}`} />
-        <StatCard label="Пачек на паузе" value={`${partialBatches.length}`} />
-        <StatCard label="Готово сегодня" value={`${doneTodayQuantity} шт`} />
-        <StatCard label="Заработано сегодня" value={formatMoney(earnedToday)} />
-      </div>
-
-      <div style={gridTwoColumnsStyle}>
-        <Panel title="Очередь по операциям">
-          {operationQueue.length === 0 && (
-            <EmptyText text="Очередь по операциям пока пустая" />
-          )}
-
-          {operationQueue.length > 0 && (
-            <div style={{ display: "grid", gap: 10 }}>
-              {operationQueue.map((item) => (
-                <div key={item.operationName} style={queueRowStyle}>
-                  <div style={{ fontWeight: 800, color: "#111827" }}>
-                    {item.operationName}
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 8,
-                      flexWrap: "wrap",
-                      justifyContent: "flex-end",
-                    }}
-                  >
-                    <Badge label={`Ждёт: ${item.waiting}`} />
-                    <Badge label={`Пауза: ${item.partial}`} />
-                    <Badge label={`В работе: ${item.inProgress}`} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
-
-        <Panel title="Проблемные пачки">
-          {problemBatches.length === 0 && (
-            <EmptyText text="Проблемных пачек сейчас нет" />
-          )}
-
-          {problemBatches.length > 0 && (
-            <div style={{ display: "grid", gap: 10 }}>
-              {problemBatches.map((batch) => (
-                <div key={batch.id} style={problemRowStyle}>
-                  <div>
-                    <div style={{ fontWeight: 800, color: "#111827" }}>
-                      {batch.batch_number}
-                    </div>
-                    <div style={{ color: "#64748b", fontSize: 13 }}>
-                      {batch.product_name || "Изделие не указано"} ·{" "}
-                      {batch.product_article || "без артикула"}
-                    </div>
-                  </div>
-
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontWeight: 800 }}>
-                      {getStatusLabel(batch.status)}
-                    </div>
-                    <div style={{ color: "#64748b", fontSize: 13 }}>
-                      {Number(batch.completed_quantity || 0)} /{" "}
-                      {Number(batch.quantity || 0)} шт
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
-      </div>
-
-      <Panel title="Сотрудники сегодня">
-        {employeesLoading && <EmptyText text="Загрузка сотрудников..." />}
+      <Panel title="Сотрудники сегодня и к выплате">        {employeesLoading && <EmptyText text="Загрузка сотрудников..." />}
 
         {employeesError && (
           <div
@@ -649,46 +652,172 @@ export default function DashboardPage({
           </div>
         )}
 
-        {!employeesLoading && !employeesError && employeeStats.length === 0 && (
-          <EmptyText text="Сегодня пока нет закрытых операций" />
-        )}
+        {!employeesLoading &&
+          !employeesError &&
+          employeePaymentRows.length === 0 && (
+            <EmptyText text="Сегодня пока нет закрытых операций и неоплаченных смен" />
+          )}
 
-        {employeeStats.length > 0 && (
+        {employeePaymentRows.length > 0 && (
           <div style={{ overflowX: "auto" }}>
             <table
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: 760,
+                minWidth: 980,
               }}
             >
               <thead>
                 <tr>
                   <TableHead text="Сотрудник" />
-                  <TableHead text="Операций" />
-                  <TableHead text="Кол-во" />
-                  <TableHead text="Заработано" />
-                  <TableHead text="Оплата" />
+                  <TableHead text="Операций сегодня" />
+                  <TableHead text="Кол-во сегодня" />
+                  <TableHead text="Заработано сегодня" />
                   <TableHead text="Время" />
+                  <TableHead text="Смен к оплате" />
+                  <TableHead text="Кол-во к оплате" />
+                  <TableHead text="К выплате" />
+                  <TableHead text="Действие" />
                 </tr>
               </thead>
 
               <tbody>
-                {employeeStats.map((item) => (
-                  <tr key={item.userId}>
-                    <TableCell text={item.name} strong />
-                    <TableCell text={`${item.operationsCount}`} />
-                    <TableCell text={`${item.quantity} шт`} />
-                    <PaymentCell
-                      item={item}
-                      disabled={payingUserId === item.userId || loading}
-                      onPay={handlePayEmployeeShifts}
-                    />
-                    <TableCell text={formatTimer(item.durationSeconds)} />
-                  </tr>
-                ))}
+                {employeePaymentRows.map((item) => {
+                  const payableItem: PayableEmployeeStats = {
+                    userId: item.userId,
+                    name: item.name,
+                    unpaidShiftIds: item.unpaidShiftIds,
+                    unpaidShiftsCount: item.unpaidShiftsCount,
+                    totalQuantity: item.payableQuantity,
+                    payableAmount: item.payableAmount,
+                    firstOpenedAt: item.firstOpenedAt,
+                    lastClosedAt: item.lastClosedAt,
+                  };
+
+                  return (
+                    <tr key={item.userId}>
+                      <TableCell text={item.name} strong />
+                      <TableCell text={`${item.operationsCount}`} />
+                      <TableCell text={`${item.todayQuantity} шт`} />
+                      <TableCell text={formatMoney(item.todayEarned)} strong />
+                      <TableCell text={formatTimer(item.durationSeconds)} />
+                      <TableCell text={`${item.unpaidShiftsCount}`} />
+                      <TableCell text={`${item.payableQuantity} шт`} />
+                      <TableCell text={formatMoney(item.payableAmount)} strong />
+                      {item.unpaidShiftIds.length > 0 ? (
+                        <PayableActionCell
+                          item={payableItem}
+                          disabled={payingUserId === item.userId || loading}
+                          onPay={handlePayEmployeeShifts}
+                        />
+                      ) : (
+                        <td style={tableCellStyle}>
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              borderRadius: 999,
+                              padding: "8px 12px",
+                              background: "#eff6ff",
+                              color: "#1d4ed8",
+                              fontWeight: 800,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Нет к выплате
+                          </span>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+          </div>
+        )}
+      </Panel>
+
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 16,
+          border: "1px solid #e5edf7",
+          boxShadow: "0 10px 24px rgba(15, 23, 42, 0.04)",
+          overflow: "hidden",
+        }}
+      >
+        <button
+          onClick={() => setProductionOpen((prev) => !prev)}
+          style={sectionButtonStyle("#111827", 22)}
+        >
+          <span>Дашборд производства</span>
+          <span style={{ fontSize: 16 }}>{productionOpen ? "▲" : "▼"}</span>
+        </button>
+
+        {productionOpen && (
+          <div style={{ padding: "0 16px 16px 16px", display: "grid", gap: 16 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <div style={{ color: "#64748b" }}>
+                Контроль заказов, пачек, сотрудников и узких мест
+              </div>
+
+              <button onClick={loadDashboardData} style={secondaryButtonStyle}>
+                {loading ? "Обновление..." : "Обновить"}
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                gap: 12,
+              }}
+            >
+              <StatCard label="Активных заказов" value={`${activeOrders.length}`} />
+              <StatCard label="Пачек ждёт" value={`${waitingBatches.length}`} />
+              <StatCard label="Пачек в работе" value={`${inProgressBatches.length}`} />
+              <StatCard label="Пачек на паузе" value={`${partialBatches.length}`} />
+              <StatCard label="Готово сегодня" value={`${doneTodayQuantity} шт`} />
+              <StatCard label="Заработано сегодня" value={formatMoney(earnedToday)} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      <Panel title="Очередь по операциям">
+        {operationQueue.length === 0 && (
+          <EmptyText text="Очередь по операциям пока пустая" />
+        )}
+
+        {operationQueue.length > 0 && (
+          <div style={{ display: "grid", gap: 10 }}>
+            {operationQueue.map((item) => (
+              <div key={item.operationName} style={queueRowStyle}>
+                <div style={{ fontWeight: 800, color: "#111827" }}>
+                  {item.operationName}
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    justifyContent: "flex-end",
+                  }}
+                >
+                  <Badge label={`Ждёт: ${item.waiting}`} />
+                  <Badge label={`Пауза: ${item.partial}`} />
+                  <Badge label={`В работе: ${item.inProgress}`} />
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </Panel>
@@ -952,72 +1081,42 @@ function TableCell({ text, strong }: { text: string; strong?: boolean }) {
   );
 }
 
-function PaymentCell({
+function PayableActionCell({
   item,
   disabled,
   onPay,
 }: {
-  item: EmployeeTodayStats;
+  item: PayableEmployeeStats;
   disabled: boolean;
-  onPay: (item: EmployeeTodayStats) => void;
+  onPay: (item: PayableEmployeeStats) => void;
 }) {
-  const canPay = item.unpaidShiftIds.length > 0 && item.payableAmount > 0;
-
   return (
     <td
       style={{
         padding: "10px 8px",
         borderBottom: "1px solid #f1f5f9",
-        color: "#111827",
-        fontWeight: 500,
       }}
     >
-      <div
+      <button
+        onClick={() => onPay(item)}
+        disabled={disabled}
         style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          flexWrap: "wrap",
+          border: "none",
+          borderRadius: 10,
+          padding: "8px 10px",
+          background: disabled ? "#94a3b8" : "#16a34a",
+          color: "#ffffff",
+          fontWeight: 800,
+          cursor: disabled ? "not-allowed" : "pointer",
+          whiteSpace: "nowrap",
         }}
       >
-        <span style={{ fontWeight: 800 }}>{formatMoney(item.earned)}</span>
-
-        {canPay ? (
-          <button
-            onClick={() => onPay(item)}
-            disabled={disabled}
-            style={{
-              border: "none",
-              borderRadius: 10,
-              padding: "8px 10px",
-              background: disabled ? "#94a3b8" : "#16a34a",
-              color: "#ffffff",
-              fontWeight: 800,
-              cursor: disabled ? "not-allowed" : "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {disabled ? "Сохраняю..." : "Выплатить"}
-          </button>
-        ) : (
-          <span
-            style={{
-              borderRadius: 999,
-              padding: "6px 10px",
-              background: "#dcfce7",
-              color: "#166534",
-              fontSize: 12,
-              fontWeight: 800,
-              whiteSpace: "nowrap",
-            }}
-          >
-            Оплачено
-          </span>
-        )}
-      </div>
+        {disabled ? "Сохраняю..." : "Отметить выплаченным"}
+      </button>
     </td>
   );
 }
+
 
 function sectionButtonStyle(
   color: string,
@@ -1082,4 +1181,20 @@ const recentRowStyle: React.CSSProperties = {
   borderRadius: 12,
   border: "1px solid #e5edf7",
   background: "#f8fbff",
+};
+// --- ДОБАВЬ ЭТО ---
+const tableHeaderStyle: React.CSSProperties = {
+  padding: "12px 8px",
+  borderBottom: "1px solid #e5e7eb",
+  color: "#64748b",
+  fontSize: 13,
+  fontWeight: 800,
+  textAlign: "left",
+};
+
+const tableCellStyle: React.CSSProperties = {
+  padding: "14px 8px",
+  borderBottom: "1px solid #e5e7eb",
+  color: "#0f172a",
+  fontWeight: 700,
 };

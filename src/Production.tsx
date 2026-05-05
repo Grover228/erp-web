@@ -1110,6 +1110,24 @@ export default function Production({
       } = await supabase.auth.getUser();
 
       if (userError) throw userError;
+      if (!user) throw new Error("Пользователь не найден");
+
+      const { data: currentShift, error: currentShiftError } = await supabase
+        .from("employee_shifts")
+        .select("id, total_quantity, total_earned, status")
+        .eq("user_id", user.id)
+        .eq("status", "open")
+        .order("opened_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (currentShiftError) throw currentShiftError;
+
+      if (!currentShift) {
+        throw new Error(
+          "Сначала нужно открыть смену в разделе «Моя смена». Без открытой смены нельзя завершать операции."
+        );
+      }
 
       const finishedAt = new Date().toISOString();
       const durationSeconds = finishOperation.started_at
@@ -1163,6 +1181,20 @@ export default function Production({
         });
 
       if (logError) throw logError;
+
+      const newShiftQuantity =
+        Number(currentShift.total_quantity || 0) + finishQuantityNumber;
+      const newShiftEarned = Number(currentShift.total_earned || 0) + earned;
+
+      const { error: shiftUpdateError } = await supabase
+        .from("employee_shifts")
+        .update({
+          total_quantity: newShiftQuantity,
+          total_earned: newShiftEarned,
+        })
+        .eq("id", currentShift.id);
+
+      if (shiftUpdateError) throw shiftUpdateError;
 
       const refreshedOperations = orderOperations.map((item) =>
         item.id === finishOperation.id

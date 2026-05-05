@@ -90,6 +90,7 @@ function App() {
     ? [
         { key: "dashboard", label: "Дашборд" },
         { key: "production", label: "Производство" },
+        { key: "employee-home", label: "Моя смена" },
         { key: "directories", label: "Справочники" },
         { key: "scanner", label: "Сканер QR" },
       ]
@@ -676,8 +677,7 @@ function App() {
         <QRScanner
           onTakenToWork={() => {
             if (canManageProduction) {
-              setProductionInitialTab("active");
-              setCurrentScreen("production");
+              setCurrentScreen("employee-home");
               return;
             }
 
