@@ -5,6 +5,7 @@ import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
+import PurchasesPage from "./pages/PurchasesPage";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
 import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
@@ -15,6 +16,7 @@ import { supabase } from "./supabase";
 type Screen =
   | "dashboard"
   | "production"
+  | "purchases"
   | "scanner"
   | "employee-home"
   | "directories"
@@ -90,6 +92,7 @@ function App() {
     ? [
         { key: "dashboard", label: "Дашборд" },
         { key: "production", label: "Производство" },
+        { key: "purchases", label: "Закупки" },
         { key: "employee-home", label: "Моя смена" },
         { key: "directories", label: "Справочники" },
         { key: "scanner", label: "Сканер QR" },
@@ -106,6 +109,8 @@ function App() {
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
+      : currentScreen === "purchases"
+      ? "Закупки"
       : currentScreen === "directories"
       ? "Справочники"
       : currentScreen === "directory-employees"
@@ -137,6 +142,8 @@ function App() {
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
+      : currentScreen === "purchases"
+      ? "Заказы поставщикам и поступления"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -604,6 +611,10 @@ function App() {
       return <Production initialTab={productionInitialTab} />;
     }
 
+    if (currentScreen === "purchases") {
+      return <PurchasesPage />;
+    }
+
     if (currentScreen === "directories") {
       if (!canManageDirectories) return renderAccessDenied();
 
@@ -830,6 +841,8 @@ function App() {
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
                   (item.key === "production" &&
                     currentScreen === "production") ||
+                  (item.key === "purchases" &&
+                    currentScreen === "purchases") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -857,6 +870,9 @@ function App() {
                         case "production":
                           setProductionInitialTab("jobs");
                           setCurrentScreen("production");
+                          break;
+                        case "purchases":
+                          setCurrentScreen("purchases");
                           break;
                         case "directories":
                           setCurrentScreen("directories");
