@@ -5,8 +5,8 @@ import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
-import PurchasesPage from "./pages/PurchasesPage";
 import FinancePage from "./pages/FinancePage";
+import WarehousePage from "./pages/WarehousePage";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
 import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
@@ -17,7 +17,7 @@ import { supabase } from "./supabase";
 type Screen =
   | "dashboard"
   | "production"
-  | "purchases"
+  | "warehouse"
   | "finance"
   | "scanner"
   | "employee-home"
@@ -92,13 +92,13 @@ function App() {
 
   const menuItems = isAdmin
     ? [
-        { key: "dashboard", label: "Дашборд" },
-        { key: "production", label: "Производство" },
-        { key: "purchases", label: "Закупки" },
-        { key: "finance", label: "Финансы" },
-        { key: "employee-home", label: "Моя смена" },
-        { key: "directories", label: "Справочники" },
-        { key: "scanner", label: "Сканер QR" },
+        { key: "dashboard", label: "Дашборд 📊" },
+        { key: "production", label: "Производство 🏭" },
+        { key: "warehouse", label: "Склад 📦" },
+        { key: "finance", label: "Финансы 💰" },
+        { key: "employee-home", label: "Моя смена 👤" },
+        { key: "directories", label: "Справочники 📚" },
+        { key: "scanner", label: "Сканер QR 🔍" },
       ]
     : [
         { key: "scanner", label: "Сканер QR" },
@@ -112,8 +112,8 @@ function App() {
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
-      : currentScreen === "purchases"
-      ? "Закупки"
+      : currentScreen === "warehouse"
+      ? "Склад"
       : currentScreen === "finance"
       ? "Финансы"
       : currentScreen === "directories"
@@ -147,10 +147,10 @@ function App() {
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
-      : currentScreen === "purchases"
-      ? "Заказы поставщикам и поступления"
+      : currentScreen === "warehouse"
+      ? "Закупки, поступления, остатки и отгрузки"
       : currentScreen === "finance"
-      ? "Учет счетов и денежных средств"
+      ? "Счета, платежи и движение средств"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -265,7 +265,6 @@ function App() {
 
     if (
       (currentScreen === "directories" ||
-        currentScreen === "finance" ||
         currentScreen === "directory-employees" ||
         currentScreen === "directory-suppliers" ||
         currentScreen === "directory-counterparties" ||
@@ -419,12 +418,17 @@ function App() {
       return;
     }
 
+    if (currentScreen === "warehouse" || currentScreen === "finance") {
+      setCurrentScreen(getDefaultScreen());
+      return;
+    }
+
     if (currentScreen === "scanner") {
       setCurrentScreen(getDefaultScreen());
       return;
     }
 
-    if (currentScreen === "directories" || currentScreen === "finance") {
+    if (currentScreen === "directories") {
       setCurrentScreen(getDefaultScreen());
       return;
     }
@@ -619,8 +623,8 @@ function App() {
       return <Production initialTab={productionInitialTab} />;
     }
 
-    if (currentScreen === "purchases") {
-      return <PurchasesPage />;
+    if (currentScreen === "warehouse") {
+      return <WarehousePage />;
     }
 
     if (currentScreen === "finance") {
@@ -853,10 +857,9 @@ function App() {
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
                   (item.key === "production" &&
                     currentScreen === "production") ||
-                  (item.key === "purchases" &&
-                    currentScreen === "purchases") ||
-                  (item.key === "finance" &&
-                    currentScreen === "finance") ||
+                  (item.key === "warehouse" &&
+                    currentScreen === "warehouse") ||
+                  (item.key === "finance" && currentScreen === "finance") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -885,8 +888,8 @@ function App() {
                           setProductionInitialTab("jobs");
                           setCurrentScreen("production");
                           break;
-                        case "purchases":
-                          setCurrentScreen("purchases");
+                        case "warehouse":
+                          setCurrentScreen("warehouse");
                           break;
                         case "finance":
                           setCurrentScreen("finance");
