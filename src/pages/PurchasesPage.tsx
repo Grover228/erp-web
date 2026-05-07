@@ -11,18 +11,31 @@ import SupplierOrderModal, {
 } from "./purchases/SupplierOrderModal";
 
 type Tab = "orders" | "receipts";
+
+type SupplierReceipt = {
+  id: string;
+  receipt_number: string | null;
+  receipt_date: string;
+  supplier_name: string | null;
+  status: string;
+  total_amount: number;
+  created_at: string | null;
+};
+
 type ModalMode = "create" | "view";
 
 export default function PurchasesPage() {
   const [activeTab, setActiveTab] = useState<Tab>("orders");
 
   const [orders, setOrders] = useState<SupplierOrder[]>([]);
+  const [receipts, setReceipts] = useState<SupplierReceipt[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [consumables, setConsumables] = useState<Consumable[]>([]);
   const [colors, setColors] = useState<Color[]>([]);
   const [counterparties, setCounterparties] = useState<Counterparty[]>([]);
 
   const [loading, setLoading] = useState(false);
+  const [receiptsLoading, setReceiptsLoading] = useState(false);
   const [directoriesLoading, setDirectoriesLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -35,8 +48,31 @@ export default function PurchasesPage() {
 
   useEffect(() => {
     loadOrders();
+    loadReceipts();
     loadDirectories();
   }, []);
+
+  async function loadReceipts() {
+    try {
+      setReceiptsLoading(true);
+      setError("");
+
+      const { data, error } = await supabase
+        .from("supplier_receipts")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      setReceipts((data as SupplierReceipt[]) || []);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Ошибка загрузки приёмок",
+      );
+    } finally {
+      setReceiptsLoading(false);
+    }
+  }
 
   async function loadOrders() {
     try {
@@ -164,10 +200,12 @@ export default function PurchasesPage() {
   async function handleOrderSaved() {
     closeModal();
     await loadOrders();
+    await loadReceipts();
   }
 
   function getStatusLabel(status: string) {
     if (status === "draft") return "Черновик";
+    if (status === "posted") return "Проведён";
     if (status === "ordered") return "Заказан";
     if (status === "received") return "Поступил";
     if (status === "cancelled") return "Отменён";
@@ -186,7 +224,10 @@ export default function PurchasesPage() {
         </button>
 
         <button
-          onClick={() => setActiveTab("receipts")}
+          onClick={() => {
+            setActiveTab("receipts");
+            loadReceipts();
+          }}
           style={compactTabStyle(activeTab === "receipts")}
         >
           <span style={compactTabIconStyle}>📦</span>
@@ -277,13 +318,73 @@ export default function PurchasesPage() {
 
       {activeTab === "receipts" && (
         <div style={sectionStyle}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
-            Поступления
+          <div style={sectionHeaderStyle}>
+            <div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
+                Поступления
+              </div>
+              <div style={{ color: "#64748b", marginTop: 4 }}>
+                Приёмки товаров от поставщиков на склад.
+              </div>
+            </div>
+
+            <button onClick={loadReceipts} style={refreshButtonStyle}>
+              Обновить
+            </button>
           </div>
 
-          <div style={{ color: "#64748b", marginTop: 8 }}>
-            Здесь будем фиксировать фактический приход материалов на склад.
-          </div>
+          {receiptsLoading ? (
+            <div style={{ color: "#64748b", fontWeight: 700 }}>
+              Загружаю поступления...
+            </div>
+          ) : receipts.length === 0 ? (
+            <div style={emptyStyle}>Поступлений пока нет.</div>
+          ) : (
+            <div style={tableWrapStyle}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>Номер</th>
+                    <th style={thStyle}>Дата</th>
+                    <th style={thStyle}>Поставщик</th>
+                    <th style={thStyle}>Сумма</th>
+                    <th style={thStyle}>Статус</th>
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {receipts.map((receipt) => (
+                    <tr key={receipt.id}>
+                      <td style={tdStyle}>
+                        {receipt.receipt_number || "Черновик приёмки"}
+                      </td>
+
+                      <td style={tdStyle}>{receipt.receipt_date || "—"}</td>
+
+                      <td style={tdStyle}>{receipt.supplier_name || "—"}</td>
+
+                      <td style={tdStyle}>
+                        {Number(receipt.total_amount || 0).toLocaleString(
+                          "ru-RU",
+                          {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          },
+                        )}{" "}
+                        ₽
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span style={statusStyle}>
+                          {getStatusLabel(receipt.status)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -362,6 +463,17 @@ const primaryButtonStyle: React.CSSProperties = {
   fontWeight: 800,
   fontSize: 15,
   boxShadow: "0 8px 18px rgba(37, 99, 235, 0.25)",
+};
+
+const refreshButtonStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  borderRadius: 14,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 800,
+  fontSize: 14,
 };
 
 const errorStyle: React.CSSProperties = {
