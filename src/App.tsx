@@ -6,6 +6,7 @@ import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import PurchasesPage from "./pages/PurchasesPage";
+import FinancePage from "./pages/FinancePage";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
 import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
@@ -17,6 +18,7 @@ type Screen =
   | "dashboard"
   | "production"
   | "purchases"
+  | "finance"
   | "scanner"
   | "employee-home"
   | "directories"
@@ -93,6 +95,7 @@ function App() {
         { key: "dashboard", label: "Дашборд" },
         { key: "production", label: "Производство" },
         { key: "purchases", label: "Закупки" },
+        { key: "finance", label: "Финансы" },
         { key: "employee-home", label: "Моя смена" },
         { key: "directories", label: "Справочники" },
         { key: "scanner", label: "Сканер QR" },
@@ -111,6 +114,8 @@ function App() {
       ? "Производство"
       : currentScreen === "purchases"
       ? "Закупки"
+      : currentScreen === "finance"
+      ? "Финансы"
       : currentScreen === "directories"
       ? "Справочники"
       : currentScreen === "directory-employees"
@@ -144,6 +149,8 @@ function App() {
       ? "Управление производством"
       : currentScreen === "purchases"
       ? "Заказы поставщикам и поступления"
+      : currentScreen === "finance"
+      ? "Учет счетов и денежных средств"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -258,6 +265,7 @@ function App() {
 
     if (
       (currentScreen === "directories" ||
+        currentScreen === "finance" ||
         currentScreen === "directory-employees" ||
         currentScreen === "directory-suppliers" ||
         currentScreen === "directory-counterparties" ||
@@ -416,7 +424,7 @@ function App() {
       return;
     }
 
-    if (currentScreen === "directories") {
+    if (currentScreen === "directories" || currentScreen === "finance") {
       setCurrentScreen(getDefaultScreen());
       return;
     }
@@ -613,6 +621,10 @@ function App() {
 
     if (currentScreen === "purchases") {
       return <PurchasesPage />;
+    }
+
+    if (currentScreen === "finance") {
+      return <FinancePage />;
     }
 
     if (currentScreen === "directories") {
@@ -843,6 +855,8 @@ function App() {
                     currentScreen === "production") ||
                   (item.key === "purchases" &&
                     currentScreen === "purchases") ||
+                  (item.key === "finance" &&
+                    currentScreen === "finance") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -873,6 +887,9 @@ function App() {
                           break;
                         case "purchases":
                           setCurrentScreen("purchases");
+                          break;
+                        case "finance":
+                          setCurrentScreen("finance");
                           break;
                         case "directories":
                           setCurrentScreen("directories");

@@ -1,271 +1,452 @@
+import { CSSProperties, useState } from "react";
+
 type DirectoriesPageProps = {
   onOpenDirectory: (directoryKey: string) => void;
 };
 
-type DirectoryCard = {
+type MainDirectoryGroup = {
   key: string;
   title: string;
   subtitle: string;
+  description: string;
   accent: string;
-  bg: string;
-};
-
-type DirectoryGroup = {
-  title: string;
-  subtitle: string;
-  borderColor: string;
-  headerColor: string;
   softBg: string;
-  items: DirectoryCard[];
+  items: {
+    key: string;
+    title: string;
+    subtitle: string;
+  }[];
 };
 
 export default function DirectoriesPage({
   onOpenDirectory,
 }: DirectoriesPageProps) {
-  const groups: DirectoryGroup[] = [
+  const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+
+  const groups: MainDirectoryGroup[] = [
     {
-      title: "Люди и компании",
-      subtitle: "Все, кто работает с производством, закупками и заказами",
-      borderColor: "#bfdbfe",
-      headerColor: "#1d4ed8",
+      key: "counterparties",
+      title: "Контрагенты",
+      subtitle: "Покупатели, поставщики, аренда",
+      description:
+        "Все люди и компании, с которыми работает производство: клиенты, поставщики, арендодатели, партнёры.",
+      accent: "#2563eb",
       softBg: "#eff6ff",
       items: [
         {
-          key: "employees",
-          title: "Сотрудники",
-          subtitle: "Персонал, роли, доступ, входящие заявки",
-          accent: "#2563eb",
-          bg: "#f8fbff",
-        },
-        {
-          key: "suppliers",
-          title: "Поставщики",
-          subtitle: "Поставщики тканей, фурнитуры и услуг",
-          accent: "#2563eb",
-          bg: "#f8fbff",
-        },
-        {
           key: "counterparties",
           title: "Контрагенты",
-          subtitle: "Клиенты, заказчики и партнёры",
-          accent: "#2563eb",
-          bg: "#f8fbff",
+          subtitle: "Покупатели, поставщики, арендодатели и партнёры",
+        },
+        {
+          key: "employees",
+          title: "Сотрудники",
+          subtitle: "Персонал, роли, доступ и исполнители операций",
         },
       ],
     },
     {
+      key: "nomenclature",
       title: "Номенклатура",
-      subtitle: "Что мы производим, закупаем и используем в работе",
-      borderColor: "#c7d2fe",
-      headerColor: "#4338ca",
+      subtitle: "Изделия, материалы, расходники",
+      description:
+        "Всё, что производится, закупается, хранится на складе и используется в техкартах.",
+      accent: "#4f46e5",
       softBg: "#eef2ff",
       items: [
         {
           key: "products",
           title: "Изделия",
-          subtitle: "То, что производим и продаём",
-          accent: "#4f46e5",
-          bg: "#fafaff",
+          subtitle: "Готовая продукция, которую производим и продаём",
         },
         {
           key: "materials",
           title: "Материалы",
-          subtitle: "Ткани, полотна, сырьё",
-          accent: "#4f46e5",
-          bg: "#fafaff",
+          subtitle: "Ткани, полотна, сырьё и основные материалы",
         },
         {
           key: "consumables",
           title: "Расходники",
-          subtitle: "Упаковка, бирки, нитки, скотч",
-          accent: "#4f46e5",
-          bg: "#fafaff",
+          subtitle: "Нитки, бирки, упаковка, скотч и прочие расходники",
+        },
+        {
+          key: "units",
+          title: "Единицы измерения",
+          subtitle: "Шт, м, кг, рулон и другие единицы учёта",
+        },
+        {
+          key: "variants",
+          title: "Цвета и размеры",
+          subtitle: "Цветовые варианты, размеры и размерные сетки",
         },
       ],
     },
     {
+      key: "production",
       title: "Производство",
-      subtitle: "Справочники, которые описывают сам процесс работы",
-      borderColor: "#fde68a",
-      headerColor: "#b45309",
+      subtitle: "Операции и техкарты",
+      description:
+        "Базовые справочники, которые описывают процесс производства и используются в техкартах.",
+      accent: "#d97706",
       softBg: "#fffbeb",
       items: [
         {
           key: "operations",
           title: "Операции",
-          subtitle: "Крой, пошив, ВТО, упаковка",
-          accent: "#d97706",
-          bg: "#fffdf7",
+          subtitle: "Крой, пошив, ВТО, контроль, упаковка и другие этапы",
         },
         {
-          key: "variants",
-          title: "Цвета и размеры",
-          subtitle: "Размерные ряды и цветовые варианты",
-          accent: "#d97706",
-          bg: "#fffdf7",
+          key: "products",
+          title: "Изделия с техкартами",
+          subtitle: "Временный вход к техкартам, пока они находятся в изделиях",
         },
       ],
     },
     {
-      title: "Общие справочники",
-      subtitle: "Сквозные справочники, которые используются во всей ERP",
-      borderColor: "#bbf7d0",
-      headerColor: "#15803d",
+      key: "statuses",
+      title: "Статусы",
+      subtitle: "Статусы заказов и процессов",
+      description:
+        "Сквозные статусы для заказов, производства, склада, документов и внутренних процессов.",
+      accent: "#16a34a",
       softBg: "#f0fdf4",
       items: [
         {
-          key: "units",
-          title: "Единицы измерения",
-          subtitle: "Шт, м, кг, рулон и другие",
-          accent: "#16a34a",
-          bg: "#f8fff9",
-        },
-        {
           key: "statuses",
           title: "Статусы",
-          subtitle: "Статусы заявок, заказов и этапов",
-          accent: "#16a34a",
-          bg: "#f8fff9",
+          subtitle: "Статусы заявок, заказов, производства и этапов",
         },
       ],
     },
   ];
 
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 20,
-      }}
-    >
-      <div
-        style={{
-          background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
-          borderRadius: 20,
-          padding: 22,
-          border: "1px solid #dbe4f0",
-          boxShadow: "0 10px 24px rgba(15, 23, 42, 0.05)",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 30,
-            fontWeight: 700,
-            color: "#0f172a",
-            marginBottom: 10,
-            textAlign: "center",
-          }}
-        >
-          Справочники
-        </div>
+  const activeGroup = groups.find((group) => group.key === activeGroupKey);
 
-        <div
-          style={{
-            color: "#64748b",
-            lineHeight: 1.6,
-            fontSize: 15,
-            textAlign: "center",
-            maxWidth: 900,
-            margin: "0 auto",
-          }}
-        >
-          Выбери нужный справочник. Все основные сущности ERP будут
-          настраиваться отсюда. Позже здесь можно будет добавить новые
-          справочники по мере развития системы.
+  const openDirectory = (directoryKey: string) => {
+    setActiveGroupKey(null);
+    onOpenDirectory(directoryKey);
+  };
+
+  return (
+    <div style={styles.wrapper}>
+      <div style={styles.hero}>
+        <div>
+          <div style={styles.eyebrow}>ERP справочники</div>
+          <div style={styles.heroTitle}>Центр настройки системы</div>
+          <div style={styles.heroText}>
+            Все основные сущности собраны в 4 раздела. Внутри каждого раздела —
+            нужные справочники без лишней простыни на экране.
+          </div>
         </div>
       </div>
 
-      {groups.map((group) => (
-        <div
-          key={group.title}
-          style={{
-            background: "#ffffff",
-            borderRadius: 20,
-            padding: 18,
-            border: `1px solid ${group.borderColor}`,
-            boxShadow: "0 10px 22px rgba(15, 23, 42, 0.05)",
-          }}
-        >
-          <div
+      <div style={styles.grid}>
+        {groups.map((group) => (
+          <button
+            key={group.key}
+            type="button"
+            onClick={() => setActiveGroupKey(group.key)}
             style={{
-              background: group.softBg,
-              border: `1px solid ${group.borderColor}`,
-              borderRadius: 16,
-              padding: "14px 16px",
-              marginBottom: 16,
+              ...styles.mainCard,
+              borderTop: `5px solid ${group.accent}`,
+              background: `linear-gradient(180deg, #ffffff 0%, ${group.softBg} 100%)`,
+            }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.transform = "translateY(-4px)";
+              event.currentTarget.style.boxShadow =
+                "0 18px 36px rgba(15, 23, 42, 0.12)";
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.transform = "translateY(0)";
+              event.currentTarget.style.boxShadow =
+                "0 10px 24px rgba(15, 23, 42, 0.07)";
             }}
           >
             <div
               style={{
-                fontSize: 18,
-                fontWeight: 700,
-                color: group.headerColor,
-                marginBottom: 6,
+                ...styles.iconCircle,
+                background: group.accent,
               }}
             >
-              {group.title}
+              {group.title.slice(0, 1)}
             </div>
 
-            <div
-              style={{
-                fontSize: 14,
-                color: "#64748b",
-                lineHeight: 1.5,
-              }}
-            >
-              {group.subtitle}
+            <div style={styles.cardContent}>
+              <div style={styles.cardTitle}>{group.title}</div>
+              <div style={styles.cardSubtitle}>{group.subtitle}</div>
+              <div style={styles.cardDescription}>{group.description}</div>
             </div>
-          </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
-              gap: 14,
-            }}
-          >
-            {group.items.map((item) => (
+            <div style={styles.cardFooter}>
+              <span>Открыть раздел</span>
+              <span style={styles.arrow}>→</span>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {activeGroup && (
+        <div style={styles.modalOverlay} onClick={() => setActiveGroupKey(null)}>
+          <div style={styles.modal} onClick={(event) => event.stopPropagation()}>
+            <div style={styles.modalHeader}>
+              <div>
+                <div style={styles.modalTitle}>{activeGroup.title}</div>
+                <div style={styles.modalSubtitle}>{activeGroup.description}</div>
+              </div>
+
               <button
-                key={item.key}
-                onClick={() => onOpenDirectory(item.key)}
-                style={{
-                  border: "1px solid #dbe4f0",
-                  borderLeft: `5px solid ${item.accent}`,
-                  borderRadius: 16,
-                  background: item.bg,
-                  padding: 16,
-                  textAlign: "left",
-                  cursor: "pointer",
-                  boxShadow: "0 6px 16px rgba(15, 23, 42, 0.04)",
-                  transition: "transform 0.15s ease",
-                }}
+                type="button"
+                onClick={() => setActiveGroupKey(null)}
+                style={styles.closeButton}
               >
-                <div
-                  style={{
-                    fontSize: 19,
-                    fontWeight: 700,
-                    color: "#0f172a",
-                    marginBottom: 8,
-                  }}
-                >
-                  {item.title}
-                </div>
-
-                <div
-                  style={{
-                    fontSize: 14,
-                    color: "#64748b",
-                    lineHeight: 1.55,
-                  }}
-                >
-                  {item.subtitle}
-                </div>
+                ×
               </button>
-            ))}
+            </div>
+
+            <div style={styles.modalList}>
+              {activeGroup.items.map((item) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  onClick={() => openDirectory(item.key)}
+                  style={styles.modalItem}
+                  onMouseEnter={(event) => {
+                    event.currentTarget.style.transform = "translateX(3px)";
+                    event.currentTarget.style.borderColor = activeGroup.accent;
+                  }}
+                  onMouseLeave={(event) => {
+                    event.currentTarget.style.transform = "translateX(0)";
+                    event.currentTarget.style.borderColor = "#e2e8f0";
+                  }}
+                >
+                  <div>
+                    <div style={styles.modalItemTitle}>{item.title}</div>
+                    <div style={styles.modalItemSubtitle}>{item.subtitle}</div>
+                  </div>
+                  <div
+                    style={{
+                      ...styles.modalItemArrow,
+                      color: activeGroup.accent,
+                    }}
+                  >
+                    →
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
-      ))}
+      )}
     </div>
   );
 }
+
+const styles: Record<string, CSSProperties> = {
+  wrapper: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 24,
+  },
+
+  hero: {
+    background:
+      "radial-gradient(circle at top left, #dbeafe 0%, transparent 32%), linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
+    borderRadius: 24,
+    padding: "28px 30px",
+    border: "1px solid #dbe4f0",
+    boxShadow: "0 14px 34px rgba(15, 23, 42, 0.06)",
+  },
+
+  eyebrow: {
+    fontSize: 13,
+    fontWeight: 800,
+    color: "#2563eb",
+    textTransform: "uppercase",
+    letterSpacing: "0.08em",
+    marginBottom: 8,
+  },
+
+  heroTitle: {
+    fontSize: 30,
+    fontWeight: 800,
+    color: "#0f172a",
+    marginBottom: 10,
+  },
+
+  heroText: {
+    maxWidth: 760,
+    color: "#64748b",
+    fontSize: 15,
+    lineHeight: 1.65,
+  },
+
+  grid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+    gap: 18,
+  },
+
+  mainCard: {
+    minHeight: 250,
+    border: "1px solid #dbe4f0",
+    borderRadius: 24,
+    padding: 22,
+    cursor: "pointer",
+    textAlign: "left",
+    boxShadow: "0 10px 24px rgba(15, 23, 42, 0.07)",
+    transition: "all 0.2s ease",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "space-between",
+  },
+
+  iconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    color: "#ffffff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 22,
+    fontWeight: 800,
+    boxShadow: "0 10px 20px rgba(15, 23, 42, 0.16)",
+    marginBottom: 18,
+  },
+
+  cardContent: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+
+  cardTitle: {
+    color: "#0f172a",
+    fontSize: 23,
+    fontWeight: 800,
+  },
+
+  cardSubtitle: {
+    color: "#334155",
+    fontSize: 15,
+    fontWeight: 700,
+    lineHeight: 1.45,
+  },
+
+  cardDescription: {
+    color: "#64748b",
+    fontSize: 14,
+    lineHeight: 1.55,
+  },
+
+  cardFooter: {
+    marginTop: 22,
+    paddingTop: 16,
+    borderTop: "1px solid rgba(148, 163, 184, 0.35)",
+    color: "#475569",
+    fontSize: 14,
+    fontWeight: 700,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+
+  arrow: {
+    fontSize: 20,
+    lineHeight: 1,
+  },
+
+  modalOverlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15, 23, 42, 0.42)",
+    backdropFilter: "blur(5px)",
+    zIndex: 50,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+  },
+
+  modal: {
+    width: "min(620px, 100%)",
+    background: "#ffffff",
+    borderRadius: 26,
+    padding: 22,
+    border: "1px solid #e2e8f0",
+    boxShadow: "0 28px 70px rgba(15, 23, 42, 0.25)",
+  },
+
+  modalHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 18,
+    marginBottom: 18,
+    paddingBottom: 18,
+    borderBottom: "1px solid #e2e8f0",
+  },
+
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: 800,
+    color: "#0f172a",
+    marginBottom: 6,
+  },
+
+  modalSubtitle: {
+    color: "#64748b",
+    fontSize: 14,
+    lineHeight: 1.55,
+  },
+
+  closeButton: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    border: "1px solid #dbe4f0",
+    background: "#f8fafc",
+    color: "#0f172a",
+    fontSize: 26,
+    lineHeight: "38px",
+    cursor: "pointer",
+  },
+
+  modalList: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
+
+  modalItem: {
+    width: "100%",
+    border: "1px solid #e2e8f0",
+    borderRadius: 18,
+    background: "#f8fafc",
+    padding: "16px 18px",
+    cursor: "pointer",
+    textAlign: "left",
+    transition: "all 0.18s ease",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+  },
+
+  modalItemTitle: {
+    fontSize: 17,
+    fontWeight: 800,
+    color: "#0f172a",
+    marginBottom: 5,
+  },
+
+  modalItemSubtitle: {
+    fontSize: 14,
+    color: "#64748b",
+    lineHeight: 1.45,
+  },
+
+  modalItemArrow: {
+    fontSize: 22,
+    fontWeight: 800,
+  },
+};

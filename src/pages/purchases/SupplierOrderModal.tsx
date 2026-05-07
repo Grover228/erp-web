@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
+import RelatedDocumentModal from "./RelatedDocumentModal";
 
 export type PurchaseItemType = "material" | "consumable";
 
@@ -120,6 +121,8 @@ export default function SupplierOrderModal({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [isEditingOrder, setIsEditingOrder] = useState(false);
+  const [isRelatedDocumentModalOpen, setIsRelatedDocumentModalOpen] =
+    useState(false);
   const [error, setError] = useState("");
 
   const [orderDate, setOrderDate] = useState(
@@ -508,6 +511,10 @@ export default function SupplierOrderModal({
     }
   }
 
+  function openRelatedDocumentModal() {
+    setIsRelatedDocumentModalOpen(true);
+  }
+
   function getStatusLabel(status: string) {
     if (status === "draft") return "Черновик";
     if (status === "ordered") return "Заказан";
@@ -816,6 +823,14 @@ export default function SupplierOrderModal({
               <>
                 <button
                   type="button"
+                  onClick={openRelatedDocumentModal}
+                  style={createDocumentButtonStyle}
+                >
+                  + Создать документ
+                </button>
+
+                <button
+                  type="button"
                   onClick={startEditOrder}
                   style={editOrderButtonStyle}
                 >
@@ -1018,6 +1033,14 @@ export default function SupplierOrderModal({
               )}
             </div>
           </>
+        )}
+
+        {isRelatedDocumentModalOpen && order && (
+          <RelatedDocumentModal
+            order={order}
+            orderItems={orderItems}
+            onClose={() => setIsRelatedDocumentModalOpen(false)}
+          />
         )}
 
         {isProductPickerOpen && (
@@ -1781,6 +1804,18 @@ const modalHeaderStyle: React.CSSProperties = {
   justifyContent: "space-between",
   gap: 10,
   alignItems: "flex-start",
+};
+
+const createDocumentButtonStyle: React.CSSProperties = {
+  border: "1px solid #bbf7d0",
+  background: "#f0fdf4",
+  color: "#15803d",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: "nowrap",
 };
 
 const modalActionsStyle: React.CSSProperties = {
