@@ -27,6 +27,7 @@ type LinkedDocumentsModalProps = {
   sourceId: string;
   supplierOrderId?: string | null;
   onClose: () => void;
+  onOpenDocument?: (type: DocumentType, id: string) => void;
 };
 
 export default function LinkedDocumentsModal({
@@ -34,6 +35,7 @@ export default function LinkedDocumentsModal({
   sourceId,
   supplierOrderId,
   onClose,
+  onOpenDocument,
 }: LinkedDocumentsModalProps) {
   const [order, setOrder] = useState<SupplierOrderLink | null>(null);
   const [receipts, setReceipts] = useState<SupplierReceiptLink[]>([]);
@@ -119,11 +121,9 @@ export default function LinkedDocumentsModal({
   }
 
   function handleOpenDocument(type: DocumentType, id: string) {
-    const label = type === "supplier_order" ? "заказа поставщику" : "приёмки";
+    if (sourceType === type && sourceId === id) return;
 
-    window.alert(
-      `Открытие ${label} будет следующим шагом. ID документа: ${id}`,
-    );
+    onOpenDocument?.(type, id);
   }
 
   return (

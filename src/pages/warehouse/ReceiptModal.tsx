@@ -232,6 +232,17 @@ export default function ReceiptModal({
     }
   }
 
+  function handleOpenLinkedDocument(
+    type: "supplier_order" | "supplier_receipt",
+    id: string,
+  ) {
+    if (type === "supplier_receipt" && id === receipt.id) return;
+
+    window.alert(
+      "Открытие заказа поставщику из карточки приёмки добавим следующим шагом.",
+    );
+  }
+
   function getStatusLabel(status: string) {
     if (status === "draft") return "Черновик";
     if (status === "posted") return "Проведена";
@@ -581,6 +592,7 @@ export default function ReceiptModal({
             sourceId={receipt.id}
             supplierOrderId={receipt.supplier_order_id}
             onClose={() => setIsLinkedDocumentsModalOpen(false)}
+            onOpenDocument={handleOpenLinkedDocument}
           />
         )}
 

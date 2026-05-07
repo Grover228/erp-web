@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 import RelatedDocumentModal from "./RelatedDocumentModal";
 import LinkedDocumentsModal from "./LinkedDocumentsModal";
+import ReceiptModal, { type SupplierReceipt } from "../warehouse/ReceiptModal";
 
 export type PurchaseItemType = "material" | "consumable";
 
@@ -126,6 +127,10 @@ export default function SupplierOrderModal({
     useState(false);
   const [isLinkedDocumentsModalOpen, setIsLinkedDocumentsModalOpen] =
     useState(false);
+  const [linkedReceipt, setLinkedReceipt] = useState<SupplierReceipt | null>(
+    null,
+  );
+  const [linkedReceiptLoading, setLinkedReceiptLoading] = useState(false);
   const [error, setError] = useState("");
 
   const [orderDate, setOrderDate] = useState(
@@ -514,6 +519,39 @@ export default function SupplierOrderModal({
     }
   }
 
+  async function openLinkedReceipt(receiptId: string) {
+    try {
+      setLinkedReceiptLoading(true);
+      setError("");
+
+      const { data, error } = await supabase
+        .from("supplier_receipts")
+        .select("*")
+        .eq("id", receiptId)
+        .single();
+
+      if (error) throw error;
+
+      setIsLinkedDocumentsModalOpen(false);
+      setLinkedReceipt(data as SupplierReceipt);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Ошибка открытия приёмки",
+      );
+    } finally {
+      setLinkedReceiptLoading(false);
+    }
+  }
+
+  function handleOpenLinkedDocument(
+    type: "supplier_order" | "supplier_receipt",
+    id: string,
+  ) {
+    if (type === "supplier_order") return;
+
+    openLinkedReceipt(id);
+  }
+
   function openRelatedDocumentModal() {
     setIsRelatedDocumentModalOpen(true);
   }
@@ -871,6 +909,12 @@ export default function SupplierOrderModal({
 
         {error && <div style={errorStyle}>{error}</div>}
 
+        {linkedReceiptLoading && (
+          <div style={{ color: "#64748b", fontWeight: 700 }}>
+            Открываю связанный документ...
+          </div>
+        )}
+
         {(mode === "create" || isEditingOrder) && (
           <div style={formCardStyle}>
             <div style={grid3Style}>
@@ -1052,6 +1096,7 @@ export default function SupplierOrderModal({
             sourceId={order.id}
             supplierOrderId={order.id}
             onClose={() => setIsLinkedDocumentsModalOpen(false)}
+            onOpenDocument={handleOpenLinkedDocument}
           />
         )}
 
@@ -1060,6 +1105,18 @@ export default function SupplierOrderModal({
             order={order}
             orderItems={orderItems}
             onClose={() => setIsRelatedDocumentModalOpen(false)}
+          />
+        )}
+
+        {linkedReceipt && (
+          <ReceiptModal
+            receipt={linkedReceipt}
+            colors={colors}
+            onClose={() => setLinkedReceipt(null)}
+            onSaved={() => {
+              setLinkedReceipt(null);
+              onSaved();
+            }}
           />
         )}
 
