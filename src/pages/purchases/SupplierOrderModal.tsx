@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 import RelatedDocumentModal from "./RelatedDocumentModal";
+import LinkedDocumentsModal from "./LinkedDocumentsModal";
 
 export type PurchaseItemType = "material" | "consumable";
 
@@ -122,6 +123,8 @@ export default function SupplierOrderModal({
   const [deleting, setDeleting] = useState(false);
   const [isEditingOrder, setIsEditingOrder] = useState(false);
   const [isRelatedDocumentModalOpen, setIsRelatedDocumentModalOpen] =
+    useState(false);
+  const [isLinkedDocumentsModalOpen, setIsLinkedDocumentsModalOpen] =
     useState(false);
   const [error, setError] = useState("");
 
@@ -823,6 +826,14 @@ export default function SupplierOrderModal({
               <>
                 <button
                   type="button"
+                  onClick={() => setIsLinkedDocumentsModalOpen(true)}
+                  style={linkedDocumentsButtonStyle}
+                >
+                  🔗 Связанные документы
+                </button>
+
+                <button
+                  type="button"
                   onClick={openRelatedDocumentModal}
                   style={createDocumentButtonStyle}
                 >
@@ -1033,6 +1044,15 @@ export default function SupplierOrderModal({
               )}
             </div>
           </>
+        )}
+
+        {isLinkedDocumentsModalOpen && order && (
+          <LinkedDocumentsModal
+            sourceType="supplier_order"
+            sourceId={order.id}
+            supplierOrderId={order.id}
+            onClose={() => setIsLinkedDocumentsModalOpen(false)}
+          />
         )}
 
         {isRelatedDocumentModalOpen && order && (
@@ -1804,6 +1824,18 @@ const modalHeaderStyle: React.CSSProperties = {
   justifyContent: "space-between",
   gap: 10,
   alignItems: "flex-start",
+};
+
+const linkedDocumentsButtonStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#ffffff",
+  color: "#334155",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: "nowrap",
 };
 
 const createDocumentButtonStyle: React.CSSProperties = {

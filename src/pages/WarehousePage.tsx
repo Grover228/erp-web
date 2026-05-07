@@ -1,5 +1,6 @@
 import { useState } from "react";
 import PurchasesPage from "./PurchasesPage";
+import ReceiptsPage from "./warehouse/ReceiptsPage";
 
 type WarehouseTab = "purchases" | "receipts" | "stock" | "shipments";
 
@@ -38,19 +39,8 @@ const tabs: {
 export default function WarehousePage() {
   const [activeTab, setActiveTab] = useState<WarehouseTab>("purchases");
 
-  const activeTabData = tabs.find((tab) => tab.key === activeTab);
-
   return (
     <div style={pageStyle}>
-      <div style={heroStyle}>
-        <div>
-          <div style={heroTitleStyle}>Склад</div>
-          <div style={heroSubtitleStyle}>
-            Управление закупками, поступлениями, остатками и отгрузками.
-          </div>
-        </div>
-      </div>
-
       <div style={tabsGridStyle}>
         {tabs.map((tab) => (
           <button
@@ -72,13 +62,7 @@ export default function WarehousePage() {
       <div style={contentStyle}>
         {activeTab === "purchases" && <PurchasesPage />}
 
-        {activeTab === "receipts" && (
-          <WarehouseStub
-            title="Поступления"
-            subtitle="Здесь будет отдельный модуль приёмок. Пока черновики приёмок можно смотреть внутри закупок."
-            icon="📦"
-          />
-        )}
+        {activeTab === "receipts" && <ReceiptsPage />}
 
         {activeTab === "stock" && (
           <WarehouseStub
@@ -122,29 +106,6 @@ const pageStyle: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 16,
-};
-
-const heroStyle: React.CSSProperties = {
-  background: "#ffffff",
-  borderRadius: 20,
-  padding: 22,
-  border: "1px solid #dbe4f0",
-  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
-};
-
-const heroTitleStyle: React.CSSProperties = {
-  fontSize: 28,
-  fontWeight: 900,
-  color: "#0f172a",
-  textAlign: "center",
-};
-
-const heroSubtitleStyle: React.CSSProperties = {
-  color: "#64748b",
-  marginTop: 8,
-  textAlign: "center",
-  fontSize: 16,
-  lineHeight: 1.5,
 };
 
 const tabsGridStyle: React.CSSProperties = {
