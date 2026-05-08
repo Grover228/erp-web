@@ -13,6 +13,7 @@ export type SupplierOrder = {
   supplier_id: string | null;
   supplier_name: string | null;
   status: string;
+  status_id?: string | null;
   comment: string | null;
   total_amount: number;
   created_at: string | null;
@@ -62,6 +63,13 @@ export type Counterparty = {
   id: string;
   name: string;
   type: string | null;
+};
+
+type Status = {
+  id: string;
+  code: string;
+  name: string;
+  color: string | null;
 };
 
 type OrderItemDraft = {
@@ -131,6 +139,15 @@ export default function SupplierOrderModal({
     null,
   );
   const [linkedReceiptLoading, setLinkedReceiptLoading] = useState(false);
+  const [orderStatuses, setOrderStatuses] = useState<Status[]>([]);
+  const [isStatusPickerOpen, setIsStatusPickerOpen] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [currentOrderStatusCode, setCurrentOrderStatusCode] = useState(
+    order?.status || "",
+  );
+  const [currentOrderStatusId, setCurrentOrderStatusId] = useState<string | null>(
+    order?.status_id || null,
+  );
   const [error, setError] = useState("");
 
   const [orderDate, setOrderDate] = useState(
@@ -158,6 +175,40 @@ export default function SupplierOrderModal({
       setIsEditingOrder(false);
     }
   }, [mode]);
+
+  useEffect(() => {
+    loadOrderStatuses();
+  }, []);
+
+  useEffect(() => {
+    setCurrentOrderStatusCode(order?.status || "");
+    setCurrentOrderStatusId(order?.status_id || null);
+    setIsStatusPickerOpen(false);
+  }, [order?.id, order?.status, order?.status_id]);
+
+  async function loadOrderStatuses() {
+    try {
+      const { data, error } = await supabase
+        .from("statuses")
+        .select(
+          `
+          id,
+          code,
+          name,
+          color,
+          status_categories!inner(code)
+        `,
+        )
+        .eq("status_categories.code", "supplier_orders")
+        .order("sort_order", { ascending: true });
+
+      if (error) throw error;
+
+      setOrderStatuses(((data || []) as Status[]) || []);
+    } catch (error) {
+      console.error("Ошибка загрузки статусов заказа поставщику", error);
+    }
+  }
 
   function resetForm() {
     setOrderDate(new Date().toISOString().slice(0, 10));
@@ -374,6 +425,102 @@ export default function SupplierOrderModal({
       }));
   }
 
+  function getOrderStatus(statusCode: string | null | undefined, statusId?: string | null) {
+    if (statusId) {
+      const statusById = orderStatuses.find((item) => item.id === statusId);
+      if (statusById) return statusById;
+    }
+
+    if (!statusCode) return null;
+
+    return orderStatuses.find((item) => item.code === statusCode) || null;
+  }
+
+  function getDraftStatusId() {
+    return orderStatuses.find((item) => item.code === "draft")?.id || null;
+  }
+
+  function getStatusLabel(statusCode: string | null | undefined, statusId?: string | null) {
+    const status = getOrderStatus(statusCode, statusId);
+
+    if (status?.name) return status.name;
+    if (statusCode === "draft") return "Черновик";
+    if (statusCode === "ordered") return "Заказан";
+    if (statusCode === "received") return "Поступил";
+    if (statusCode === "cancelled") return "Отменён";
+
+    return statusCode || "—";
+  }
+
+  function renderStatusBadge(
+    statusCode: string | null | undefined,
+    statusId?: string | null,
+    clickable = false,
+  ) {
+    const status = getOrderStatus(statusCode, statusId);
+    const color = status?.color || "#2563eb";
+
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          if (clickable) setIsStatusPickerOpen(true);
+        }}
+        disabled={!clickable || updatingStatus}
+        title={clickable ? "Сменить статус" : undefined}
+        style={{
+          ...statusBadgeStyle,
+          borderColor: `${color}40`,
+          background: `${color}12`,
+          color,
+          cursor: clickable && !updatingStatus ? "pointer" : "default",
+          opacity: updatingStatus ? 0.65 : 1,
+        }}
+      >
+        {updatingStatus ? "Сохраняю..." : getStatusLabel(statusCode, statusId)}
+      </button>
+    );
+  }
+
+  async function changeOrderStatus(nextStatus: Status) {
+    if (!order) return;
+
+    const currentLabel = getStatusLabel(currentOrderStatusCode, currentOrderStatusId);
+    const confirmed = window.confirm(
+      `Сменить статус заказа ${order.order_number || "Без номера"} с "${currentLabel}" на "${nextStatus.name}"?`,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setUpdatingStatus(true);
+      setError("");
+
+      const { error: updateError } = await supabase
+        .from("supplier_orders")
+        .update({
+          status: nextStatus.code,
+          status_id: nextStatus.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", order.id);
+
+      if (updateError) throw updateError;
+
+      order.status = nextStatus.code;
+      order.status_id = nextStatus.id;
+      setCurrentOrderStatusCode(nextStatus.code);
+      setCurrentOrderStatusId(nextStatus.id);
+      setIsStatusPickerOpen(false);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Ошибка смены статуса заказа",
+      );
+    } finally {
+      setUpdatingStatus(false);
+    }
+  }
+
   async function createSupplierOrder() {
     try {
       setSaving(true);
@@ -394,6 +541,7 @@ export default function SupplierOrderModal({
           supplier_id: supplierId || null,
           supplier_name: selectedSupplierName || null,
           status: "draft",
+          status_id: getDraftStatusId(),
           comment: comment.trim() || null,
           total_amount: getTotalAmount(),
         })
@@ -554,14 +702,6 @@ export default function SupplierOrderModal({
 
   function openRelatedDocumentModal() {
     setIsRelatedDocumentModalOpen(true);
-  }
-
-  function getStatusLabel(status: string) {
-    if (status === "draft") return "Черновик";
-    if (status === "ordered") return "Заказан";
-    if (status === "received") return "Поступил";
-    if (status === "cancelled") return "Отменён";
-    return status;
   }
 
   function getItemName(item: SupplierOrderItem) {
@@ -999,7 +1139,7 @@ export default function SupplierOrderModal({
               <div style={modalInfoCardStyle}>
                 <div style={modalInfoLabelStyle}>Статус</div>
                 <div style={modalInfoValueStyle}>
-                  {getStatusLabel(order?.status || "")}
+                  {renderStatusBadge(currentOrderStatusCode, currentOrderStatusId, true)}
                 </div>
               </div>
 
@@ -1118,6 +1258,75 @@ export default function SupplierOrderModal({
               onSaved();
             }}
           />
+        )}
+
+        {isStatusPickerOpen && order && (
+          <div
+            onClick={() => setIsStatusPickerOpen(false)}
+            style={supplierPickerOverlayStyle}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={statusPickerModalStyle}
+            >
+              <div style={supplierPickerHeaderStyle}>
+                <div>
+                  <div style={supplierPickerTitleStyle}>Сменить статус</div>
+                  <div style={{ color: "#64748b", marginTop: 4 }}>
+                    Заказ {order.order_number || "Без номера"}. Выбери новый статус из справочника.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsStatusPickerOpen(false)}
+                  style={modalCloseButtonStyle}
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={statusListStyle}>
+                {orderStatuses.length === 0 ? (
+                  <div style={emptyStyle}>Статусы заказов поставщикам не найдены.</div>
+                ) : (
+                  orderStatuses.map((status) => {
+                    const active =
+                      status.id === currentOrderStatusId ||
+                      (!currentOrderStatusId && status.code === currentOrderStatusCode);
+
+                    return (
+                      <button
+                        key={status.id}
+                        type="button"
+                        onClick={() => {
+                          if (!active) changeOrderStatus(status);
+                        }}
+                        disabled={active || updatingStatus}
+                        style={statusOptionStyle(active, status.color)}
+                      >
+                        <span
+                          style={{
+                            ...statusOptionDotStyle,
+                            background: status.color || "#94a3b8",
+                          }}
+                        />
+
+                        <span style={{ display: "grid", gap: 3 }}>
+                          <span style={{ fontWeight: 900 }}>{status.name}</span>
+                          <span style={{ color: "#64748b", fontSize: 12, fontWeight: 800 }}>
+                            {status.code}
+                          </span>
+                        </span>
+
+                        {active && <span style={currentStatusMarkStyle}>Текущий</span>}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
         )}
 
         {isProductPickerOpen && (
@@ -1649,6 +1858,61 @@ const chooseProductButtonStyle: React.CSSProperties = {
   flexShrink: 0,
 };
 
+const statusPickerModalStyle: React.CSSProperties = {
+  width: "min(520px, 94vw)",
+  maxHeight: "76vh",
+  overflowY: "auto",
+  background: "#ffffff",
+  borderRadius: 18,
+  padding: 16,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 20px 48px rgba(15, 23, 42, 0.28)",
+  display: "grid",
+  gap: 14,
+};
+
+const statusListStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+};
+
+const statusOptionDotStyle: React.CSSProperties = {
+  width: 13,
+  height: 13,
+  borderRadius: 999,
+  border: "1px solid #cbd5e1",
+  flexShrink: 0,
+};
+
+const currentStatusMarkStyle: React.CSSProperties = {
+  marginLeft: "auto",
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  borderRadius: 999,
+  padding: "6px 9px",
+  fontSize: 12,
+  fontWeight: 900,
+};
+
+function statusOptionStyle(active: boolean, color: string | null): React.CSSProperties {
+  const statusColor = color || "#94a3b8";
+
+  return {
+    border: active ? `1px solid ${statusColor}` : "1px solid #dbe4f0",
+    background: active ? `${statusColor}12` : "#ffffff",
+    color: "#0f172a",
+    borderRadius: 14,
+    padding: "12px 13px",
+    cursor: active ? "default" : "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    textAlign: "left",
+    opacity: active ? 0.82 : 1,
+  };
+}
+
 const productPickerModalStyle: React.CSSProperties = {
   width: "min(760px, 94vw)",
   maxHeight: "78vh",
@@ -1975,6 +2239,23 @@ const modalInfoValueStyle: React.CSSProperties = {
   color: "#0f172a",
   fontSize: 18,
   fontWeight: 900,
+};
+
+const statusBadgeStyle: React.CSSProperties = {
+  appearance: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "fit-content",
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  borderRadius: 999,
+  padding: "7px 12px",
+  fontSize: 15,
+  fontWeight: 900,
+  lineHeight: 1,
+  fontFamily: "inherit",
 };
 
 const commentBoxStyle: React.CSSProperties = {

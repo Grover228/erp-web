@@ -12,12 +12,23 @@ import SupplierOrderModal, {
 
 type ModalMode = "create" | "view";
 
+type Status = {
+  id: string;
+  code: string;
+  name: string;
+  color: string | null;
+  status_categories?: {
+    code: string | null;
+  } | null;
+};
+
 export default function PurchasesPage() {
   const [orders, setOrders] = useState<SupplierOrder[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [consumables, setConsumables] = useState<Consumable[]>([]);
   const [colors, setColors] = useState<Color[]>([]);
   const [counterparties, setCounterparties] = useState<Counterparty[]>([]);
+  const [statuses, setStatuses] = useState<Status[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [directoriesLoading, setDirectoriesLoading] = useState(false);
@@ -68,6 +79,7 @@ export default function PurchasesPage() {
         consumablesResult,
         colorsResult,
         counterpartiesResult,
+        statusesResult,
       ] = await Promise.all([
         supabase
           .from("materials")
@@ -91,22 +103,41 @@ export default function PurchasesPage() {
           .select("id, name, type")
           .eq("is_active", true)
           .order("name", { ascending: true }),
+
+        supabase
+          .from("statuses")
+          .select(
+            `
+            id,
+            code,
+            name,
+            color,
+            status_categories(code)
+          `,
+          )
+          .order("sort_order", { ascending: true }),
       ]);
 
       if (materialsResult.error) throw materialsResult.error;
       if (consumablesResult.error) throw consumablesResult.error;
       if (colorsResult.error) throw colorsResult.error;
       if (counterpartiesResult.error) throw counterpartiesResult.error;
+      if (statusesResult.error) throw statusesResult.error;
 
       setMaterials((materialsResult.data as Material[]) || []);
       setConsumables((consumablesResult.data as Consumable[]) || []);
       setColors((colorsResult.data as Color[]) || []);
       setCounterparties((counterpartiesResult.data as Counterparty[]) || []);
+      setStatuses(
+        ((statusesResult.data as Status[]) || []).filter(
+          (status) => status.status_categories?.code === "supplier_orders",
+        ),
+      );
     } catch (error) {
       setError(
         error instanceof Error
           ? error.message
-          : "Ошибка загрузки материалов, расходников, цветов и поставщиков",
+          : "Ошибка загрузки материалов, расходников, цветов, поставщиков и статусов",
       );
     } finally {
       setDirectoriesLoading(false);
@@ -163,95 +194,107 @@ export default function PurchasesPage() {
     await loadOrders();
   }
 
-  function getStatusLabel(status: string) {
-    if (status === "draft") return "Черновик";
-    if (status === "posted") return "Проведён";
-    if (status === "ordered") return "Заказан";
-    if (status === "received") return "Поступил";
-    if (status === "cancelled") return "Отменён";
-    return status;
+  function getStatusByCode(statusCode: string) {
+    return statuses.find((status) => status.code === statusCode) || null;
+  }
+
+  function getStatusName(statusCode: string) {
+    const status = getStatusByCode(statusCode);
+
+    return status?.name || statusCode;
+  }
+
+  function getStatusStyle(statusCode: string): React.CSSProperties {
+    const status = getStatusByCode(statusCode);
+
+    return {
+      ...statusStyle,
+      background: status?.color ? `${status.color}20` : statusStyle.background,
+      borderColor: status?.color || "#bfdbfe",
+      color: status?.color || "#1d4ed8",
+    };
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {error && <div style={errorStyle}>{error}</div>}
 
-        <div style={sectionStyle}>
-          <div style={sectionHeaderStyle}>
-            <div>
-              <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
-                Заказы поставщикам
-              </div>
-              <div style={{ color: "#64748b", marginTop: 4 }}>
-                Планируем закупку тканей, расходников и услуг.
-              </div>
+      <div style={sectionStyle}>
+        <div style={sectionHeaderStyle}>
+          <div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
+              Заказы поставщикам
             </div>
-
-            <button onClick={openCreateOrder} style={primaryButtonStyle}>
-              + Новый заказ поставщику
-            </button>
+            <div style={{ color: "#64748b", marginTop: 4 }}>
+              Планируем закупку тканей, расходников и услуг.
+            </div>
           </div>
 
-          {loading ? (
-            <div style={{ color: "#64748b", fontWeight: 700 }}>
-              Загружаю заказы...
-            </div>
-          ) : orders.length === 0 ? (
-            <div style={emptyStyle}>
-              Заказов поставщикам пока нет. Создай первый заказ.
-            </div>
-          ) : (
-            <div style={tableWrapStyle}>
-              <table style={tableStyle}>
-                <thead>
-                  <tr>
-                    <th style={thStyle}>Номер</th>
-                    <th style={thStyle}>Дата</th>
-                    <th style={thStyle}>Поставщик</th>
-                    <th style={thStyle}>Сумма</th>
-                    <th style={thStyle}>Статус</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {orders.map((order) => (
-                    <tr key={order.id}>
-                      <td style={tdStyle}>
-                        <button
-                          onClick={() => openOrder(order)}
-                          style={linkButtonStyle}
-                        >
-                          {order.order_number || "Без номера"}
-                        </button>
-                      </td>
-
-                      <td style={tdStyle}>{order.order_date || "—"}</td>
-
-                      <td style={tdStyle}>{order.supplier_name || "—"}</td>
-
-                      <td style={tdStyle}>
-                        {Number(order.total_amount || 0).toLocaleString(
-                          "ru-RU",
-                          {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          },
-                        )}{" "}
-                        ₽
-                      </td>
-
-                      <td style={tdStyle}>
-                        <span style={statusStyle}>
-                          {getStatusLabel(order.status)}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          <button onClick={openCreateOrder} style={primaryButtonStyle}>
+            + Новый заказ поставщику
+          </button>
         </div>
+
+        {loading ? (
+          <div style={{ color: "#64748b", fontWeight: 700 }}>
+            Загружаю заказы...
+          </div>
+        ) : orders.length === 0 ? (
+          <div style={emptyStyle}>
+            Заказов поставщикам пока нет. Создай первый заказ.
+          </div>
+        ) : (
+          <div style={tableWrapStyle}>
+            <table style={tableStyle}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>Номер</th>
+                  <th style={thStyle}>Дата</th>
+                  <th style={thStyle}>Поставщик</th>
+                  <th style={thStyle}>Сумма</th>
+                  <th style={thStyle}>Статус</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {orders.map((order) => (
+                  <tr key={order.id}>
+                    <td style={tdStyle}>
+                      <button
+                        onClick={() => openOrder(order)}
+                        style={linkButtonStyle}
+                      >
+                        {order.order_number || "Без номера"}
+                      </button>
+                    </td>
+
+                    <td style={tdStyle}>{order.order_date || "—"}</td>
+
+                    <td style={tdStyle}>{order.supplier_name || "—"}</td>
+
+                    <td style={tdStyle}>
+                      {Number(order.total_amount || 0).toLocaleString(
+                        "ru-RU",
+                        {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        },
+                      )}{" "}
+                      ₽
+                    </td>
+
+                    <td style={tdStyle}>
+                      <span style={getStatusStyle(order.status)}>
+                        {getStatusName(order.status)}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {modalMode && (
         <SupplierOrderModal
