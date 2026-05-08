@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 import RelatedDocumentModal from "./RelatedDocumentModal";
+import LinkedDocumentsModal from "./LinkedDocumentsModal";
+import ReceiptModal, { type SupplierReceipt } from "../warehouse/ReceiptModal";
 
 export type PurchaseItemType = "material" | "consumable";
 
@@ -123,6 +125,12 @@ export default function SupplierOrderModal({
   const [isEditingOrder, setIsEditingOrder] = useState(false);
   const [isRelatedDocumentModalOpen, setIsRelatedDocumentModalOpen] =
     useState(false);
+  const [isLinkedDocumentsModalOpen, setIsLinkedDocumentsModalOpen] =
+    useState(false);
+  const [linkedReceipt, setLinkedReceipt] = useState<SupplierReceipt | null>(
+    null,
+  );
+  const [linkedReceiptLoading, setLinkedReceiptLoading] = useState(false);
   const [error, setError] = useState("");
 
   const [orderDate, setOrderDate] = useState(
@@ -511,6 +519,39 @@ export default function SupplierOrderModal({
     }
   }
 
+  async function openLinkedReceipt(receiptId: string) {
+    try {
+      setLinkedReceiptLoading(true);
+      setError("");
+
+      const { data, error } = await supabase
+        .from("supplier_receipts")
+        .select("*")
+        .eq("id", receiptId)
+        .single();
+
+      if (error) throw error;
+
+      setIsLinkedDocumentsModalOpen(false);
+      setLinkedReceipt(data as SupplierReceipt);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Ошибка открытия приёмки",
+      );
+    } finally {
+      setLinkedReceiptLoading(false);
+    }
+  }
+
+  function handleOpenLinkedDocument(
+    type: "supplier_order" | "supplier_receipt",
+    id: string,
+  ) {
+    if (type === "supplier_order") return;
+
+    openLinkedReceipt(id);
+  }
+
   function openRelatedDocumentModal() {
     setIsRelatedDocumentModalOpen(true);
   }
@@ -823,6 +864,14 @@ export default function SupplierOrderModal({
               <>
                 <button
                   type="button"
+                  onClick={() => setIsLinkedDocumentsModalOpen(true)}
+                  style={linkedDocumentsButtonStyle}
+                >
+                  🔗 Связанные документы
+                </button>
+
+                <button
+                  type="button"
                   onClick={openRelatedDocumentModal}
                   style={createDocumentButtonStyle}
                 >
@@ -859,6 +908,12 @@ export default function SupplierOrderModal({
         </div>
 
         {error && <div style={errorStyle}>{error}</div>}
+
+        {linkedReceiptLoading && (
+          <div style={{ color: "#64748b", fontWeight: 700 }}>
+            Открываю связанный документ...
+          </div>
+        )}
 
         {(mode === "create" || isEditingOrder) && (
           <div style={formCardStyle}>
@@ -1035,11 +1090,33 @@ export default function SupplierOrderModal({
           </>
         )}
 
+        {isLinkedDocumentsModalOpen && order && (
+          <LinkedDocumentsModal
+            sourceType="supplier_order"
+            sourceId={order.id}
+            supplierOrderId={order.id}
+            onClose={() => setIsLinkedDocumentsModalOpen(false)}
+            onOpenDocument={handleOpenLinkedDocument}
+          />
+        )}
+
         {isRelatedDocumentModalOpen && order && (
           <RelatedDocumentModal
             order={order}
             orderItems={orderItems}
             onClose={() => setIsRelatedDocumentModalOpen(false)}
+          />
+        )}
+
+        {linkedReceipt && (
+          <ReceiptModal
+            receipt={linkedReceipt}
+            colors={colors}
+            onClose={() => setLinkedReceipt(null)}
+            onSaved={() => {
+              setLinkedReceipt(null);
+              onSaved();
+            }}
           />
         )}
 
@@ -1804,6 +1881,18 @@ const modalHeaderStyle: React.CSSProperties = {
   justifyContent: "space-between",
   gap: 10,
   alignItems: "flex-start",
+};
+
+const linkedDocumentsButtonStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#ffffff",
+  color: "#334155",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: "nowrap",
 };
 
 const createDocumentButtonStyle: React.CSSProperties = {
