@@ -8,6 +8,7 @@ type Employee = {
   phone: string | null;
   telegram: string | null;
   payment_type: string | null;
+  bank_name?: string | null;
   is_active: boolean | null;
   notes: string | null;
   created_at: string | null;
@@ -43,6 +44,45 @@ type UserProfile = {
   created_at: string | null;
 };
 
+const paymentOptions = [
+  { value: "salary", label: "Оклад" },
+  { value: "piece", label: "Сдельно" },
+  { value: "percent", label: "Процент" },
+];
+
+const bankOptions = [
+  { value: "", label: "Не выбран" },
+  { value: "sber", label: "Сбер" },
+  { value: "alfa", label: "Альфа" },
+  { value: "tbank", label: "ТБанк" },
+  { value: "ozon", label: "Озон" },
+];
+
+function parseMultiValue(value: string | null | undefined) {
+  return (value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatPaymentType(value: string | null | undefined) {
+  const selected = parseMultiValue(value);
+
+  if (selected.length === 0) return "—";
+
+  return selected
+    .map(
+      (item) =>
+        paymentOptions.find((option) => option.value === item)?.label || item
+    )
+    .join(", ");
+}
+
+function getBankLabel(value: string | null | undefined) {
+  if (!value) return "—";
+  return bankOptions.find((option) => option.value === value)?.label || value;
+}
+
 export default function EmployeesDirectory() {
   const [tab, setTab] = useState<"employees" | "requests">("employees");
 
@@ -65,6 +105,12 @@ export default function EmployeesDirectory() {
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState("");
   const [roleDrafts, setRoleDrafts] = useState<Record<string, string>>({});
+
+  const [search, setSearch] = useState("");
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const [viewEmployeeId, setViewEmployeeId] = useState<string | null>(null);
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
 
   useEffect(() => {
     loadEmployees();
@@ -212,22 +258,15 @@ export default function EmployeesDirectory() {
         },
       });
 
-      if (error) {
-        throw new Error(error.message);
-      }
-
-      if (data?.error) {
-        throw new Error(data.error);
-      }
+      if (error) throw new Error(error.message);
+      if (data?.error) throw new Error(data.error);
 
       const { error: updateError } = await supabase
         .from("registration_requests")
         .update({ status: "approved" })
         .eq("id", request.id);
 
-      if (updateError) {
-        throw updateError;
-      }
+      if (updateError) throw updateError;
 
       setRequests((prev) =>
         prev.map((item) =>
@@ -236,7 +275,6 @@ export default function EmployeesDirectory() {
       );
 
       setActionMessage("Пользователь создан и заявка принята.");
-
       await Promise.all([loadEmployees(), loadProfiles(), loadRequests()]);
       setTab("employees");
     } catch (error) {
@@ -266,11 +304,7 @@ export default function EmployeesDirectory() {
       setProfiles((prev) =>
         prev.map((profile) =>
           profile.id === userId
-            ? {
-                ...profile,
-                role_code: selectedRoleCode,
-                role: selectedRoleCode,
-              }
+            ? { ...profile, role_code: selectedRoleCode, role: selectedRoleCode }
             : profile
         )
       );
@@ -314,9 +348,9 @@ export default function EmployeesDirectory() {
       setEmployees((prev) => prev.filter((item) => item.id !== userId));
       setProfiles((prev) => prev.filter((item) => item.id !== userId));
 
-      setActionMessage(
-        `Сотрудник "${employeeName}" удалён из employees и user_profiles.`
-      );
+      setActionMessage(`Сотрудник "${employeeName}" удалён из employees и user_profiles.`);
+      setViewEmployeeId(null);
+      setSelectedEmployeeId(null);
     } catch (error) {
       setEmployeesError(
         error instanceof Error ? error.message : "Ошибка удаления сотрудника"
@@ -327,10 +361,7 @@ export default function EmployeesDirectory() {
   }
 
   async function deleteRequest(requestId: string, fullName: string) {
-    const confirmed = window.confirm(
-      `Удалить заявку "${fullName}" из базы полностью?`
-    );
-
+    const confirmed = window.confirm(`Удалить заявку "${fullName}" из базы полностью?`);
     if (!confirmed) return;
 
     try {
@@ -372,17 +403,13 @@ export default function EmployeesDirectory() {
 
   const rolesMap = useMemo(() => {
     const map = new Map<string, RoleItem>();
-    roles.forEach((role) => {
-      map.set(role.code, role);
-    });
+    roles.forEach((role) => map.set(role.code, role));
     return map;
   }, [roles]);
 
   const profilesMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
-    profiles.forEach((profile) => {
-      map.set(profile.id, profile);
-    });
+    profiles.forEach((profile) => map.set(profile.id, profile));
     return map;
   }, [profiles]);
 
@@ -401,590 +428,677 @@ export default function EmployeesDirectory() {
     return roleCode || "—";
   }
 
+  function openEmployeeCard(employee: Employee) {
+    setSelectedEmployeeId(employee.id);
+    setViewEmployeeId(employee.id);
+  }
+
+
+  function startEditEmployee() {
+    if (!viewEmployee) return;
+
+    setEditingEmployee({
+      ...viewEmployee,
+    });
+
+    setIsEditMode(true);
+  }
+
+  async function saveEmployeeChanges() {
+    if (!editingEmployee) return;
+
+    setEmployeesError("");
+    setActionMessage("");
+
+    const payload = {
+      full_name: editingEmployee.full_name?.trim() || null,
+      phone: editingEmployee.phone?.trim() || null,
+      telegram: editingEmployee.telegram?.trim() || null,
+      payment_type: editingEmployee.payment_type?.trim() || null,
+      bank_name: editingEmployee.bank_name?.trim() || null,
+      notes: editingEmployee.notes?.trim() || null,
+      is_active: editingEmployee.is_active,
+    };
+
+    const { error } = await supabase
+      .from("employees")
+      .update(payload)
+      .eq("id", editingEmployee.id);
+
+    if (error) {
+      setEmployeesError(error.message);
+      return;
+    }
+
+    setEmployees((prev) =>
+      prev.map((employee) =>
+        employee.id === editingEmployee.id
+          ? { ...employee, ...payload }
+          : employee
+      )
+    );
+
+    setEditingEmployee((prev) => (prev ? { ...prev, ...payload } : prev));
+    setIsEditMode(false);
+    setActionMessage("Карточка сотрудника обновлена.");
+    await loadEmployees();
+  }
+
+  function closeEmployeeCard() {
+    setSelectedEmployeeId(null);
+    setViewEmployeeId(null);
+    setIsEditMode(false);
+    setEditingEmployee(null);
+  }
+
   const commonDataError = rolesError || profilesError;
   const commonDataLoading = rolesLoading || profilesLoading;
 
+  const filteredEmployees = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    if (!normalizedSearch) return employees;
+
+    return employees.filter((emp) => {
+      const profile = profilesMap.get(emp.id);
+      return (
+        (emp.full_name || "").toLowerCase().includes(normalizedSearch) ||
+        (emp.phone || "").toLowerCase().includes(normalizedSearch) ||
+        (emp.telegram || "").toLowerCase().includes(normalizedSearch) ||
+        (profile?.email || "").toLowerCase().includes(normalizedSearch) ||
+        getEmployeeRoleLabel(emp).toLowerCase().includes(normalizedSearch)
+      );
+    });
+  }, [employees, search, profilesMap, rolesMap]);
+
+  const viewEmployee = useMemo(() => {
+    return employees.find((item) => item.id === viewEmployeeId) || null;
+  }, [employees, viewEmployeeId]);
+
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: 16,
-      }}
-    >
-      <div
-        style={{
-          background: "#fff",
-          borderRadius: 16,
-          padding: 18,
-          border: "1px solid #e5e7eb",
-        }}
-      >
-        <div
-          style={{
-            fontSize: 24,
-            fontWeight: 700,
-            color: "#111827",
-            marginBottom: 8,
-          }}
-        >
-          Справочник сотрудников
+    <div style={pageStyle}>
+      <div style={sectionStyle}>
+        <div style={sectionTitleStyle}>Справочник сотрудников</div>
+        <div style={sectionTextStyle}>
+          Здесь хранятся действующие сотрудники, роли доступа и входящие заявки на подключение к ERP.
         </div>
 
-        <div
-          style={{
-            color: "#6b7280",
-            lineHeight: 1.5,
-            marginBottom: 16,
-          }}
-        >
-          Здесь будут действующие сотрудники и входящие заявки на доступ в ERP.
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={tabsStyle}>
           <button
             onClick={() => setTab("employees")}
-            style={{
-              height: 42,
-              padding: "0 14px",
-              borderRadius: 10,
-              border: "1px solid #d1d5db",
-              background: tab === "employees" ? "#2563eb" : "#fff",
-              color: tab === "employees" ? "#fff" : "#111827",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
+            style={tab === "employees" ? activeTabStyle : tabButtonStyle}
           >
             Действующие сотрудники
           </button>
 
           <button
             onClick={() => setTab("requests")}
-            style={{
-              height: 42,
-              padding: "0 14px",
-              borderRadius: 10,
-              border: "1px solid #d1d5db",
-              background: tab === "requests" ? "#2563eb" : "#fff",
-              color: tab === "requests" ? "#fff" : "#111827",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
+            style={tab === "requests" ? activeTabStyle : tabButtonStyle}
           >
             Входящие заявки
           </button>
         </div>
       </div>
 
+      {(actionMessage || commonDataError || employeesError) && tab === "employees" && (
+        <div style={actionMessage ? successBoxStyle : errorBoxStyle}>
+          {actionMessage || commonDataError || employeesError}
+        </div>
+      )}
+
       {tab === "employees" && (
-        <div
-          style={{
-            background: "#fff",
-            borderRadius: 16,
-            padding: 18,
-            border: "1px solid #e5e7eb",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 12,
-              marginBottom: 16,
-              flexWrap: "wrap",
-            }}
-          >
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                color: "#111827",
-              }}
-            >
-              Действующие сотрудники
+        <div style={tableWrapStyle}>
+          <div style={tableTopStyle}>
+            <div>
+              <div style={tableTitleStyle}>Реестр сотрудников</div>
+              <div style={tableSubtitleStyle}>Компактный список сотрудников, их ролей и контактов.</div>
             </div>
 
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                flexWrap: "wrap",
-              }}
-            >
-              <button
-                onClick={loadRoles}
-                style={{
-                  border: "1px solid #d1d5db",
-                  background: "#fff",
-                  borderRadius: 10,
-                  padding: "8px 12px",
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
-              >
-                Обновить роли
-              </button>
+            <div style={toolbarStyle}>
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Поиск по сотрудникам"
+                style={{ ...inputStyle, width: 280, maxWidth: "100%" }}
+              />
 
+              <button onClick={loadRoles} style={secondaryButtonStyle}>Обновить роли</button>
               <button
                 onClick={() => {
                   loadProfiles();
                   loadEmployees();
                 }}
-                style={{
-                  border: "1px solid #d1d5db",
-                  background: "#fff",
-                  borderRadius: 10,
-                  padding: "8px 12px",
-                  cursor: "pointer",
-                  fontWeight: 600,
-                }}
+                style={secondaryButtonStyle}
               >
                 Обновить сотрудников
               </button>
             </div>
           </div>
 
-          {actionMessage && (
-            <div
-              style={{
-                marginBottom: 12,
-                padding: 12,
-                borderRadius: 12,
-                background: "#dcfce7",
-                border: "1px solid #86efac",
-                color: "#166534",
-              }}
-            >
-              {actionMessage}
-            </div>
+          {commonDataLoading && <div style={emptyStyle}>Загрузка справочников ролей и профилей...</div>}
+          {employeesLoading && <div style={emptyStyle}>Загрузка сотрудников...</div>}
+
+          {!employeesLoading && !employeesError && filteredEmployees.length === 0 && (
+            <div style={emptyStyle}>Сотрудники не найдены</div>
           )}
 
-          {commonDataLoading && (
-            <div style={{ color: "#6b7280", marginBottom: 12 }}>
-              Загрузка справочников ролей и профилей...
-            </div>
-          )}
+          {!employeesLoading && !employeesError && filteredEmployees.length > 0 && (
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr style={{ background: "#f8fbff" }}>
+                    {["Сотрудник", "Роль", "Телефон", "Telegram", "Оплата", "Банк", "Статус", "Действия"].map((title) => (
+                      <th key={title} style={headCellStyle}>{title}</th>
+                    ))}
+                  </tr>
+                </thead>
 
-          {commonDataError && (
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 12,
-                background: "#fef2f2",
-                border: "1px solid #fecaca",
-                color: "#991b1b",
-                marginBottom: 12,
-              }}
-            >
-              Ошибка: {commonDataError}
-            </div>
-          )}
+                <tbody>
+                  {filteredEmployees.map((emp) => {
+                    const currentRoleCode = roleDrafts[emp.id] || getEmployeeRoleCode(emp);
+                    const isSavingRole = actionLoadingId === emp.id;
+                    const employeeName = emp.full_name || "Без имени";
+                    const isSelected = selectedEmployeeId === emp.id;
 
-          {employeesLoading && (
-            <div style={{ color: "#6b7280" }}>Загрузка сотрудников...</div>
-          )}
+                    return (
+                      <tr key={emp.id} style={{ background: isSelected ? "#eef4ff" : "#ffffff" }}>
+                        <td style={firstCellStyle}>
+                          <button onClick={() => openEmployeeCard(emp)} style={linkButtonStyle}>
+                            {employeeName}
+                          </button>
+                        </td>
+                        <td style={cellStyle}>{getEmployeeRoleLabel(emp)}</td>
+                        <td style={cellStyle}>{emp.phone || "—"}</td>
+                        <td style={cellStyle}>{emp.telegram || "—"}</td>
+                        <td style={cellStyle}>{formatPaymentType(emp.payment_type)}</td>
+                        <td style={cellStyle}>{getBankLabel(emp.bank_name)}</td>
+                        <td style={cellStyle}>
+                          <span style={{ color: emp.is_active ? "#166534" : "#991b1b", fontWeight: 700 }}>
+                            {emp.is_active ? "Активен" : "Неактивен"}
+                          </span>
+                        </td>
+                        <td style={cellStyle}>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                            <select
+                              value={currentRoleCode}
+                              onChange={(e) =>
+                                setRoleDrafts((prev) => ({ ...prev, [emp.id]: e.target.value }))
+                              }
+                              style={{ ...inputStyle, width: 180, padding: "8px 10px" }}
+                            >
+                              {roles.filter((role) => role.is_active).map((role) => (
+                                <option key={role.code} value={role.code}>{role.name}</option>
+                              ))}
+                            </select>
 
-          {employeesError && (
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 12,
-                background: "#fef2f2",
-                border: "1px solid #fecaca",
-                color: "#991b1b",
-              }}
-            >
-              Ошибка: {employeesError}
-            </div>
-          )}
+                            <button
+                              onClick={() => updateRole(emp.id)}
+                              disabled={isSavingRole}
+                              style={{ ...primaryButtonStyle, padding: "9px 12px", opacity: isSavingRole ? 0.7 : 1 }}
+                            >
+                              {isSavingRole ? "..." : "Сохранить"}
+                            </button>
 
-          {!employeesLoading && !employeesError && employees.length === 0 && (
-            <div style={{ color: "#6b7280" }}>Сотрудников пока нет</div>
-          )}
-
-          {!employeesLoading && !employeesError && employees.length > 0 && (
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                gap: 14,
-              }}
-            >
-              {employees.map((emp) => {
-                const currentRoleCode =
-                  roleDrafts[emp.id] || getEmployeeRoleCode(emp);
-                const isSavingRole = actionLoadingId === emp.id;
-                const employeeName = emp.full_name || "Без имени";
-
-                return (
-                  <div
-                    key={emp.id}
-                    style={{
-                      border: "1px solid #dbe4f0",
-                      borderRadius: 14,
-                      padding: 16,
-                      background: "#fff",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 12,
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          fontSize: 20,
-                          fontWeight: 700,
-                          color: "#111827",
-                          marginBottom: 8,
-                        }}
-                      >
-                        {employeeName}
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: 14,
-                          color: "#6b7280",
-                          marginBottom: 4,
-                        }}
-                      >
-                        Текущая роль:{" "}
-                        <span style={{ fontWeight: 700, color: "#111827" }}>
-                          {getEmployeeRoleLabel(emp)}
-                        </span>
-                      </div>
-
-                      <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 4 }}>
-                        Телефон: {emp.phone || "—"}
-                      </div>
-
-                      <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 4 }}>
-                        Telegram: {emp.telegram || "—"}
-                      </div>
-
-                      <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 6 }}>
-                        Оплата: {emp.payment_type || "—"}
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: 15,
-                          fontWeight: 700,
-                          color: emp.is_active ? "#166534" : "#991b1b",
-                        }}
-                      >
-                        {emp.is_active ? "Активен" : "Неактивен"}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        border: "1px solid #cbd5e1",
-                        borderRadius: 12,
-                        padding: 12,
-                        background: "#f8fafc",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 10,
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: 14,
-                          fontWeight: 700,
-                          color: "#111827",
-                        }}
-                      >
-                        Управление ролью
-                      </div>
-
-                      <select
-                        value={currentRoleCode}
-                        onChange={(e) =>
-                          setRoleDrafts((prev) => ({
-                            ...prev,
-                            [emp.id]: e.target.value,
-                          }))
-                        }
-                        style={{
-                          width: "100%",
-                          height: 44,
-                          borderRadius: 10,
-                          border: "1px solid #cbd5e1",
-                          padding: "0 12px",
-                          background: "#fff",
-                          fontSize: 15,
-                        }}
-                      >
-                        {roles
-                          .filter((role) => role.is_active)
-                          .map((role) => (
-                            <option key={role.code} value={role.code}>
-                              {role.name}
-                            </option>
-                          ))}
-                      </select>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 8,
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <button
-                          onClick={() => updateRole(emp.id)}
-                          disabled={isSavingRole}
-                          style={{
-                            border: "none",
-                            borderRadius: 10,
-                            padding: "10px 14px",
-                            background: isSavingRole ? "#93c5fd" : "#2563eb",
-                            color: "#fff",
-                            fontWeight: 700,
-                            cursor: isSavingRole ? "default" : "pointer",
-                          }}
-                        >
-                          {isSavingRole ? "Сохранение..." : "Сохранить роль"}
-                        </button>
-
-                        <button
-                          onClick={() => deleteEmployee(emp.id, employeeName)}
-                          disabled={isSavingRole}
-                          style={{
-                            border: "none",
-                            borderRadius: 10,
-                            padding: "10px 14px",
-                            background: isSavingRole ? "#fecaca" : "#dc2626",
-                            color: "#fff",
-                            fontWeight: 700,
-                            cursor: isSavingRole ? "default" : "pointer",
-                          }}
-                        >
-                          Удалить сотрудника
-                        </button>
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: 12,
-                          color: "#64748b",
-                          lineHeight: 1.5,
-                        }}
-                      >
-                        Удаление сейчас очищает записи из employees и user_profiles.
-                        Учетную запись в Auth позже добавим отдельной серверной функцией.
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+                            <button
+                              onClick={() => deleteEmployee(emp.id, employeeName)}
+                              disabled={isSavingRole}
+                              style={{ ...dangerButtonStyle, opacity: isSavingRole ? 0.7 : 1 }}
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
       )}
 
       {tab === "requests" && (
-        <div
-          style={{
-            background: "#fff",
-            borderRadius: 16,
-            padding: 18,
-            border: "1px solid #e5e7eb",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: 12,
-              marginBottom: 16,
-              flexWrap: "wrap",
-            }}
-          >
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 700,
-                color: "#111827",
-              }}
-            >
-              Входящие заявки
+        <div style={tableWrapStyle}>
+          <div style={tableTopStyle}>
+            <div>
+              <div style={tableTitleStyle}>Входящие заявки</div>
+              <div style={tableSubtitleStyle}>Заявки пользователей на доступ к ERP.</div>
             </div>
 
-            <button
-              onClick={loadRequests}
-              style={{
-                border: "1px solid #d1d5db",
-                background: "#fff",
-                borderRadius: 10,
-                padding: "8px 12px",
-                cursor: "pointer",
-                fontWeight: 600,
-              }}
-            >
-              Обновить
-            </button>
+            <button onClick={loadRequests} style={secondaryButtonStyle}>Обновить</button>
           </div>
 
-          {requestsLoading && (
-            <div style={{ color: "#6b7280" }}>Загрузка заявок...</div>
+          {(actionMessage || requestsError) && (
+            <div style={actionMessage ? successBoxStyle : errorBoxStyle}>{actionMessage || requestsError}</div>
           )}
 
-          {requestsError && (
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 12,
-                background: "#fef2f2",
-                border: "1px solid #fecaca",
-                color: "#991b1b",
-                marginBottom: 12,
-              }}
-            >
-              Ошибка: {requestsError}
-            </div>
-          )}
-
-          {!requestsLoading && !requestsError && requests.length === 0 && (
-            <div style={{ color: "#6b7280" }}>Заявок пока нет</div>
-          )}
+          {requestsLoading && <div style={emptyStyle}>Загрузка заявок...</div>}
+          {!requestsLoading && !requestsError && requests.length === 0 && <div style={emptyStyle}>Заявок пока нет</div>}
 
           {!requestsLoading && !requestsError && requests.length > 0 && (
-            <div
-              style={{
-                display: "grid",
-                gap: 12,
-              }}
-            >
-              {requests.map((request) => {
-                const isPending = request.status === "pending";
-                const isLoading = actionLoadingId === request.id;
+            <div style={{ overflowX: "auto" }}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr style={{ background: "#f8fbff" }}>
+                    {["ФИО", "Email", "Телефон", "Комментарий", "Статус", "Действия"].map((title) => (
+                      <th key={title} style={headCellStyle}>{title}</th>
+                    ))}
+                  </tr>
+                </thead>
 
-                return (
-                  <div
-                    key={request.id}
-                    style={{
-                      border: "1px solid #e5e7eb",
-                      borderRadius: 12,
-                      padding: 14,
-                      background: "#fff",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: 12,
-                    }}
-                  >
-                    <div>
-                      <div
-                        style={{
-                          fontSize: 17,
-                          fontWeight: 700,
-                          color: "#111827",
-                          marginBottom: 8,
-                        }}
-                      >
-                        {request.full_name}
-                      </div>
+                <tbody>
+                  {requests.map((request) => {
+                    const isPending = request.status === "pending";
+                    const isLoading = actionLoadingId === request.id;
 
-                      <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 4 }}>
-                        Email: {request.email}
-                      </div>
+                    return (
+                      <tr key={request.id}>
+                        <td style={firstCellStyle}>{request.full_name}</td>
+                        <td style={cellStyle}>{request.email}</td>
+                        <td style={cellStyle}>{request.phone || "—"}</td>
+                        <td style={cellStyle}>{request.comment || "—"}</td>
+                        <td style={cellStyle}>
+                          <span style={{ color: getStatusColor(request.status), fontWeight: 700 }}>
+                            {getStatusLabel(request.status)}
+                          </span>
+                        </td>
+                        <td style={cellStyle}>
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            <button
+                              onClick={() => approveRequest(request)}
+                              disabled={!isPending || isLoading}
+                              style={{ ...successButtonStyle, opacity: !isPending || isLoading ? 0.65 : 1 }}
+                            >
+                              {isLoading ? "..." : "Принять"}
+                            </button>
 
-                      <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 4 }}>
-                        Телефон: {request.phone || "—"}
-                      </div>
+                            <button
+                              onClick={() => rejectRequest(request.id)}
+                              disabled={!isPending || isLoading}
+                              style={{ ...dangerButtonStyle, opacity: !isPending || isLoading ? 0.65 : 1 }}
+                            >
+                              Отклонить
+                            </button>
 
-                      <div style={{ fontSize: 14, color: "#6b7280", marginBottom: 8 }}>
-                        Комментарий: {request.comment || "—"}
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: 14,
-                          fontWeight: 700,
-                          color: getStatusColor(request.status),
-                        }}
-                      >
-                        Статус: {getStatusLabel(request.status)}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: 8,
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <button
-                        onClick={() => approveRequest(request)}
-                        disabled={!isPending || isLoading}
-                        style={{
-                          border: "none",
-                          borderRadius: 10,
-                          padding: "10px 14px",
-                          background:
-                            !isPending || isLoading ? "#bbf7d0" : "#16a34a",
-                          color: "#fff",
-                          fontWeight: 700,
-                          cursor:
-                            !isPending || isLoading ? "default" : "pointer",
-                        }}
-                      >
-                        {isLoading ? "Обработка..." : "Принять"}
-                      </button>
-
-                      <button
-                        onClick={() => rejectRequest(request.id)}
-                        disabled={!isPending || isLoading}
-                        style={{
-                          border: "none",
-                          borderRadius: 10,
-                          padding: "10px 14px",
-                          background:
-                            !isPending || isLoading ? "#fecaca" : "#dc2626",
-                          color: "#fff",
-                          fontWeight: 700,
-                          cursor:
-                            !isPending || isLoading ? "default" : "pointer",
-                        }}
-                      >
-                        {isLoading ? "Обработка..." : "Отклонить"}
-                      </button>
-
-                      <button
-                        onClick={() =>
-                          deleteRequest(request.id, request.full_name)
-                        }
-                        disabled={isLoading}
-                        style={{
-                          border: "1px solid #dc2626",
-                          borderRadius: 10,
-                          padding: "10px 14px",
-                          background: "#fff",
-                          color: "#dc2626",
-                          fontWeight: 700,
-                          cursor: isLoading ? "default" : "pointer",
-                        }}
-                      >
-                        Удалить заявку
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                            <button
+                              onClick={() => deleteRequest(request.id, request.full_name)}
+                              disabled={isLoading}
+                              style={outlineDangerButtonStyle}
+                            >
+                              Удалить
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
+        </div>
+      )}
+
+      {viewEmployee && (
+        <div onClick={closeEmployeeCard} style={modalOverlayStyle}>
+          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>Карточка сотрудника</div>
+                <div style={{ color: "#64748b", marginTop: 4 }}>{viewEmployee.full_name || "Без имени"}</div>
+              </div>
+
+              <button onClick={closeEmployeeCard} style={closeButtonStyle}>×</button>
+            </div>
+
+            {!isEditMode && (
+              <>
+                <div style={infoGridStyle}>
+                  <Info label="ФИО" value={viewEmployee.full_name || "—"} />
+                  <Info label="Роль" value={getEmployeeRoleLabel(viewEmployee)} />
+                  <Info label="Телефон" value={viewEmployee.phone || "—"} />
+                  <Info label="Telegram" value={viewEmployee.telegram || "—"} />
+                  <Info label="Тип оплаты" value={formatPaymentType(viewEmployee.payment_type)} />
+                  <Info label="Банк" value={getBankLabel(viewEmployee.bank_name)} />
+                  <Info label="Активность" value={viewEmployee.is_active ? "Активен" : "Неактивен"} />
+                </div>
+
+                <div style={commentBoxStyle}>
+                  <span style={{ fontWeight: 700, color: "#0f172a" }}>Заметки:</span>{" "}
+                  {viewEmployee.notes || "—"}
+                </div>
+
+                <div style={modalActionsStyle}>
+                  <button onClick={startEditEmployee} style={primaryButtonStyle}>
+                    Редактировать
+                  </button>
+
+                  <button onClick={closeEmployeeCard} style={secondaryButtonStyle}>
+                    Закрыть
+                  </button>
+                </div>
+              </>
+            )}
+
+            {isEditMode && editingEmployee && (
+              <>
+                <div style={formGridStyle}>
+                  <Field label="ФИО">
+                    <input
+                      style={inputStyle}
+                      value={editingEmployee.full_name || ""}
+                      onChange={(e) =>
+                        setEditingEmployee({
+                          ...editingEmployee,
+                          full_name: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field label="Телефон">
+                    <input
+                      style={inputStyle}
+                      value={editingEmployee.phone || ""}
+                      onChange={(e) =>
+                        setEditingEmployee({
+                          ...editingEmployee,
+                          phone: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field label="Telegram">
+                    <input
+                      style={inputStyle}
+                      value={editingEmployee.telegram || ""}
+                      onChange={(e) =>
+                        setEditingEmployee({
+                          ...editingEmployee,
+                          telegram: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+
+                  <Field label="Тип оплаты">
+                    <div style={checkboxGroupStyle}>
+                      {paymentOptions.map((option) => {
+                        const selectedValues = parseMultiValue(
+                          editingEmployee.payment_type
+                        );
+                        const checked = selectedValues.includes(option.value);
+
+                        return (
+                          <label key={option.value} style={checkboxLabelStyle}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const nextValues = e.target.checked
+                                  ? [...selectedValues, option.value]
+                                  : selectedValues.filter(
+                                      (value) => value !== option.value
+                                    );
+
+                                setEditingEmployee({
+                                  ...editingEmployee,
+                                  payment_type: nextValues.join(","),
+                                });
+                              }}
+                            />
+                            <span>{option.label}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </Field>
+
+                  <Field label="Банк">
+                    <select
+                      style={inputStyle}
+                      value={editingEmployee.bank_name || ""}
+                      onChange={(e) =>
+                        setEditingEmployee({
+                          ...editingEmployee,
+                          bank_name: e.target.value || null,
+                        })
+                      }
+                    >
+                      {bankOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="Активность">
+                    <select
+                      style={inputStyle}
+                      value={editingEmployee.is_active ? "true" : "false"}
+                      onChange={(e) =>
+                        setEditingEmployee({
+                          ...editingEmployee,
+                          is_active: e.target.value === "true",
+                        })
+                      }
+                    >
+                      <option value="true">Активен</option>
+                      <option value="false">Неактивен</option>
+                    </select>
+                  </Field>
+                </div>
+
+                <div style={{ marginTop: 14 }}>
+                  <Field label="Заметки">
+                    <textarea
+                      style={textareaStyle}
+                      value={editingEmployee.notes || ""}
+                      onChange={(e) =>
+                        setEditingEmployee({
+                          ...editingEmployee,
+                          notes: e.target.value,
+                        })
+                      }
+                    />
+                  </Field>
+                </div>
+
+                <div style={modalActionsStyle}>
+                  <button
+                    onClick={() => setIsEditMode(false)}
+                    style={secondaryButtonStyle}
+                  >
+                    Отмена
+                  </button>
+
+                  <button onClick={saveEmployeeChanges} style={primaryButtonStyle}>
+                    Сохранить
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label style={{ display: "block" }}>
+      <div style={labelStyle}>{label}</div>
+      {children}
+    </label>
+  );
+}
+
+function Info({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={infoBoxStyle}>
+      <div style={infoLabelStyle}>{label}</div>
+      <div style={infoValueStyle}>{value}</div>
+    </div>
+  );
+}
+
+const pageStyle: React.CSSProperties = { display: "flex", flexDirection: "column", gap: 16 };
+
+const sectionStyle: React.CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 20,
+  padding: 24,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
+};
+
+const sectionTitleStyle: React.CSSProperties = { fontSize: 26, fontWeight: 800, color: "#0f172a", textAlign: "center" };
+const sectionTextStyle: React.CSSProperties = { marginTop: 10, color: "#64748b", fontSize: 16, lineHeight: 1.6, textAlign: "center" };
+const tabsStyle: React.CSSProperties = { display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap", marginTop: 18 };
+
+const tabButtonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  borderRadius: 14,
+  padding: "12px 16px",
+  cursor: "pointer",
+  fontWeight: 700,
+  color: "#0f172a",
+};
+
+const activeTabStyle: React.CSSProperties = {
+  ...tabButtonStyle,
+  border: "none",
+  color: "#ffffff",
+  background: "linear-gradient(135deg, #2563eb 0%, #4f46e5 100%)",
+  boxShadow: "0 10px 22px rgba(37, 99, 235, 0.22)",
+};
+
+const tableWrapStyle: React.CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 18,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 8px 22px rgba(15, 23, 42, 0.05)",
+  overflow: "hidden",
+};
+
+const tableTopStyle: React.CSSProperties = {
+  padding: 18,
+  borderBottom: "1px solid #e5edf7",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 14,
+  flexWrap: "wrap",
+};
+
+const tableTitleStyle: React.CSSProperties = { fontSize: 20, fontWeight: 700, color: "#0f172a" };
+const tableSubtitleStyle: React.CSSProperties = { marginTop: 4, color: "#64748b", lineHeight: 1.5 };
+const toolbarStyle: React.CSSProperties = { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" };
+
+const tableStyle: React.CSSProperties = { width: "100%", borderCollapse: "collapse", minWidth: 980 };
+const headCellStyle: React.CSSProperties = {
+  padding: "12px 16px",
+  borderBottom: "1px solid #e5edf7",
+  textAlign: "left",
+  color: "#475569",
+  fontSize: 13,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+};
+const firstCellStyle: React.CSSProperties = { padding: "14px 16px", borderBottom: "1px solid #eef2f7", verticalAlign: "middle" };
+const cellStyle: React.CSSProperties = { padding: "14px 16px", borderBottom: "1px solid #eef2f7", color: "#334155", verticalAlign: "middle" };
+const emptyStyle: React.CSSProperties = { padding: 18, color: "#64748b" };
+
+const inputStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "12px 14px",
+  fontSize: 15,
+  outline: "none",
+  background: "#ffffff",
+  boxSizing: "border-box",
+  width: "100%",
+};
+
+const linkButtonStyle: React.CSSProperties = { border: "none", background: "transparent", padding: 0, color: "#1d4ed8", cursor: "pointer", fontWeight: 700, fontSize: 15 };
+const primaryButtonStyle: React.CSSProperties = { border: "none", borderRadius: 10, padding: "9px 12px", cursor: "pointer", fontWeight: 700, color: "#ffffff", background: "#2563eb" };
+const secondaryButtonStyle: React.CSSProperties = { border: "1px solid #cbd5e1", background: "#ffffff", borderRadius: 12, padding: "10px 14px", cursor: "pointer", fontWeight: 700, color: "#0f172a" };
+const dangerButtonStyle: React.CSSProperties = { border: "none", borderRadius: 10, padding: "9px 12px", background: "#dc2626", color: "#fff", fontWeight: 700, cursor: "pointer" };
+const successButtonStyle: React.CSSProperties = { border: "none", borderRadius: 10, padding: "9px 12px", background: "#16a34a", color: "#fff", fontWeight: 700, cursor: "pointer" };
+const outlineDangerButtonStyle: React.CSSProperties = { border: "1px solid #dc2626", borderRadius: 10, padding: "9px 12px", background: "#fff", color: "#dc2626", fontWeight: 700, cursor: "pointer" };
+
+const successBoxStyle: React.CSSProperties = { background: "#dcfce7", border: "1px solid #86efac", color: "#166534", borderRadius: 14, padding: 14, fontWeight: 600 };
+const errorBoxStyle: React.CSSProperties = { background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 14, padding: 14, fontWeight: 600 };
+
+const modalOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(15, 23, 42, 0.45)",
+  backdropFilter: "blur(4px)",
+  zIndex: 10000,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+};
+const modalBoxStyle: React.CSSProperties = { width: "min(900px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#ffffff", borderRadius: 22, padding: 22, border: "1px solid #dbe4f0", boxShadow: "0 26px 70px rgba(15, 23, 42, 0.28)" };
+const modalHeaderStyle: React.CSSProperties = { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 18 };
+const modalTitleStyle: React.CSSProperties = { fontSize: 24, fontWeight: 800, color: "#0f172a" };
+const closeButtonStyle: React.CSSProperties = { width: 44, height: 44, borderRadius: 14, border: "1px solid #cbd5e1", background: "#ffffff", cursor: "pointer", fontWeight: 800, fontSize: 20, color: "#0f172a" };
+const infoGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 };
+const infoBoxStyle: React.CSSProperties = { background: "#f8fbff", border: "1px solid #dbe4f0", borderRadius: 14, padding: 14, minHeight: 72 };
+const infoLabelStyle: React.CSSProperties = { color: "#64748b", fontSize: 13, marginBottom: 8 };
+const infoValueStyle: React.CSSProperties = { color: "#0f172a", fontWeight: 700, fontSize: 15 };
+const commentBoxStyle: React.CSSProperties = { marginTop: 14, padding: 12, borderRadius: 12, background: "#f8fbff", border: "1px solid #dbe4f0", color: "#475569", lineHeight: 1.6 };
+const modalActionsStyle: React.CSSProperties = { marginTop: 18, display: "flex", justifyContent: "flex-end", gap: 10 };
+
+
+const formGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: 12,
+};
+
+const labelStyle: React.CSSProperties = {
+  color: "#475569",
+  fontWeight: 700,
+  marginBottom: 6,
+};
+
+const textareaStyle: React.CSSProperties = {
+  ...inputStyle,
+  minHeight: 90,
+  resize: "vertical",
+};
+
+
+const checkboxGroupStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+  alignItems: "center",
+  minHeight: 46,
+};
+
+const checkboxLabelStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "10px 12px",
+  background: "#ffffff",
+  color: "#0f172a",
+  fontWeight: 700,
+  cursor: "pointer",
+};

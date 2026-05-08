@@ -13,6 +13,7 @@ import MaterialsDirectory from "./directories/MaterialsDirectory";
 import ConsumablesDirectory from "./directories/ConsumablesDirectory";
 import ProductsDirectory from "./directories/ProductsDirectory";
 import { supabase } from "./supabase";
+import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
 
 type Screen =
   | "dashboard"
@@ -670,7 +671,7 @@ function App() {
     if (currentScreen === "directory-counterparties") {
       if (!canManageDirectories) return renderAccessDenied();
 
-      return renderStubDirectory("Контрагенты");
+       return <CounterpartiesDirectory />;
     }
 
     if (currentScreen === "directory-products") {
