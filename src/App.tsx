@@ -5,20 +5,21 @@ import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
-import FinancePage from "./pages/FinancePage";
-import WarehousePage from "./pages/WarehousePage";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
 import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
 import ConsumablesDirectory from "./directories/ConsumablesDirectory";
 import ProductsDirectory from "./directories/ProductsDirectory";
+import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
+import PurchasesPage from "./pages/PurchasesPage";
 import { supabase } from "./supabase";
 
 type Screen =
   | "dashboard"
   | "production"
   | "warehouse"
-  | "finance"
+  | "purchases"
+  | "sales"
   | "scanner"
   | "employee-home"
   | "directories"
@@ -92,13 +93,13 @@ function App() {
 
   const menuItems = isAdmin
     ? [
-        { key: "dashboard", label: "Дашборд 📊" },
-        { key: "production", label: "Производство 🏭" },
-        { key: "warehouse", label: "Склад 📦" },
-        { key: "finance", label: "Финансы 💰" },
-        { key: "employee-home", label: "Моя смена 👤" },
-        { key: "directories", label: "Справочники 📚" },
-        { key: "scanner", label: "Сканер QR 🔍" },
+      { key: "production", label: "Производство 🏭" },
+      { key: "warehouse", label: "Склад 📦" },
+      { key: "purchases", label: "Закупки 💰" },
+      { key: "sales", label: "Продажи 💰" },
+      { key: "directories", label: "Справочники 📚" },
+      { key: "scanner", label: "Сканер QR 🔎" },
+      { key: "employee-home", label: "Моя смена 👤" },
       ]
     : [
         { key: "scanner", label: "Сканер QR" },
@@ -114,8 +115,10 @@ function App() {
       ? "Производство"
       : currentScreen === "warehouse"
       ? "Склад"
-      : currentScreen === "finance"
-      ? "Финансы"
+      : currentScreen === "purchases"
+      ? "Закупки"
+      : currentScreen === "sales"
+      ? "Продажи"
       : currentScreen === "directories"
       ? "Справочники"
       : currentScreen === "directory-employees"
@@ -148,9 +151,11 @@ function App() {
       : currentScreen === "production"
       ? "Управление производством"
       : currentScreen === "warehouse"
-      ? "Закупки, поступления, остатки и отгрузки"
-      : currentScreen === "finance"
-      ? "Счета, платежи и движение средств"
+      ? "Остатки, движения и складские документы"
+      : currentScreen === "purchases"
+      ? "Заказы поставщикам и поступления"
+      : currentScreen === "sales"
+      ? "Заказы покупателей и отгрузки"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -258,6 +263,15 @@ function App() {
     if (
       currentScreen === "production" &&
       currentEmployee.can_manage_production !== true
+    ) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
+    if (
+      currentScreen === "warehouse" ||
+      currentScreen === "purchases" ||
+      currentScreen === "sales"
     ) {
       setCurrentScreen("employee-home");
       return;
@@ -418,7 +432,11 @@ function App() {
       return;
     }
 
-    if (currentScreen === "warehouse" || currentScreen === "finance") {
+    if (
+      currentScreen === "warehouse" ||
+      currentScreen === "purchases" ||
+      currentScreen === "sales"
+    ) {
       setCurrentScreen(getDefaultScreen());
       return;
     }
@@ -500,6 +518,96 @@ function App() {
           >
             Назад к справочникам
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  function renderModuleStub(
+    title: string,
+    description: string,
+    items: { title: string; description: string }[]
+  ) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 16,
+        }}
+      >
+        <div
+          style={{
+            background: "linear-gradient(180deg, #ffffff 0%, #f8fbff 100%)",
+            borderRadius: 20,
+            padding: 22,
+            border: "1px solid #dbe4f0",
+            boxShadow: "0 10px 24px rgba(15, 23, 42, 0.05)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 28,
+              fontWeight: 800,
+              color: "#0f172a",
+              marginBottom: 8,
+            }}
+          >
+            {title}
+          </div>
+
+          <div
+            style={{
+              color: "#64748b",
+              lineHeight: 1.6,
+              fontSize: 15,
+              maxWidth: 760,
+            }}
+          >
+            {description}
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+            gap: 14,
+          }}
+        >
+          {items.map((item) => (
+            <div
+              key={item.title}
+              style={{
+                background: "#ffffff",
+                borderRadius: 18,
+                padding: 18,
+                border: "1px solid #dbe4f0",
+                boxShadow: "0 8px 18px rgba(15, 23, 42, 0.05)",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 18,
+                  fontWeight: 800,
+                  color: "#0f172a",
+                  marginBottom: 8,
+                }}
+              >
+                {item.title}
+              </div>
+
+              <div
+                style={{
+                  color: "#64748b",
+                  lineHeight: 1.55,
+                  fontSize: 14,
+                }}
+              >
+                {item.description}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     );
@@ -624,11 +732,51 @@ function App() {
     }
 
     if (currentScreen === "warehouse") {
-      return <WarehousePage />;
+      if (!isAdmin) return renderAccessDenied();
+
+      return renderModuleStub(
+        "Склад",
+        "Здесь будет складская логика: остатки материалов, остатки готовой продукции, движения и связанные складские документы.",
+        [
+          {
+            title: "Остатки материалов",
+            description: "Ткани, расходники и сырьё с текущим количеством на складе.",
+          },
+          {
+            title: "Остатки готовой продукции",
+            description: "Готовые изделия, которые можно отгружать покупателям.",
+          },
+          {
+            title: "Движения",
+            description: "Приходы, списания, резервы и корректировки склада.",
+          },
+        ]
+      );
     }
 
-    if (currentScreen === "finance") {
-      return <FinancePage />;
+    if (currentScreen === "purchases") {
+     if (!isAdmin) return renderAccessDenied();
+
+      return <PurchasesPage />;
+    }
+
+    if (currentScreen === "sales") {
+      if (!isAdmin) return renderAccessDenied();
+
+      return renderModuleStub(
+        "Продажи",
+        "Здесь будут документы продаж: заказы покупателей, отгрузки и связь с остатками готовой продукции.",
+        [
+          {
+            title: "Заказы покупателей",
+            description: "Фиксируем потребность клиента и резервируем готовую продукцию.",
+          },
+          {
+            title: "Отгрузки",
+            description: "Списываем готовую продукцию со склада после фактической отгрузки.",
+          },
+        ]
+      );
     }
 
     if (currentScreen === "directories") {
@@ -670,7 +818,7 @@ function App() {
     if (currentScreen === "directory-counterparties") {
       if (!canManageDirectories) return renderAccessDenied();
 
-      return renderStubDirectory("Контрагенты");
+      return <CounterpartiesDirectory />;
     }
 
     if (currentScreen === "directory-products") {
@@ -857,9 +1005,9 @@ function App() {
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
                   (item.key === "production" &&
                     currentScreen === "production") ||
-                  (item.key === "warehouse" &&
-                    currentScreen === "warehouse") ||
-                  (item.key === "finance" && currentScreen === "finance") ||
+                  (item.key === "warehouse" && currentScreen === "warehouse") ||
+                  (item.key === "purchases" && currentScreen === "purchases") ||
+                  (item.key === "sales" && currentScreen === "sales") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -891,8 +1039,11 @@ function App() {
                         case "warehouse":
                           setCurrentScreen("warehouse");
                           break;
-                        case "finance":
-                          setCurrentScreen("finance");
+                        case "purchases":
+                          setCurrentScreen("purchases");
+                          break;
+                        case "sales":
+                          setCurrentScreen("sales");
                           break;
                         case "directories":
                           setCurrentScreen("directories");
