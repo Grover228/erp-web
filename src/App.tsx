@@ -5,6 +5,7 @@ import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
 import ProcurementStatusesPage from "./pages/ProcurementStatusesPage";
+import WarehouseStatusesPage from "./pages/WarehouseStatusesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import FinancePage from "./pages/FinancePage";
 import WarehousePage from "./pages/WarehousePage";
@@ -36,7 +37,8 @@ type Screen =
   | "directory-variants"
   | "directory-units"
   | "directory-statuses"
-  | "procurement-statuses";
+  | "procurement-statuses"
+  | "warehouse-statuses";
 
 type Employee = {
   id: string;
@@ -145,6 +147,8 @@ function App() {
       ? "Статусы"
       : currentScreen === "procurement-statuses"
       ? "Закупки и поступления"
+      : currentScreen === "warehouse-statuses"
+      ? "Складские статусы"
       : "Сканер QR";
 
   const pageSubtitle =
@@ -282,7 +286,8 @@ function App() {
         currentScreen === "directory-variants" ||
         currentScreen === "directory-units" ||
         currentScreen === "directory-statuses" ||
-        currentScreen === "procurement-statuses") &&
+        currentScreen === "procurement-statuses" ||
+        currentScreen === "warehouse-statuses") &&
       currentEmployee.can_manage_directories !== true
     ) {
       setCurrentScreen("employee-home");
@@ -452,7 +457,8 @@ function App() {
       currentScreen === "directory-variants" ||
       currentScreen === "directory-units" ||
       currentScreen === "directory-statuses" ||
-      currentScreen === "procurement-statuses"
+      currentScreen === "procurement-statuses" ||
+      currentScreen === "warehouse-statuses"
     ) {
       setCurrentScreen("directories");
       return;
@@ -706,6 +712,7 @@ function App() {
       return (
         <StatusesDirectory
           onOpenProcurement={() => setCurrentScreen("procurement-statuses")}
+          onOpenWarehouse={() => setCurrentScreen("warehouse-statuses")}
         />
       );
     }
@@ -714,6 +721,12 @@ function App() {
       if (!canManageDirectories) return renderAccessDenied();
 
       return <ProcurementStatusesPage />;
+    }
+
+    if (currentScreen === "warehouse-statuses") {
+      if (!canManageDirectories) return renderAccessDenied();
+
+      return <WarehouseStatusesPage />;
     }
 
     if (currentScreen === "scanner") {
@@ -891,7 +904,8 @@ function App() {
                       currentScreen === "directory-variants" ||
                       currentScreen === "directory-units" ||
                       currentScreen === "directory-statuses" ||
-                      currentScreen === "procurement-statuses")) ||
+                      currentScreen === "procurement-statuses" ||
+                      currentScreen === "warehouse-statuses")) ||
                   (item.key === "scanner" && currentScreen === "scanner") ||
                   (item.key === "employee-home" &&
                     currentScreen === "employee-home");

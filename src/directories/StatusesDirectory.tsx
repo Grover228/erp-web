@@ -2,6 +2,7 @@ import { CSSProperties } from "react";
 
 type StatusesDirectoryProps = {
   onOpenProcurement: () => void;
+  onOpenWarehouse: () => void;
 };
 
 const modules = [
@@ -57,6 +58,7 @@ const modules = [
 
 export default function StatusesDirectory({
   onOpenProcurement,
+  onOpenWarehouse,
 }: StatusesDirectoryProps) {
   return (
     <div style={styles.page}>
@@ -81,10 +83,15 @@ export default function StatusesDirectory({
               borderTop: `5px solid ${module.color}`,
             }}
             onClick={() => {
-              if (module.title === "Закупки") {
-                onOpenProcurement();
-              }
-            }}
+                      if (module.title === "Закупки") {
+                        onOpenProcurement();
+                        return;
+                      }
+
+                      if (module.title === "Склад") {
+                        onOpenWarehouse();
+                      }
+                    }}
           >
             <div style={styles.cardHeader}>
               <div
