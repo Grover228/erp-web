@@ -380,6 +380,11 @@ export default function MaterialsDirectory() {
     return colors.find((item) => item.id === colorIdValue)?.name || "—";
   }
 
+  function getColorItem(colorIdValue: string | null) {
+    if (!colorIdValue) return null;
+    return colors.find((item) => item.id === colorIdValue) || null;
+  }
+
   function getUnitLabel(unitIdValue: string) {
     const unit = units.find((item) => item.id === unitIdValue);
     if (!unit) return "—";
@@ -577,7 +582,7 @@ export default function MaterialsDirectory() {
                         {getCategoryName(material.category_id)}
                       </td>
                       <td style={cellStyle}>
-                        {getColorName(material.color_id)}
+                        <ColorValue color={getColorItem(material.color_id)} />
                       </td>
                       <td style={cellStyle}>{getUnitLabel(material.unit_id)}</td>
                       <td style={cellStyle}>
@@ -647,7 +652,10 @@ export default function MaterialsDirectory() {
                     label="Категория"
                     value={getCategoryName(viewMaterial.category_id)}
                   />
-                  <Info label="Цвет" value={getColorName(viewMaterial.color_id)} />
+                  <Info
+                    label="Цвет"
+                    value={<ColorValue color={getColorItem(viewMaterial.color_id)} />}
+                  />
                   <Info
                     label="Единица измерения"
                     value={getUnitLabel(viewMaterial.unit_id)}
@@ -787,6 +795,7 @@ export default function MaterialsDirectory() {
                       </option>
                     ))}
                   </select>
+                  <ColorPreview color={getColorItem(editColorId)} />
                 </Field>
 
                 <Field label="Единица измерения">
@@ -1013,6 +1022,7 @@ export default function MaterialsDirectory() {
                     </option>
                   ))}
                 </select>
+                <ColorPreview color={getColorItem(colorId)} />
               </Field>
 
               <Field label="Единица измерения">
@@ -1156,7 +1166,65 @@ function Field({
   );
 }
 
-function Info({ label, value }: { label: string; value: string }) {
+
+function ColorValue({ color }: { color: ColorItem | null }) {
+  if (!color) return <span>—</span>;
+
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+      }}
+    >
+      <span
+        style={{
+          width: 16,
+          height: 16,
+          borderRadius: 999,
+          background: color.hex || "#e5e7eb",
+          border: "1px solid #cbd5e1",
+          boxShadow: "0 2px 6px rgba(15, 23, 42, 0.12)",
+          flexShrink: 0,
+        }}
+      />
+      <span>{color.name}</span>
+    </span>
+  );
+}
+
+function ColorPreview({ color }: { color: ColorItem | null }) {
+  if (!color) return null;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginTop: 8,
+        color: "#64748b",
+        fontSize: 13,
+      }}
+    >
+      <span
+        style={{
+          width: 18,
+          height: 18,
+          borderRadius: 999,
+          background: color.hex || "#e5e7eb",
+          border: "1px solid #cbd5e1",
+          boxShadow: "0 2px 6px rgba(15, 23, 42, 0.12)",
+        }}
+      />
+      <span>{color.name}</span>
+      <span>{color.hex || ""}</span>
+    </div>
+  );
+}
+
+function Info({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div
       style={{

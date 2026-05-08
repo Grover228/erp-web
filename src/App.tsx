@@ -4,9 +4,12 @@ import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
 import DirectoriesPage from "./pages/DirectoriesPage";
+import ProcurementStatusesPage from "./pages/ProcurementStatusesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import FinancePage from "./pages/FinancePage";
 import WarehousePage from "./pages/WarehousePage";
+import StatusesDirectory from "./directories/StatusesDirectory";
+import VariantsDirectory from "./directories/VariantsDirectory";
 import EmployeesDirectory from "./directories/EmployeesDirectory";
 import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
@@ -32,7 +35,8 @@ type Screen =
   | "directory-operations"
   | "directory-variants"
   | "directory-units"
-  | "directory-statuses";
+  | "directory-statuses"
+  | "procurement-statuses";
 
 type Employee = {
   id: string;
@@ -139,6 +143,8 @@ function App() {
       ? "Единицы измерения"
       : currentScreen === "directory-statuses"
       ? "Статусы"
+      : currentScreen === "procurement-statuses"
+      ? "Закупки и поступления"
       : "Сканер QR";
 
   const pageSubtitle =
@@ -275,7 +281,8 @@ function App() {
         currentScreen === "directory-operations" ||
         currentScreen === "directory-variants" ||
         currentScreen === "directory-units" ||
-        currentScreen === "directory-statuses") &&
+        currentScreen === "directory-statuses" ||
+        currentScreen === "procurement-statuses") &&
       currentEmployee.can_manage_directories !== true
     ) {
       setCurrentScreen("employee-home");
@@ -444,7 +451,8 @@ function App() {
       currentScreen === "directory-operations" ||
       currentScreen === "directory-variants" ||
       currentScreen === "directory-units" ||
-      currentScreen === "directory-statuses"
+      currentScreen === "directory-statuses" ||
+      currentScreen === "procurement-statuses"
     ) {
       setCurrentScreen("directories");
       return;
@@ -689,13 +697,23 @@ function App() {
     if (currentScreen === "directory-variants") {
       if (!canManageDirectories) return renderAccessDenied();
 
-      return renderStubDirectory("Цвета и размеры");
+      return <VariantsDirectory />;
     }
 
     if (currentScreen === "directory-statuses") {
       if (!canManageDirectories) return renderAccessDenied();
 
-      return renderStubDirectory("Статусы");
+      return (
+        <StatusesDirectory
+          onOpenProcurement={() => setCurrentScreen("procurement-statuses")}
+        />
+      );
+    }
+
+    if (currentScreen === "procurement-statuses") {
+      if (!canManageDirectories) return renderAccessDenied();
+
+      return <ProcurementStatusesPage />;
     }
 
     if (currentScreen === "scanner") {
@@ -872,7 +890,8 @@ function App() {
                       currentScreen === "directory-operations" ||
                       currentScreen === "directory-variants" ||
                       currentScreen === "directory-units" ||
-                      currentScreen === "directory-statuses")) ||
+                      currentScreen === "directory-statuses" ||
+                      currentScreen === "procurement-statuses")) ||
                   (item.key === "scanner" && currentScreen === "scanner") ||
                   (item.key === "employee-home" &&
                     currentScreen === "employee-home");
