@@ -54,7 +54,6 @@ export type Material = {
   id: string;
   name: string;
   article: string | null;
-  color_id?: string | null;
   default_price?: number | null;
 };
 
@@ -63,12 +62,6 @@ export type Consumable = {
   name: string;
   article: string | null;
   default_price?: number | null;
-};
-
-export type Color = {
-  id: string;
-  name: string;
-  hex: string | null;
 };
 
 export type Counterparty = {
@@ -82,6 +75,16 @@ type Status = {
   code: string;
   name: string;
   color: string | null;
+};
+
+type StockAvailability = {
+  item_type: SalesItemType;
+  product_id: string | null;
+  material_id: string | null;
+  consumable_id: string | null;
+  quantity_on_hand: number;
+  quantity_reserved: number;
+  quantity_available: number;
 };
 
 type CustomerOrderItemDraft = {
@@ -100,9 +103,8 @@ type CustomerOrderModalProps = {
   orderItems: CustomerOrderItem[];
   orderLoading: boolean;
   products: Product[];
-  materials: Material[];
-  consumables: Consumable[];
-  colors: Color[];
+  materials?: Material[];
+  consumables?: Consumable[];
   counterparties: Counterparty[];
   directoriesLoading: boolean;
   onClose: () => void;
@@ -137,9 +139,8 @@ export default function CustomerOrderModal({
   orderItems,
   orderLoading,
   products,
-  materials,
-  consumables,
-  colors,
+  materials = [],
+  consumables = [],
   counterparties,
   directoriesLoading,
   onClose,
@@ -151,6 +152,8 @@ export default function CustomerOrderModal({
   const [error, setError] = useState("");
 
   const [statuses, setStatuses] = useState<Status[]>([]);
+  const [stockAvailability, setStockAvailability] = useState<StockAvailability[]>([]);
+  const [stockLoading, setStockLoading] = useState(false);
 
   const [orderDate, setOrderDate] = useState(
     order?.order_date || new Date().toISOString().slice(0, 10),
@@ -171,6 +174,7 @@ export default function CustomerOrderModal({
 
   useEffect(() => {
     loadStatuses();
+    loadStockAvailability();
   }, []);
 
   useEffect(() => {
@@ -190,6 +194,28 @@ export default function CustomerOrderModal({
       setStatuses((data as Status[]) || []);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка загрузки статусов");
+    }
+  }
+
+  async function loadStockAvailability() {
+    try {
+      setStockLoading(true);
+
+      const { data, error } = await supabase
+        .from("stock_available")
+        .select("item_type, product_id, material_id, consumable_id, quantity_on_hand, quantity_reserved, quantity_available");
+
+      if (error) throw error;
+
+      setStockAvailability((data as StockAvailability[]) || []);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка загрузки складских остатков",
+      );
+    } finally {
+      setStockLoading(false);
     }
   }
 
@@ -312,35 +338,6 @@ export default function CustomerOrderModal({
     return "Товар";
   }
 
-  function getColorById(colorId: string | null | undefined) {
-    if (!colorId) return null;
-    return colors.find((color) => color.id === colorId) || null;
-  }
-
-  function getMaterialColor(materialId: string | null | undefined) {
-    if (!materialId) return null;
-    const material = materials.find((item) => item.id === materialId);
-    return getColorById(material?.color_id);
-  }
-
-  function getCustomerOrderItemColor(item: CustomerOrderItem) {
-    if (item.item_type !== "material") return null;
-    return getColorById(item.materials?.color_id || null);
-  }
-
-  function renderColorChip(color: Color | null) {
-    if (!color) {
-      return <span style={emptyColorChipStyle}>Цвет не указан</span>;
-    }
-
-    return (
-      <span style={colorChipStyle}>
-        <span style={{ ...colorDotStyle, background: color.hex || "#e2e8f0" }} />
-        {color.name}
-      </span>
-    );
-  }
-
   function updateItem(id: string, patch: Partial<CustomerOrderItemDraft>) {
     setItems((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   }
@@ -421,6 +418,108 @@ export default function CustomerOrderModal({
     return item.products?.article || "";
   }
 
+  function getStockAvailabilityForDraftItem(item: CustomerOrderItemDraft) {
+    const selectedId = getDraftItemSelectedId(item);
+
+    if (!selectedId) return null;
+
+    return (
+      stockAvailability.find((stock) => {
+        if (stock.item_type !== item.item_type) return false;
+        if (item.item_type === "product") return stock.product_id === selectedId;
+        if (item.item_type === "material") return stock.material_id === selectedId;
+        if (item.item_type === "consumable") return stock.consumable_id === selectedId;
+        return false;
+      }) || null
+    );
+  }
+
+  function getStockAvailabilityForPickerItem(itemType: SalesItemType, itemId: string) {
+    return (
+      stockAvailability.find((stock) => {
+        if (stock.item_type !== itemType) return false;
+        if (itemType === "product") return stock.product_id === itemId;
+        if (itemType === "material") return stock.material_id === itemId;
+        if (itemType === "consumable") return stock.consumable_id === itemId;
+        return false;
+      }) || null
+    );
+  }
+
+  function getCurrentOrderQuantityForDraftItem(item: CustomerOrderItemDraft) {
+    if (!order) return 0;
+
+    return orderItems
+      .filter((sourceItem) => {
+        if (sourceItem.id === item.id) return true;
+        if (sourceItem.item_type !== item.item_type) return false;
+        if (item.item_type === "product") return sourceItem.product_id === item.product_id;
+        if (item.item_type === "material") return sourceItem.material_id === item.material_id;
+        if (item.item_type === "consumable") return sourceItem.consumable_id === item.consumable_id;
+        return false;
+      })
+      .reduce((sum, sourceItem) => sum + Number(sourceItem.quantity || 0), 0);
+  }
+
+  function getAvailableQuantity(item: CustomerOrderItemDraft) {
+    return (
+      Number(getStockAvailabilityForDraftItem(item)?.quantity_available || 0) +
+      getCurrentOrderQuantityForDraftItem(item)
+    );
+  }
+
+  function getOnHandQuantity(item: CustomerOrderItemDraft) {
+    return Number(getStockAvailabilityForDraftItem(item)?.quantity_on_hand || 0);
+  }
+
+  function getReservedQuantity(item: CustomerOrderItemDraft) {
+    return Number(getStockAvailabilityForDraftItem(item)?.quantity_reserved || 0);
+  }
+
+  function isItemQuantityAboveAvailable(item: CustomerOrderItemDraft) {
+    const selectedId = getDraftItemSelectedId(item);
+
+    if (!selectedId) return false;
+
+    return Number(item.quantity || 0) > getAvailableQuantity(item);
+  }
+
+  function getStockWarnings() {
+    return items
+      .filter(isItemQuantityAboveAvailable)
+      .map((item) => {
+        const name = getSelectedDraftProductName(item) || getItemTypeLabel(item.item_type);
+        const requested = Number(item.quantity || 0);
+        const available = getAvailableQuantity(item);
+
+        return `${name}: нужно ${requested}, доступно ${available}`;
+      });
+  }
+
+  function hasStockProblems() {
+    return getStockWarnings().length > 0;
+  }
+
+  function getStockWarningText() {
+    const warnings = getStockWarnings();
+
+    if (warnings.length === 0) return "";
+
+    return `Недостаточно остатка на складе: ${warnings.join("; ")}`;
+  }
+
+  function openLinkedDocumentsStub() {
+    window.alert("Связанные документы по заказу покупателя подключим следующим шагом.");
+  }
+
+  function openPaymentStub() {
+    window.alert("Связь с финансами: счёт, входящий платёж и задолженность подключим следующим этапом.");
+  }
+
+  function openProductionStub() {
+    window.alert("Связь с производством: потребность, техкарта и производственное задание подключим после складских документов.");
+  }
+
   function openProductPicker(itemId: string) {
     const currentItem = items.find((item) => item.id === itemId);
 
@@ -487,6 +586,39 @@ export default function CustomerOrderModal({
     setProductPickerItemId("");
   }
 
+  async function createStockReservations(customerOrderId: string, savedItems: CustomerOrderItem[]) {
+    const reservations = savedItems.map((item) => ({
+      source_document_type: "customer_order",
+      source_document_id: customerOrderId,
+      source_document_item_id: item.id,
+      item_type: item.item_type,
+      product_id: item.product_id,
+      material_id: item.material_id,
+      consumable_id: item.consumable_id,
+      quantity: item.quantity,
+      status: "active",
+      updated_at: new Date().toISOString(),
+    }));
+
+    if (reservations.length === 0) return;
+
+    const { error } = await supabase.from("stock_reservations").insert(reservations);
+
+    if (error) throw error;
+  }
+
+  async function replaceStockReservations(customerOrderId: string, savedItems: CustomerOrderItem[]) {
+    const { error: deleteReservationsError } = await supabase
+      .from("stock_reservations")
+      .delete()
+      .eq("source_document_type", "customer_order")
+      .eq("source_document_id", customerOrderId);
+
+    if (deleteReservationsError) throw deleteReservationsError;
+
+    await createStockReservations(customerOrderId, savedItems);
+  }
+
   function getStatusByCode(statusCode: string) {
     return statuses.find((item) => item.code === statusCode) || null;
   }
@@ -528,6 +660,7 @@ export default function CustomerOrderModal({
 
       const preparedItems = prepareItemsForSave();
       if (preparedItems.length === 0) throw new Error("Добавь хотя бы одну позицию заказа");
+      if (hasStockProblems()) throw new Error(getStockWarningText());
 
       const selectedCustomerName = getSelectedCustomerName();
       const draftStatus = getStatusByCode("draft");
@@ -548,14 +681,20 @@ export default function CustomerOrderModal({
 
       if (orderError) throw orderError;
 
-      const { error: itemsError } = await supabase.from("customer_order_items").insert(
-        preparedItems.map((item) => ({
-          ...item,
-          customer_order_id: createdOrder.id,
-        })),
-      );
+      const { data: savedItems, error: itemsError } = await supabase
+        .from("customer_order_items")
+        .insert(
+          preparedItems.map((item) => ({
+            ...item,
+            customer_order_id: createdOrder.id,
+          })),
+        )
+        .select("id, customer_order_id, item_type, product_id, material_id, consumable_id, quantity, price, amount");
 
       if (itemsError) throw itemsError;
+
+      await createStockReservations(createdOrder.id, (savedItems as CustomerOrderItem[]) || []);
+      await loadStockAvailability();
       onSaved();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка создания заказа покупателя");
@@ -573,6 +712,7 @@ export default function CustomerOrderModal({
 
       const preparedItems = prepareItemsForSave();
       if (preparedItems.length === 0) throw new Error("Добавь хотя бы одну позицию заказа");
+      if (hasStockProblems()) throw new Error(getStockWarningText());
 
       const selectedCustomerName = getSelectedCustomerName();
 
@@ -597,14 +737,20 @@ export default function CustomerOrderModal({
 
       if (deleteItemsError) throw deleteItemsError;
 
-      const { error: itemsError } = await supabase.from("customer_order_items").insert(
-        preparedItems.map((item) => ({
-          ...item,
-          customer_order_id: order.id,
-        })),
-      );
+      const { data: savedItems, error: itemsError } = await supabase
+        .from("customer_order_items")
+        .insert(
+          preparedItems.map((item) => ({
+            ...item,
+            customer_order_id: order.id,
+          })),
+        )
+        .select("id, customer_order_id, item_type, product_id, material_id, consumable_id, quantity, price, amount");
 
       if (itemsError) throw itemsError;
+
+      await replaceStockReservations(order.id, (savedItems as CustomerOrderItem[]) || []);
+      await loadStockAvailability();
       onSaved();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка сохранения заказа");
@@ -622,6 +768,14 @@ export default function CustomerOrderModal({
     try {
       setDeleting(true);
       setError("");
+
+      const { error: reservationsError } = await supabase
+        .from("stock_reservations")
+        .delete()
+        .eq("source_document_type", "customer_order")
+        .eq("source_document_id", order.id);
+
+      if (reservationsError) throw reservationsError;
 
       const { error } = await supabase.from("customer_orders").delete().eq("id", order.id);
       if (error) throw error;
@@ -653,14 +807,17 @@ export default function CustomerOrderModal({
         </div>
 
         {directoriesLoading && <div style={{ color: "#64748b", fontWeight: 700 }}>Загружаю справочники...</div>}
+        {stockLoading && <div style={{ color: "#64748b", fontWeight: 700 }}>Загружаю остатки склада...</div>}
+        {stockWarningText && <div style={stockWarningStyle}>{stockWarningText}</div>}
 
         <div style={{ display: "grid", gap: 10 }}>
           {items.map((item, index) => {
             const selectedName = getSelectedDraftProductName(item);
             const selectedArticle = getSelectedDraftProductArticle(item);
+            const aboveAvailable = isItemQuantityAboveAvailable(item);
 
             return (
-              <div key={item.id} style={compactItemRowStyle}>
+              <div key={item.id} style={compactItemRowStyleWithStockWarning(aboveAvailable)}>
                 <div style={{ fontWeight: 900, color: "#64748b" }}>#{index + 1}</div>
 
                 <button type="button" onClick={() => openProductPicker(item.id)} style={chooseProductButtonStyle}>
@@ -669,27 +826,15 @@ export default function CustomerOrderModal({
 
                 <div style={selectedProductBoxStyle}>
                   {selectedName ? (
-                    <>
-                      {item.item_type === "material" && getMaterialColor(item.material_id)?.hex && (
-                        <span
-                          style={{
-                            ...colorDotStyle,
-                            background: getMaterialColor(item.material_id)?.hex || "#e2e8f0",
-                          }}
-                        />
-                      )}
-
-                      <div style={{ display: "grid", gap: 2 }}>
-                        <div style={selectedProductTitleStyle}>{selectedName}</div>
-                        <div style={selectedProductMetaStyle}>
-                          {getItemTypeLabel(item.item_type)}
-                          {item.item_type === "material" && getMaterialColor(item.material_id)
-                            ? ` · ${getMaterialColor(item.material_id)?.name}`
-                            : ""}
-                          {selectedArticle ? ` · ${selectedArticle}` : ""}
-                        </div>
+                    <div style={{ display: "grid", gap: 2 }}>
+                      <div style={selectedProductTitleStyle}>{selectedName}</div>
+                      <div style={selectedProductMetaStyle}>
+                        {getItemTypeLabel(item.item_type)}{selectedArticle ? ` · ${selectedArticle}` : ""}
                       </div>
-                    </>
+                      <div style={aboveAvailable ? stockInfoDangerStyle : stockInfoStyle}>
+                        Остаток: {getOnHandQuantity(item)} · Резерв: {getReservedQuantity(item)} · Доступно: {getAvailableQuantity(item)}
+                      </div>
+                    </div>
                   ) : (
                     <div style={selectedProductEmptyStyle}>Товар не выбран</div>
                   )}
@@ -756,6 +901,8 @@ export default function CustomerOrderModal({
   }
 
   const orderStatus = getOrderStatus();
+  const stockWarningText = getStockWarningText();
+  const saveDisabled = saving || hasStockProblems();
 
   return (
     <div onClick={onClose} style={modalOverlayStyle}>
@@ -784,10 +931,26 @@ export default function CustomerOrderModal({
               <>
                 <button
                   type="button"
+                  onClick={openLinkedDocumentsStub}
+                  style={linkedDocumentsButtonStyle}
+                >
+                  🔗 Связанные документы
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => window.alert("Создание отгрузки из заказа добавим следующим шагом.")}
                   style={createShipmentButtonStyle}
                 >
                   + Создать отгрузку
+                </button>
+
+                <button type="button" onClick={openPaymentStub} style={paymentButtonStyle}>
+                  💳 Финансы
+                </button>
+
+                <button type="button" onClick={openProductionStub} style={productionButtonStyle}>
+                  🏭 Производство
                 </button>
 
                 <button type="button" onClick={startEditOrder} style={editOrderButtonStyle}>
@@ -853,8 +1016,8 @@ export default function CustomerOrderModal({
             </label>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button onClick={mode === "create" ? createCustomerOrder : saveOrderChanges} disabled={saving} style={saveButtonStyle(saving)}>
-                {saving ? "Сохраняю..." : mode === "create" ? "Сохранить" : "Сохранить изменения"}
+              <button onClick={mode === "create" ? createCustomerOrder : saveOrderChanges} disabled={saveDisabled} style={saveButtonStyle(saveDisabled)}>
+                {saving ? "Сохраняю..." : hasStockProblems() ? "Недостаточно остатка" : mode === "create" ? "Сохранить" : "Сохранить изменения"}
               </button>
 
               <button onClick={mode === "create" ? onClose : cancelEditOrder} disabled={saving} style={cancelButtonStyle}>
@@ -884,6 +1047,32 @@ export default function CustomerOrderModal({
 
             {order?.comment && <div style={commentBoxStyle}>{order.comment}</div>}
 
+            <div style={workflowGridStyle}>
+              <div style={workflowCardStyle}>
+                <div style={workflowIconStyle}>📦</div>
+                <div>
+                  <div style={workflowTitleStyle}>Склад</div>
+                  <div style={workflowTextStyle}>Ожидает отгрузку. Остатки и резервы будут учитываться при проведении.</div>
+                </div>
+              </div>
+
+              <div style={workflowCardStyle}>
+                <div style={workflowIconStyle}>💳</div>
+                <div>
+                  <div style={workflowTitleStyle}>Финансы</div>
+                  <div style={workflowTextStyle}>Здесь появятся счёт, оплата покупателя и задолженность.</div>
+                </div>
+              </div>
+
+              <div style={workflowCardStyle}>
+                <div style={workflowIconStyle}>🏭</div>
+                <div>
+                  <div style={workflowTitleStyle}>Производство</div>
+                  <div style={workflowTextStyle}>Если товара не хватает, будет создаваться потребность на производство.</div>
+                </div>
+              </div>
+            </div>
+
             <div>
               <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>Позиции заказа</div>
 
@@ -899,7 +1088,6 @@ export default function CustomerOrderModal({
                         <th style={thStyle}>Тип</th>
                         <th style={thStyle}>Номенклатура</th>
                         <th style={thStyle}>Артикул</th>
-                        <th style={thStyle}>Цвет</th>
                         <th style={thStyle}>Кол-во</th>
                         <th style={thStyle}>Цена</th>
                         <th style={thStyle}>Сумма</th>
@@ -911,11 +1099,6 @@ export default function CustomerOrderModal({
                           <td style={tdStyle}>{getItemTypeLabel(item.item_type)}</td>
                           <td style={tdStyle}>{getProductName(item)}</td>
                           <td style={tdStyle}>{getProductArticle(item) || "—"}</td>
-                          <td style={tdStyle}>
-                            {item.item_type === "material"
-                              ? renderColorChip(getCustomerOrderItemColor(item))
-                              : "—"}
-                          </td>
                           <td style={tdStyle}>{item.quantity}</td>
                           <td style={tdStyle}>{Number(item.price || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽</td>
                           <td style={tdStyle}>{Number(item.amount || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽</td>
@@ -960,24 +1143,29 @@ export default function CustomerOrderModal({
                 {getFilteredProducts().length === 0 ? (
                   <div style={emptyStyle}>Товары не найдены.</div>
                 ) : (
-                  getFilteredProducts().map((item) => (
-                    <button key={`${productPickerType}-${item.id}`} type="button" onClick={() => selectProduct(item.id)} style={productCardStyle}>
-                      <div style={productCardTitleStyle}>{item.name}</div>
-                      <div style={productCardSubStyle}>
-                        {getItemTypeLabel(productPickerType)} · {item.article || "без артикула"}
-                      </div>
+                  getFilteredProducts().map((item) => {
+                    const stock = getStockAvailabilityForPickerItem(productPickerType, item.id);
+                    const available = Number(stock?.quantity_available || 0);
+                    const onHand = Number(stock?.quantity_on_hand || 0);
+                    const reserved = Number(stock?.quantity_reserved || 0);
 
-                      <div style={productCardParamsStyle}>
-                        {productPickerType === "material" && (
-                          renderColorChip(getColorById((item as Material).color_id))
-                        )}
-
-                        <div style={productParamStyle}>
-                          Цена: {Number(getAnyItemPrice(item) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                    return (
+                      <button key={`${productPickerType}-${item.id}`} type="button" onClick={() => selectProduct(item.id)} style={productCardStyle}>
+                        <div style={productCardTitleStyle}>{item.name}</div>
+                        <div style={productCardSubStyle}>
+                          {getItemTypeLabel(productPickerType)} · {item.article || "без артикула"}
                         </div>
-                      </div>
-                    </button>
-                  ))
+                        <div style={productPickerParamsStyle}>
+                          <span style={productParamStyle}>
+                            Цена: {Number(getAnyItemPrice(item) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          </span>
+                          <span style={available <= 0 ? productParamDangerStyle : productParamStyle}>
+                            Остаток: {onHand} · Резерв: {reserved} · Доступно: {available}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })
                 )}
               </div>
             </div>
@@ -1029,6 +1217,18 @@ const modalOverlayStyle: React.CSSProperties = { position: "fixed", inset: 0, ba
 const modalStyle: React.CSSProperties = { width: "min(1120px, 96vw)", maxHeight: "84vh", overflowY: "auto", background: "#ffffff", borderRadius: 18, padding: 14, border: "1px solid #dbe4f0", boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)", display: "grid", gap: 10 };
 const modalHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" };
 const modalActionsStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" };
+const linkedDocumentsButtonStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#ffffff",
+  color: "#334155",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+};
+
 const createShipmentButtonStyle: React.CSSProperties = { border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#15803d", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap" };
 const editOrderButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap" };
 const deleteOrderButtonStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fff1f2", color: "#991b1b", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap" };
@@ -1045,6 +1245,14 @@ const searchCustomerButtonStyle: React.CSSProperties = { border: "1px solid #bfd
 const itemsBlockStyle: React.CSSProperties = { border: "1px solid #dbe4f0", borderRadius: 14, padding: 12, background: "#ffffff", display: "grid", gap: 10 };
 const itemsHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" };
 const compactItemRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "42px 110px minmax(220px, 1fr) 120px 115px 125px 90px", gap: 8, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 10, background: "#f8fafc", overflowX: "auto" };
+
+function compactItemRowStyleWithStockWarning(hasWarning: boolean): React.CSSProperties {
+  return {
+    ...compactItemRowStyle,
+    border: hasWarning ? "1px solid #fca5a5" : compactItemRowStyle.border,
+    background: hasWarning ? "#fef2f2" : compactItemRowStyle.background,
+  };
+}
 const chooseProductButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 10, padding: "9px 10px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap", flexShrink: 0 };
 const selectedProductBoxStyle: React.CSSProperties = { minHeight: 44, border: "1px solid #cbd5e1", borderRadius: 10, background: "#ffffff", padding: "8px 12px", display: "flex", alignItems: "center", gap: 10, boxSizing: "border-box" };
 const selectedProductTitleStyle: React.CSSProperties = { color: "#0f172a", fontSize: 14, fontWeight: 800, lineHeight: 1.2 };
@@ -1057,12 +1265,57 @@ const deleteButtonStyle: React.CSSProperties = { border: "1px solid #fecaca", ba
 const saveButtonStyle = (saving: boolean): React.CSSProperties => ({ border: "none", background: saving ? "#94a3b8" : "#16a34a", color: "#ffffff", borderRadius: 10, padding: "10px 15px", cursor: saving ? "not-allowed" : "pointer", fontWeight: 800 });
 const cancelButtonStyle: React.CSSProperties = { border: "1px solid #cbd5e1", background: "#ffffff", color: "#0f172a", borderRadius: 10, padding: "10px 15px", cursor: "pointer", fontWeight: 800 };
 const errorStyle: React.CSSProperties = { background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", borderRadius: 14, padding: 14, fontWeight: 700 };
+const stockWarningStyle: React.CSSProperties = { background: "#fef2f2", border: "1px solid #fca5a5", color: "#991b1b", borderRadius: 12, padding: 12, fontWeight: 800 };
+const stockInfoStyle: React.CSSProperties = { color: "#64748b", fontSize: 12, fontWeight: 800 };
+const stockInfoDangerStyle: React.CSSProperties = { color: "#991b1b", fontSize: 12, fontWeight: 900 };
 const emptyStyle: React.CSSProperties = { border: "1px dashed #cbd5e1", borderRadius: 16, padding: 22, textAlign: "center", color: "#64748b" };
 const modalInfoGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 };
 const modalInfoCardStyle: React.CSSProperties = { border: "1px solid #dbe4f0", borderRadius: 16, padding: 14, background: "#f8fafc" };
 const modalInfoLabelStyle: React.CSSProperties = { color: "#64748b", fontSize: 13, fontWeight: 800, marginBottom: 4 };
 const modalInfoValueStyle: React.CSSProperties = { color: "#0f172a", fontSize: 18, fontWeight: 900 };
 const statusBadgeStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", width: "fit-content", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "7px 12px", fontSize: 15, fontWeight: 900, whiteSpace: "nowrap" };
+const workflowGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: 10,
+};
+
+const workflowCardStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  borderRadius: 16,
+  padding: 12,
+  background: "#ffffff",
+  display: "grid",
+  gridTemplateColumns: "38px 1fr",
+  gap: 10,
+  alignItems: "start",
+};
+
+const workflowIconStyle: React.CSSProperties = {
+  width: 38,
+  height: 38,
+  borderRadius: 12,
+  border: "1px solid #dbe4f0",
+  background: "#f8fafc",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: 18,
+};
+
+const workflowTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 14,
+  fontWeight: 900,
+};
+
+const workflowTextStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 13,
+  lineHeight: 1.35,
+  marginTop: 3,
+};
+
 const commentBoxStyle: React.CSSProperties = { border: "1px solid #dbe4f0", borderRadius: 16, padding: 14, background: "#ffffff", color: "#334155", lineHeight: 1.5 };
 const tableWrapStyle: React.CSSProperties = { width: "100%", overflowX: "auto", border: "1px solid #dbe4f0", borderRadius: 16 };
 const tableStyle: React.CSSProperties = { width: "100%", borderCollapse: "collapse", background: "#ffffff", minWidth: 760 };
@@ -1076,53 +1329,10 @@ const pickerListStyle: React.CSSProperties = { display: "grid", gap: 9, maxHeigh
 const productCardStyle: React.CSSProperties = { border: "1px solid #dbe4f0", background: "#ffffff", color: "#0f172a", borderRadius: 14, padding: 13, cursor: "pointer", textAlign: "left", display: "grid", gap: 6 };
 const productCardTitleStyle: React.CSSProperties = { fontSize: 17, fontWeight: 900, color: "#0f172a" };
 const productCardSubStyle: React.CSSProperties = { color: "#64748b", fontSize: 13 };
-const productCardParamsStyle: React.CSSProperties = {
-  display: "flex",
-  flexWrap: "wrap",
-  gap: 8,
-  alignItems: "center",
-};
-
 const productParamStyle: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid #e2e8f0", background: "#f8fafc", color: "#475569", borderRadius: 999, padding: "5px 9px", fontSize: 12, fontWeight: 800, width: "fit-content" };
-
-const colorChipStyle: React.CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 7,
-  width: "fit-content",
-  border: "1px solid #dbe4f0",
-  background: "#ffffff",
-  color: "#334155",
-  borderRadius: 999,
-  padding: "5px 9px",
-  fontSize: 12,
-  fontWeight: 800,
-};
-
-const emptyColorChipStyle: React.CSSProperties = {
-  display: "inline-flex",
-  width: "fit-content",
-  border: "1px solid #e2e8f0",
-  background: "#f8fafc",
-  color: "#94a3b8",
-  borderRadius: 999,
-  padding: "5px 9px",
-  fontSize: 12,
-  fontWeight: 800,
-};
-
-const colorDotStyle: React.CSSProperties = {
-  width: 14,
-  height: 14,
-  borderRadius: 999,
-  border: "1px solid #cbd5e1",
-  flexShrink: 0,
-};
-const productTypeTabsStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
-  gap: 8,
-};
+const productParamDangerStyle: React.CSSProperties = { ...productParamStyle, border: "1px solid #fca5a5", background: "#fef2f2", color: "#991b1b" };
+const productPickerParamsStyle: React.CSSProperties = { display: "flex", gap: 8, flexWrap: "wrap" };
+const productTypeTabsStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 8 };
 
 function productTypeTabStyle(active: boolean): React.CSSProperties {
   return {
@@ -1142,3 +1352,28 @@ const customerFiltersStyle: React.CSSProperties = { display: "grid", gridTemplat
 function customerRowStyle(active: boolean): React.CSSProperties {
   return { border: active ? "1px solid #93c5fd" : "1px solid #dbe4f0", background: active ? "#eff6ff" : "#ffffff", color: "#0f172a", borderRadius: 12, padding: "12px 14px", cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", textAlign: "left" };
 }
+
+const paymentButtonStyle: React.CSSProperties = {
+  border: "1px solid #fed7aa",
+  background: "#fff7ed",
+  color: "#c2410c",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+};
+
+const productionButtonStyle: React.CSSProperties = {
+  border: "1px solid #ddd6fe",
+  background: "#f5f3ff",
+  color: "#6d28d9",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+  fontSize: 13,
+  whiteSpace: "nowrap",
+};
+
