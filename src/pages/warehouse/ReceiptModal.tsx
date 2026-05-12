@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
-import LinkedDocumentsModal from "../purchases/LinkedDocumentsModal";
 
 export type PurchaseItemType = "material" | "consumable";
 
@@ -12,6 +11,7 @@ export type SupplierReceipt = {
   supplier_id: string | null;
   supplier_name: string | null;
   status: string;
+  status_id?: string | null;
   comment: string | null;
   total_amount: number;
   created_at: string | null;
@@ -40,6 +40,16 @@ export type Color = {
   id: string;
   name: string;
   hex: string | null;
+};
+
+type Status = {
+  id: string;
+  code: string;
+  name: string;
+  color: string | null;
+  status_categories?: {
+    code: string;
+  } | null;
 };
 
 type ReceiptItemDraft = {
@@ -85,12 +95,20 @@ export default function ReceiptModal({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [isLinkedDocumentsModalOpen, setIsLinkedDocumentsModalOpen] =
-    useState(false);
   const [error, setError] = useState("");
+  const [currentReceipt, setCurrentReceipt] = useState(receipt);
+  const [availableStatuses, setAvailableStatuses] = useState<Status[]>([]);
+  const [isStatusPickerOpen, setIsStatusPickerOpen] = useState(false);
+  const [changingStatus, setChangingStatus] = useState(false);
 
   useEffect(() => {
+    setCurrentReceipt(receipt);
+    setReceiptDate(receipt.receipt_date || "");
+    setSupplierName(receipt.supplier_name || "");
+    setComment(receipt.comment || "");
+    setIsStatusPickerOpen(false);
     loadItems();
+    loadAvailableStatuses();
   }, [receipt.id]);
 
   async function loadItems() {
@@ -205,7 +223,7 @@ export default function ReceiptModal({
 
   async function deleteReceipt() {
     const confirmed = window.confirm(
-      `Удалить приёмку ${receipt.receipt_number || "Черновик приёмки"}?`,
+      `Удалить приёмку ${currentReceipt.receipt_number || "Черновик приёмки"}?`,
     );
 
     if (!confirmed) return;
@@ -232,22 +250,122 @@ export default function ReceiptModal({
     }
   }
 
-  function handleOpenLinkedDocument(
-    type: "supplier_order" | "supplier_receipt",
-    id: string,
-  ) {
-    if (type === "supplier_receipt" && id === receipt.id) return;
+  async function loadAvailableStatuses() {
+    try {
+      const { data, error } = await supabase
+        .from("statuses")
+        .select(
+          `
+          id,
+          code,
+          name,
+          color,
+          status_categories(code)
+        `,
+        )
+        .order("sort_order", { ascending: true });
 
-    window.alert(
-      "Открытие заказа поставщику из карточки приёмки добавим следующим шагом.",
+      if (error) throw error;
+
+      const receiptStatuses = ((data as Status[]) || []).filter(
+        (status) => status.status_categories?.code === "receipts",
+      );
+
+      setAvailableStatuses(receiptStatuses);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка загрузки статусов приёмки",
+      );
+    }
+  }
+
+  function getCurrentStatus() {
+    return (
+      availableStatuses.find((status) => status.id === currentReceipt.status_id) ||
+      availableStatuses.find((status) => status.code === currentReceipt.status) ||
+      null
     );
   }
 
   function getStatusLabel(status: string) {
+    const statusFromDirectory =
+      availableStatuses.find((item) => item.code === status) || getCurrentStatus();
+
+    if (statusFromDirectory) return statusFromDirectory.name;
     if (status === "draft") return "Черновик";
     if (status === "posted") return "Проведена";
     if (status === "cancelled") return "Отменена";
     return status || "—";
+  }
+
+  function getStatusColor(status: Status | null) {
+    return status?.color || "#94a3b8";
+  }
+
+  function getStatusButtonStyle(status: Status | null): React.CSSProperties {
+    const color = getStatusColor(status);
+
+    return {
+      ...statusBadgeButtonStyle,
+      borderColor: color,
+      color,
+      background: `${color}14`,
+    };
+  }
+
+  async function changeReceiptStatus(nextStatus: Status) {
+    if (!nextStatus) return;
+
+    const currentStatus = getCurrentStatus();
+
+    if (nextStatus.id === currentStatus?.id || nextStatus.code === currentReceipt.status) {
+      setIsStatusPickerOpen(false);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Изменить статус приёмки на "${nextStatus.name}"?`,
+    );
+
+    if (!confirmed) {
+      setIsStatusPickerOpen(false);
+      return;
+    }
+
+    try {
+      setChangingStatus(true);
+      setError("");
+
+      const { error } = await supabase
+        .from("supplier_receipts")
+        .update({
+          status: nextStatus.code,
+          status_id: nextStatus.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", currentReceipt.id);
+
+      if (error) throw error;
+
+      setCurrentReceipt((prev) => ({
+        ...prev,
+        status: nextStatus.code,
+        status_id: nextStatus.id,
+      }));
+
+      setIsStatusPickerOpen(false);
+      onSaved();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка изменения статуса приёмки",
+      );
+    } finally {
+      setChangingStatus(false);
+    }
   }
 
   function getItemName(item: SupplierReceiptItem) {
@@ -300,26 +418,18 @@ export default function ReceiptModal({
         <div style={modalHeaderStyle}>
           <div>
             <div style={modalTitleStyle}>
-              Приёмка {receipt.receipt_number || "Черновик"}
+              Приёмка {currentReceipt.receipt_number || "Черновик"}
             </div>
 
             <div style={modalSubtitleStyle}>
-              Дата: {receipt.receipt_date || "—"} · Поставщик:{" "}
-              {receipt.supplier_name || "—"}
+              Дата: {currentReceipt.receipt_date || "—"} · Поставщик:{" "}
+              {currentReceipt.supplier_name || "—"}
             </div>
           </div>
 
           <div style={modalActionsStyle}>
             {!isEditing && (
               <>
-                <button
-                  type="button"
-                  onClick={() => setIsLinkedDocumentsModalOpen(true)}
-                  style={linkedDocumentsButtonStyle}
-                >
-                  🔗 Связанные документы
-                </button>
-
                 <button
                   type="button"
                   onClick={startEdit}
@@ -502,17 +612,69 @@ export default function ReceiptModal({
         ) : (
           <>
             <div style={modalInfoGridStyle}>
-              <div style={modalInfoCardStyle}>
+              <div style={{ ...modalInfoCardStyle, position: "relative" }}>
                 <div style={modalInfoLabelStyle}>Статус</div>
-                <div style={modalInfoValueStyle}>
-                  {getStatusLabel(receipt.status)}
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsStatusPickerOpen((current) => !current)}
+                  disabled={changingStatus}
+                  style={{
+                    ...getStatusButtonStyle(getCurrentStatus()),
+                    opacity: changingStatus ? 0.65 : 1,
+                    cursor: changingStatus ? "not-allowed" : "pointer",
+                  }}
+                  title="Изменить статус приёмки"
+                >
+                  {changingStatus
+                    ? "Сохраняю..."
+                    : getStatusLabel(currentReceipt.status)}
+                </button>
+
+                {isStatusPickerOpen && (
+                  <div style={statusPickerStyle}>
+                    {availableStatuses.length === 0 ? (
+                      <div style={statusPickerEmptyStyle}>
+                        Статусы приёмок не найдены.
+                      </div>
+                    ) : (
+                      availableStatuses.map((status) => {
+                        const active =
+                          status.id === currentReceipt.status_id ||
+                          status.code === currentReceipt.status;
+
+                        return (
+                          <button
+                            key={status.id}
+                            type="button"
+                            onClick={() => changeReceiptStatus(status)}
+                            style={statusPickerItemStyle(status, active)}
+                          >
+                            <span
+                              style={{
+                                ...statusPickerDotStyle,
+                                background: status.color || "#94a3b8",
+                              }}
+                            />
+                            <span>
+                              <span style={statusPickerNameStyle}>
+                                {status.name}
+                              </span>
+                              <span style={statusPickerCodeStyle}>
+                                {status.code}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
               </div>
 
               <div style={modalInfoCardStyle}>
                 <div style={modalInfoLabelStyle}>Сумма</div>
                 <div style={modalInfoValueStyle}>
-                  {Number(receipt.total_amount || 0).toLocaleString("ru-RU", {
+                  {Number(currentReceipt.total_amount || 0).toLocaleString("ru-RU", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}{" "}
@@ -521,8 +683,8 @@ export default function ReceiptModal({
               </div>
             </div>
 
-            {receipt.comment && (
-              <div style={commentBoxStyle}>{receipt.comment}</div>
+            {currentReceipt.comment && (
+              <div style={commentBoxStyle}>{currentReceipt.comment}</div>
             )}
 
             <div>
@@ -586,20 +748,85 @@ export default function ReceiptModal({
             </div>
           </>
         )}
-        {isLinkedDocumentsModalOpen && (
-          <LinkedDocumentsModal
-            sourceType="supplier_receipt"
-            sourceId={receipt.id}
-            supplierOrderId={receipt.supplier_order_id}
-            onClose={() => setIsLinkedDocumentsModalOpen(false)}
-            onOpenDocument={handleOpenLinkedDocument}
-          />
-        )}
-
       </div>
     </div>
   );
 }
+
+const statusBadgeButtonStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  width: "fit-content",
+  border: "1px solid #cbd5e1",
+  borderRadius: 999,
+  padding: "7px 12px",
+  background: "#f8fafc",
+  fontSize: 16,
+  fontWeight: 900,
+};
+
+const statusPickerStyle: React.CSSProperties = {
+  position: "absolute",
+  top: "calc(100% - 8px)",
+  left: 14,
+  zIndex: 10050,
+  minWidth: 260,
+  border: "1px solid #dbe4f0",
+  borderRadius: 14,
+  background: "#ffffff",
+  boxShadow: "0 18px 42px rgba(15, 23, 42, 0.22)",
+  padding: 8,
+  display: "grid",
+  gap: 6,
+};
+
+const statusPickerEmptyStyle: React.CSSProperties = {
+  padding: 12,
+  color: "#64748b",
+  fontWeight: 800,
+};
+
+function statusPickerItemStyle(
+  status: Status,
+  active: boolean,
+): React.CSSProperties {
+  const color = status.color || "#94a3b8";
+
+  return {
+    border: active ? `1px solid ${color}` : "1px solid transparent",
+    background: active ? `${color}14` : "#ffffff",
+    color: "#0f172a",
+    borderRadius: 10,
+    padding: "10px 11px",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: 9,
+    textAlign: "left",
+  };
+}
+
+const statusPickerDotStyle: React.CSSProperties = {
+  width: 12,
+  height: 12,
+  borderRadius: 999,
+  flexShrink: 0,
+};
+
+const statusPickerNameStyle: React.CSSProperties = {
+  display: "block",
+  fontSize: 14,
+  fontWeight: 900,
+  lineHeight: 1.2,
+};
+
+const statusPickerCodeStyle: React.CSSProperties = {
+  display: "block",
+  marginTop: 3,
+  color: "#64748b",
+  fontSize: 12,
+  fontWeight: 700,
+};
 
 const modalOverlayStyle: React.CSSProperties = {
   position: "fixed",
@@ -662,18 +889,6 @@ const closeButtonStyle: React.CSSProperties = {
   fontSize: 24,
   fontWeight: 800,
   color: "#0f172a",
-};
-
-const linkedDocumentsButtonStyle: React.CSSProperties = {
-  border: "1px solid #dbe4f0",
-  background: "#ffffff",
-  color: "#334155",
-  borderRadius: 12,
-  padding: "10px 13px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 13,
-  whiteSpace: "nowrap",
 };
 
 const editButtonStyle: React.CSSProperties = {

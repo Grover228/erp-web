@@ -1,6 +1,8 @@
 import { useState } from "react";
 import PurchasesPage from "./PurchasesPage";
 import ReceiptsPage from "./warehouse/ReceiptsPage";
+import StockPage from "./warehouse/StockPage";
+import SalesPage from "./warehouse/SalesPage";
 
 type WarehouseTab = "purchases" | "receipts" | "stock" | "shipments";
 
@@ -64,21 +66,9 @@ export default function WarehousePage() {
 
         {activeTab === "receipts" && <ReceiptsPage />}
 
-        {activeTab === "stock" && (
-          <WarehouseStub
-            title="Остатки"
-            subtitle="Здесь будет складская ведомость: материалы, расходники, остатки, резервы и движения."
-            icon="📊"
-          />
-        )}
+        {activeTab === "stock" && <StockPage />}
 
-        {activeTab === "shipments" && (
-          <WarehouseStub
-            title="Продажи / Отгрузки"
-            subtitle="Здесь будут заказы покупателей, отгрузки и списание остатков со склада."
-            icon="🚚"
-          />
-        )}
+        {activeTab === "shipments" && <SalesPage />}
       </div>
     </div>
   );
