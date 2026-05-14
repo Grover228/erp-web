@@ -29,6 +29,16 @@ type MoneyOperationForm = {
   description: string;
 };
 
+type FinanceTransaction = {
+  id: string;
+  account_id: string;
+  type: string;
+  amount: number | string;
+  operation_date: string;
+  description: string | null;
+  created_at: string;
+};
+
 type ModalType = "account" | "income" | "expense" | null;
 
 const accountTypes = [
@@ -69,6 +79,7 @@ const emptyOperationForm: MoneyOperationForm = {
 
 export default function FinancePage() {
   const [accounts, setAccounts] = useState<FinanceAccount[]>([]);
+  const [transactions, setTransactions] = useState<FinanceTransaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -87,6 +98,7 @@ export default function FinancePage() {
 
   useEffect(() => {
     loadAccounts();
+    loadTransactions();
   }, []);
 
   function openModal(type: ModalType) {
@@ -129,6 +141,23 @@ export default function FinancePage() {
       setError(error instanceof Error ? error.message : "Ошибка загрузки счетов");
     } finally {
       setLoading(false);
+    }
+  }
+
+
+  async function loadTransactions() {
+    try {
+      const { data, error } = await supabase
+        .from("finance_transactions")
+        .select("*")
+        .order("operation_date", { ascending: false })
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+
+      setTransactions((data as FinanceTransaction[]) || []);
+    } catch (error) {
+      console.error("Ошибка загрузки операций", error);
     }
   }
 
@@ -184,6 +213,7 @@ export default function FinancePage() {
       setAccountForm(emptyAccountForm);
       setModalType(null);
       await loadAccounts();
+      await loadTransactions();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка создания счета");
     } finally {
@@ -247,6 +277,7 @@ export default function FinancePage() {
       setOperationForm(emptyOperationForm);
       setModalType(null);
       await loadAccounts();
+      await loadTransactions();
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка операции");
     } finally {
@@ -354,6 +385,89 @@ export default function FinancePage() {
           </div>
         )}
       </div>
+
+
+      <div style={cardStyle}>
+        <div
+          style={{
+            fontSize: 20,
+            fontWeight: 800,
+            color: "#0f172a",
+            marginBottom: 14,
+          }}
+        >
+          Журнал операций
+        </div>
+
+        {transactions.length === 0 ? (
+          <div style={{ color: "#64748b" }}>
+            Операций пока нет
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10 }}>
+            {transactions.map((transaction) => {
+              const account = accounts.find(
+                (item) => item.id === transaction.account_id
+              );
+
+              const isIncome = transaction.type === "income";
+
+              return (
+                <div
+                  key={transaction.id}
+                  style={{
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 14,
+                    padding: 14,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div
+                      style={{
+                        fontWeight: 800,
+                        color: "#0f172a",
+                      }}
+                    >
+                      {isIncome ? "Приход" : "Расход"}
+                    </div>
+
+                    <div style={{ color: "#64748b", fontSize: 14 }}>
+                      {account?.name || "Счет удален"}
+                    </div>
+
+                    <div style={{ color: "#64748b", fontSize: 13 }}>
+                      {transaction.operation_date}
+                    </div>
+
+                    {transaction.description && (
+                      <div style={{ color: "#475569", fontSize: 14 }}>
+                        {transaction.description}
+                      </div>
+                    )}
+                  </div>
+
+                  <div
+                    style={{
+                      color: isIncome ? "#16a34a" : "#dc2626",
+                      fontSize: 20,
+                      fontWeight: 900,
+                    }}
+                  >
+                    {isIncome ? "+" : "-"}
+                    {toMoney(transaction.amount)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
 
       {modalType === "account" && (
         <Modal title="Добавить счет" onClose={closeModal}>
