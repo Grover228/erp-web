@@ -22,16 +22,24 @@ type MaterialCatalogItem = {
   id: string;
   name: string;
   article: string | null;
-  unit_id: string;
+  unit_id: string | null;
+  color_id?: string | null;
   default_price: number | null;
+  stock_unit_name?: string | null;
+  purchase_unit_name?: string | null;
+  production_unit_name?: string | null;
+  production_units_per_purchase_unit?: number | null;
+  color_name?: string | null;
+  color_hex?: string | null;
 };
 
 type ConsumableCatalogItem = {
   id: string;
   name: string;
   article: string | null;
-  unit_id: string;
+  unit_id: string | null;
   default_price: number | null;
+  unit_name?: string | null;
 };
 
 type OperationCatalogItem = {
@@ -98,14 +106,25 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
   const [message, setMessage] = useState("");
 
   const [isAddMaterialOpen, setIsAddMaterialOpen] = useState(false);
+  const [isMaterialPickerOpen, setIsMaterialPickerOpen] = useState(false);
+  const [materialPickerSearch, setMaterialPickerSearch] = useState("");
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [materialQuantity, setMaterialQuantity] = useState("");
   const [materialComment, setMaterialComment] = useState("");
+  const selectedMaterial = materialCatalog.find(
+    (item) => item.id === selectedMaterialId,
+  );
+
 
   const [isAddConsumableOpen, setIsAddConsumableOpen] = useState(false);
+  const [isConsumablePickerOpen, setIsConsumablePickerOpen] = useState(false);
+  const [consumablePickerSearch, setConsumablePickerSearch] = useState("");
   const [selectedConsumableId, setSelectedConsumableId] = useState("");
   const [consumableQuantity, setConsumableQuantity] = useState("");
   const [consumableComment, setConsumableComment] = useState("");
+  const selectedConsumable = consumableCatalog.find(
+    (item) => item.id === selectedConsumableId,
+  );
 
   const [isAddOperationOpen, setIsAddOperationOpen] = useState(false);
   const [isOperationsCatalogOpen, setIsOperationsCatalogOpen] = useState(false);
@@ -200,7 +219,19 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
   async function loadMaterialCatalog() {
     const { data, error } = await supabase
       .from("materials")
-      .select("id, name, article, unit_id, default_price")
+      .select(`
+        id,
+        name,
+        article,
+        unit_id,
+        color_id,
+        default_price,
+        production_units_per_purchase_unit,
+        stock_unit:unit_id(name),
+        purchase_unit:purchase_unit_id(name),
+        production_unit:production_unit_id(name),
+        color:colors(name, hex)
+      `)
       .eq("is_active", true)
       .order("name", { ascending: true });
 
@@ -209,8 +240,21 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
       return;
     }
 
-    const safeMaterials = (data as MaterialCatalogItem[]) || [];
-    setMaterialCatalog(safeMaterials);
+    const safeMaterials =
+      (((data as any[]) || []).map((item) => ({
+        ...item,
+        stock_unit_name: item.stock_unit?.name || null,
+        purchase_unit_name: item.purchase_unit?.name || null,
+        production_unit_name: item.production_unit?.name || null,
+        color_name: item.color?.name || null,
+        color_hex: item.color?.hex || null,
+      })) as MaterialCatalogItem[]);
+
+    const uniqueMaterials = Array.from(
+      new Map(safeMaterials.map((item) => [item.id, item])).values(),
+    );
+
+    setMaterialCatalog(uniqueMaterials);
 
     if (!selectedMaterialId && safeMaterials.length > 0) {
       setSelectedMaterialId(safeMaterials[0].id);
@@ -220,7 +264,7 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
   async function loadConsumableCatalog() {
     const { data, error } = await supabase
       .from("consumables")
-      .select("id, name, article, unit_id, default_price")
+      .select("id, name, article, unit_id, default_price, unit:unit_id(name)")
       .eq("is_active", true)
       .order("name", { ascending: true });
 
@@ -229,7 +273,12 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
       return;
     }
 
-    const safeConsumables = (data as ConsumableCatalogItem[]) || [];
+    const safeConsumables =
+      (((data as any[]) || []).map((item) => ({
+        ...item,
+        unit_name: item.unit?.name || null,
+      })) as ConsumableCatalogItem[]);
+
     setConsumableCatalog(safeConsumables);
 
     if (!selectedConsumableId && safeConsumables.length > 0) {
@@ -325,6 +374,67 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
     } finally {
       setCreating(false);
     }
+  }
+
+
+  function getFilteredMaterialCatalog() {
+    const query = materialPickerSearch.trim().toLowerCase();
+
+    return materialCatalog.filter((material) => {
+      if (!query) return true;
+
+      return (
+        material.name.toLowerCase().includes(query) ||
+        (material.article || "").toLowerCase().includes(query) ||
+        (material.color_name || "").toLowerCase().includes(query) ||
+        (material.stock_unit_name || "").toLowerCase().includes(query) ||
+        (material.purchase_unit_name || "").toLowerCase().includes(query) ||
+        (material.production_unit_name || "").toLowerCase().includes(query)
+      );
+    });
+  }
+
+  function selectMaterialFromPicker(material: MaterialCatalogItem) {
+    setSelectedMaterialId(material.id);
+    setIsMaterialPickerOpen(false);
+    setMaterialPickerSearch("");
+  }
+
+  function getMaterialUnitLabel(material: MaterialCatalogItem | undefined) {
+    if (!material) return "ед. не указана";
+
+    return (
+      material.production_unit_name ||
+      material.stock_unit_name ||
+      material.purchase_unit_name ||
+      "ед. не указана"
+    );
+  }
+
+  function getFilteredConsumableCatalog() {
+    const query = consumablePickerSearch.trim().toLowerCase();
+
+    return consumableCatalog.filter((consumable) => {
+      if (!query) return true;
+
+      return (
+        consumable.name.toLowerCase().includes(query) ||
+        (consumable.article || "").toLowerCase().includes(query) ||
+        (consumable.unit_name || "").toLowerCase().includes(query)
+      );
+    });
+  }
+
+  function selectConsumableFromPicker(consumable: ConsumableCatalogItem) {
+    setSelectedConsumableId(consumable.id);
+    setIsConsumablePickerOpen(false);
+    setConsumablePickerSearch("");
+  }
+
+  function getConsumableUnitLabel(consumable: ConsumableCatalogItem | undefined) {
+    if (!consumable) return "ед. не указана";
+
+    return consumable.unit_name || "ед. не указана";
   }
 
   async function handleAddMaterial(e: React.FormEvent) {
@@ -784,22 +894,46 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
 
             {isAddMaterialOpen && (
               <form onSubmit={handleAddMaterial} style={addFormStyle}>
-                <Field label="Материал">
-                  <select
-                    value={selectedMaterialId}
-                    onChange={(e) => setSelectedMaterialId(e.target.value)}
-                    style={inputStyle}
+                <div style={fieldStyle}>
+                  <label style={labelStyle}>Материал</label>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsMaterialPickerOpen(true)}
+                    style={materialChooseButtonStyle}
                   >
-                    <option value="">Выбери материал</option>
-                    {materialCatalog.map((material) => (
-                      <option key={material.id} value={material.id}>
-                        {material.article
-                          ? `${material.name} · ${material.article}`
-                          : material.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                    {selectedMaterial ? (
+                      <>
+                        {selectedMaterial.color_hex && (
+                          <span
+                            style={{
+                              ...materialColorDotStyle,
+                              background: selectedMaterial.color_hex,
+                            }}
+                          />
+                        )}
+
+                        <span style={{ display: "grid", gap: 2, textAlign: "left" }}>
+                          <span style={{ fontWeight: 900 }}>
+                            {selectedMaterial.name}
+                          </span>
+                          <span style={{ color: "#64748b", fontSize: 12 }}>
+                            {selectedMaterial.article || "без артикула"}
+                            {selectedMaterial.color_name
+                              ? ` · ${selectedMaterial.color_name}`
+                              : ""}
+                            {" · "}
+                            {getMaterialUnitLabel(selectedMaterial)}
+                          </span>
+                        </span>
+                      </>
+                    ) : (
+                      <span style={{ color: "#64748b", fontWeight: 800 }}>
+                        + Выбрать материал
+                      </span>
+                    )}
+                  </button>
+                </div>
 
                 <Field label="Расход на 1 изделие">
                   <input
@@ -811,6 +945,46 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
                     style={inputStyle}
                   />
                 </Field>
+
+                {selectedMaterial && (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "#f5f3ff",
+                      border: "1px solid #ddd6fe",
+                      color: "#5b21b6",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Производственная единица:{" "}
+                      {selectedMaterial.production_unit_name || "не указана"}
+                    </div>
+
+                    {selectedMaterial.production_units_per_purchase_unit ? (
+                      <div>
+                        1{" "}
+                        {selectedMaterial.purchase_unit_name || "закупочная ед."}
+                        {" = "}
+                        {Number(
+                          selectedMaterial.production_units_per_purchase_unit,
+                        ).toLocaleString("ru-RU", {
+                          maximumFractionDigits: 3,
+                        })}{" "}
+                        {selectedMaterial.production_unit_name ||
+                          "производственных ед."}
+                      </div>
+                    ) : (
+                      <div>
+                        Коэффициент пересчёта пока не настроен в карточке
+                        материала.
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <Field label="Комментарий">
                   <input
@@ -854,7 +1028,47 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
                           />
                         </Field>
 
-                        <Field label="Комментарий">
+                        {selectedMaterial && (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "#f5f3ff",
+                      border: "1px solid #ddd6fe",
+                      color: "#5b21b6",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Производственная единица:{" "}
+                      {selectedMaterial.production_unit_name || "не указана"}
+                    </div>
+
+                    {selectedMaterial.production_units_per_purchase_unit ? (
+                      <div>
+                        1{" "}
+                        {selectedMaterial.purchase_unit_name || "закупочная ед."}
+                        {" = "}
+                        {Number(
+                          selectedMaterial.production_units_per_purchase_unit,
+                        ).toLocaleString("ru-RU", {
+                          maximumFractionDigits: 3,
+                        })}{" "}
+                        {selectedMaterial.production_unit_name ||
+                          "производственных ед."}
+                      </div>
+                    ) : (
+                      <div>
+                        Коэффициент пересчёта пока не настроен в карточке
+                        материала.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <Field label="Комментарий">
                           <input
                             value={editMaterialComment}
                             onChange={(e) => setEditMaterialComment(e.target.value)}
@@ -928,22 +1142,36 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
 
             {isAddConsumableOpen && (
               <form onSubmit={handleAddConsumable} style={addFormStyle}>
-                <Field label="Расходник">
-                  <select
-                    value={selectedConsumableId}
-                    onChange={(e) => setSelectedConsumableId(e.target.value)}
-                    style={inputStyle}
+                <div style={fieldStyle}>
+                  <label style={labelStyle}>Расходник</label>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsConsumablePickerOpen(true)}
+                    style={materialChooseButtonStyle}
                   >
-                    <option value="">Выбери расходник</option>
-                    {consumableCatalog.map((consumable) => (
-                      <option key={consumable.id} value={consumable.id}>
-                        {consumable.article
-                          ? `${consumable.name} · ${consumable.article}`
-                          : consumable.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
+                    {selectedConsumable ? (
+                      <>
+                        <span style={consumableIconStyle}>📦</span>
+
+                        <span style={{ display: "grid", gap: 2, textAlign: "left" }}>
+                          <span style={{ fontWeight: 900 }}>
+                            {selectedConsumable.name}
+                          </span>
+                          <span style={{ color: "#64748b", fontSize: 12 }}>
+                            {selectedConsumable.article || "без артикула"}
+                            {" · "}
+                            {getConsumableUnitLabel(selectedConsumable)}
+                          </span>
+                        </span>
+                      </>
+                    ) : (
+                      <span style={{ color: "#64748b", fontWeight: 800 }}>
+                        + Выбрать расходник
+                      </span>
+                    )}
+                  </button>
+                </div>
 
                 <Field label="Расход на 1 изделие">
                   <input
@@ -955,6 +1183,30 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
                     style={inputStyle}
                   />
                 </Field>
+
+                {selectedConsumable && (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "#f5f3ff",
+                      border: "1px solid #ddd6fe",
+                      color: "#5b21b6",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Единица расходника:{" "}
+                      {getConsumableUnitLabel(selectedConsumable)}
+                    </div>
+
+                    <div>
+                      Расход в техкарте будет считаться в этой единице.
+                    </div>
+                  </div>
+                )}
 
                 <Field label="Комментарий">
                   <input
@@ -998,7 +1250,47 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
                           />
                         </Field>
 
-                        <Field label="Комментарий">
+                        {selectedMaterial && (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "#f5f3ff",
+                      border: "1px solid #ddd6fe",
+                      color: "#5b21b6",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Производственная единица:{" "}
+                      {selectedMaterial.production_unit_name || "не указана"}
+                    </div>
+
+                    {selectedMaterial.production_units_per_purchase_unit ? (
+                      <div>
+                        1{" "}
+                        {selectedMaterial.purchase_unit_name || "закупочная ед."}
+                        {" = "}
+                        {Number(
+                          selectedMaterial.production_units_per_purchase_unit,
+                        ).toLocaleString("ru-RU", {
+                          maximumFractionDigits: 3,
+                        })}{" "}
+                        {selectedMaterial.production_unit_name ||
+                          "производственных ед."}
+                      </div>
+                    ) : (
+                      <div>
+                        Коэффициент пересчёта пока не настроен в карточке
+                        материала.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <Field label="Комментарий">
                           <input
                             value={editConsumableComment}
                             onChange={(e) => setEditConsumableComment(e.target.value)}
@@ -1129,6 +1421,46 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
                   />
                 </Field>
 
+                {selectedMaterial && (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "#f5f3ff",
+                      border: "1px solid #ddd6fe",
+                      color: "#5b21b6",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Производственная единица:{" "}
+                      {selectedMaterial.production_unit_name || "не указана"}
+                    </div>
+
+                    {selectedMaterial.production_units_per_purchase_unit ? (
+                      <div>
+                        1{" "}
+                        {selectedMaterial.purchase_unit_name || "закупочная ед."}
+                        {" = "}
+                        {Number(
+                          selectedMaterial.production_units_per_purchase_unit,
+                        ).toLocaleString("ru-RU", {
+                          maximumFractionDigits: 3,
+                        })}{" "}
+                        {selectedMaterial.production_unit_name ||
+                          "производственных ед."}
+                      </div>
+                    ) : (
+                      <div>
+                        Коэффициент пересчёта пока не настроен в карточке
+                        материала.
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <Field label="Комментарий">
                   <input
                     value={operationComment}
@@ -1191,7 +1523,47 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
                           />
                         </Field>
 
-                        <Field label="Комментарий">
+                        {selectedMaterial && (
+                  <div
+                    style={{
+                      gridColumn: "1 / -1",
+                      padding: "12px 14px",
+                      borderRadius: 14,
+                      background: "#f5f3ff",
+                      border: "1px solid #ddd6fe",
+                      color: "#5b21b6",
+                      fontSize: 14,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                      Производственная единица:{" "}
+                      {selectedMaterial.production_unit_name || "не указана"}
+                    </div>
+
+                    {selectedMaterial.production_units_per_purchase_unit ? (
+                      <div>
+                        1{" "}
+                        {selectedMaterial.purchase_unit_name || "закупочная ед."}
+                        {" = "}
+                        {Number(
+                          selectedMaterial.production_units_per_purchase_unit,
+                        ).toLocaleString("ru-RU", {
+                          maximumFractionDigits: 3,
+                        })}{" "}
+                        {selectedMaterial.production_unit_name ||
+                          "производственных ед."}
+                      </div>
+                    ) : (
+                      <div>
+                        Коэффициент пересчёта пока не настроен в карточке
+                        материала.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <Field label="Комментарий">
                           <input
                             value={editOperationComment}
                             onChange={(e) => setEditOperationComment(e.target.value)}
@@ -1256,6 +1628,197 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
           </div>
         )}
 
+
+
+        {isConsumablePickerOpen && (
+          <div
+            onClick={() => setIsConsumablePickerOpen(false)}
+            style={pickerOverlayStyle}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={pickerModalStyle}
+            >
+              <div style={pickerHeaderStyle}>
+                <div>
+                  <div style={pickerTitleStyle}>Выбор расходника</div>
+                  <div style={pickerSubtitleStyle}>
+                    Выбери расходник для техкарты. Единица измерения подтягивается из справочника.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsConsumablePickerOpen(false)}
+                  style={closeButtonStyle}
+                >
+                  ×
+                </button>
+              </div>
+
+              <input
+                value={consumablePickerSearch}
+                onChange={(event) =>
+                  setConsumablePickerSearch(event.target.value)
+                }
+                placeholder="Название, артикул или единица измерения"
+                style={inputStyle}
+              />
+
+              <div style={pickerListStyle}>
+                {getFilteredConsumableCatalog().length === 0 ? (
+                  <div style={emptyBlockStyle}>Расходники не найдены</div>
+                ) : (
+                  getFilteredConsumableCatalog().map((consumable) => (
+                    <button
+                      key={consumable.id}
+                      type="button"
+                      onClick={() => selectConsumableFromPicker(consumable)}
+                      style={materialPickerCardStyle(
+                        consumable.id === selectedConsumableId,
+                      )}
+                    >
+                      <div style={materialPickerCardMainStyle}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={consumableIconStyle}>📦</span>
+
+                          <div>
+                            <div style={materialPickerTitleStyle}>
+                              {consumable.name}
+                            </div>
+                            <div style={materialPickerMetaStyle}>
+                              {consumable.article || "без артикула"}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span style={materialUnitBadgeStyle}>
+                          {getConsumableUnitLabel(consumable)}
+                        </span>
+                      </div>
+
+                      <div style={materialPickerParamsStyle}>
+                        <span style={materialParamChipStyle}>
+                          Единица: {getConsumableUnitLabel(consumable)}
+                        </span>
+                        <span style={materialParamChipStyle}>
+                          Цена:{" "}
+                          {Number(consumable.default_price || 0).toLocaleString(
+                            "ru-RU",
+                            {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            },
+                          )}{" "}
+                          ₽
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {isMaterialPickerOpen && (
+          <div
+            onClick={() => setIsMaterialPickerOpen(false)}
+            style={pickerOverlayStyle}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={pickerModalStyle}
+            >
+              <div style={pickerHeaderStyle}>
+                <div>
+                  <div style={pickerTitleStyle}>Выбор материала</div>
+                  <div style={pickerSubtitleStyle}>
+                    Выбери материал для техкарты. Единицы и цвет подтягиваются из справочников.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsMaterialPickerOpen(false)}
+                  style={closeButtonStyle}
+                >
+                  ×
+                </button>
+              </div>
+
+              <input
+                value={materialPickerSearch}
+                onChange={(event) => setMaterialPickerSearch(event.target.value)}
+                placeholder="Название, артикул, цвет или единица измерения"
+                style={inputStyle}
+              />
+
+              <div style={pickerListStyle}>
+                {getFilteredMaterialCatalog().length === 0 ? (
+                  <div style={emptyBlockStyle}>Материалы не найдены</div>
+                ) : (
+                  getFilteredMaterialCatalog().map((material) => (
+                    <button
+                      key={material.id}
+                      type="button"
+                      onClick={() => selectMaterialFromPicker(material)}
+                      style={materialPickerCardStyle(
+                        material.id === selectedMaterialId,
+                      )}
+                    >
+                      <div style={materialPickerCardMainStyle}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span
+                            style={{
+                              ...materialColorDotStyle,
+                              background: material.color_hex || "#cbd5e1",
+                            }}
+                          />
+
+                          <div>
+                            <div style={materialPickerTitleStyle}>
+                              {material.name}
+                            </div>
+                            <div style={materialPickerMetaStyle}>
+                              {material.article || "без артикула"}
+                              {material.color_name ? ` · ${material.color_name}` : ""}
+                            </div>
+                          </div>
+                        </div>
+
+                        <span style={materialUnitBadgeStyle}>
+                          {getMaterialUnitLabel(material)}
+                        </span>
+                      </div>
+
+                      <div style={materialPickerParamsStyle}>
+                        <span style={materialParamChipStyle}>
+                          Склад: {material.stock_unit_name || "—"}
+                        </span>
+                        <span style={materialParamChipStyle}>
+                          Закупка: {material.purchase_unit_name || "—"}
+                        </span>
+                        <span style={materialParamChipStyle}>
+                          Производство: {material.production_unit_name || "—"}
+                        </span>
+                        <span style={materialParamChipStyle}>
+                          Коэф.:{" "}
+                          {Number(
+                            material.production_units_per_purchase_unit || 1,
+                          ).toLocaleString("ru-RU", {
+                            maximumFractionDigits: 3,
+                          })}
+                        </span>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {isOperationsCatalogOpen && (
           <OperationsCatalogModal
             onClose={() => setIsOperationsCatalogOpen(false)}
@@ -1265,6 +1828,153 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
       </div>
     </div>
   );
+}
+
+
+
+const materialChooseButtonStyle: React.CSSProperties = {
+  minHeight: 44,
+  borderRadius: 10,
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  padding: "8px 12px",
+  cursor: "pointer",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  width: "100%",
+};
+
+const materialColorDotStyle: React.CSSProperties = {
+  width: 14,
+  height: 14,
+  borderRadius: 999,
+  border: "1px solid #cbd5e1",
+  flexShrink: 0,
+};
+
+const consumableIconStyle: React.CSSProperties = {
+  width: 30,
+  height: 30,
+  borderRadius: 10,
+  border: "1px solid #dbe4f0",
+  background: "#f8fafc",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+};
+
+const pickerOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(15, 23, 42, 0.45)",
+  zIndex: 10080,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 16,
+};
+
+const pickerModalStyle: React.CSSProperties = {
+  width: "min(760px, 94vw)",
+  maxHeight: "82vh",
+  overflowY: "auto",
+  background: "#ffffff",
+  borderRadius: 18,
+  padding: 16,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 24px 60px rgba(15, 23, 42, 0.34)",
+  display: "grid",
+  gap: 14,
+};
+
+const pickerHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
+};
+
+const pickerTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 22,
+  fontWeight: 900,
+};
+
+const pickerSubtitleStyle: React.CSSProperties = {
+  color: "#64748b",
+  marginTop: 4,
+  lineHeight: 1.45,
+};
+
+const pickerListStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 9,
+  maxHeight: "52vh",
+  overflowY: "auto",
+  paddingRight: 4,
+};
+
+const materialPickerCardMainStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "flex-start",
+  gap: 12,
+};
+
+const materialPickerTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 17,
+  fontWeight: 900,
+};
+
+const materialPickerMetaStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 13,
+  marginTop: 3,
+};
+
+const materialUnitBadgeStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  borderRadius: 999,
+  padding: "6px 10px",
+  fontSize: 12,
+  fontWeight: 900,
+  whiteSpace: "nowrap",
+};
+
+const materialPickerParamsStyle: React.CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 8,
+};
+
+const materialParamChipStyle: React.CSSProperties = {
+  border: "1px solid #e2e8f0",
+  background: "#f8fafc",
+  color: "#475569",
+  borderRadius: 999,
+  padding: "5px 9px",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+function materialPickerCardStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? "1px solid #93c5fd" : "1px solid #dbe4f0",
+    background: active ? "#eff6ff" : "#ffffff",
+    color: "#0f172a",
+    borderRadius: 14,
+    padding: 13,
+    cursor: "pointer",
+    textAlign: "left",
+    display: "grid",
+    gap: 10,
+  };
 }
 
 function Field({

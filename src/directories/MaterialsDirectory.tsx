@@ -16,6 +16,9 @@ type MaterialItem = {
   min_stock: number | null;
   comment: string | null;
   is_active: boolean;
+  purchase_unit_id: string | null;
+  production_unit_id: string | null;
+  production_units_per_purchase_unit: number | null;
   created_at: string | null;
 };
 
@@ -68,6 +71,10 @@ export default function MaterialsDirectory() {
   const [minStock, setMinStock] = useState("");
   const [comment, setComment] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [purchaseUnitId, setPurchaseUnitId] = useState("");
+  const [productionUnitId, setProductionUnitId] = useState("");
+  const [productionUnitsPerPurchaseUnit, setProductionUnitsPerPurchaseUnit] =
+    useState("1");
 
   const [editName, setEditName] = useState("");
   const [editArticle, setEditArticle] = useState("");
@@ -82,6 +89,10 @@ export default function MaterialsDirectory() {
   const [editMinStock, setEditMinStock] = useState("");
   const [editComment, setEditComment] = useState("");
   const [editIsActive, setEditIsActive] = useState(true);
+  const [editPurchaseUnitId, setEditPurchaseUnitId] = useState("");
+  const [editProductionUnitId, setEditProductionUnitId] = useState("");
+  const [editProductionUnitsPerPurchaseUnit, setEditProductionUnitsPerPurchaseUnit] =
+    useState("1");
 
   useEffect(() => {
     loadAll();
@@ -164,6 +175,10 @@ export default function MaterialsDirectory() {
     if (!unitId && safeUnits.length > 0) {
       setUnitId(safeUnits[0].id);
     }
+
+    if (!purchaseUnitId && safeUnits.length > 0) {
+      setPurchaseUnitId(safeUnits[0].id);
+    }
   }
 
   function resetForm() {
@@ -180,6 +195,9 @@ export default function MaterialsDirectory() {
     setMinStock("");
     setComment("");
     setIsActive(true);
+    setPurchaseUnitId(units[0]?.id || "");
+    setProductionUnitId("");
+    setProductionUnitsPerPurchaseUnit("1");
   }
 
   function fillEditForm(material: MaterialItem) {
@@ -200,6 +218,14 @@ export default function MaterialsDirectory() {
     setEditMinStock(material.min_stock !== null ? String(material.min_stock) : "");
     setEditComment(material.comment || "");
     setEditIsActive(material.is_active);
+    setEditPurchaseUnitId(material.purchase_unit_id || material.unit_id || "");
+    setEditProductionUnitId(material.production_unit_id || "");
+    setEditProductionUnitsPerPurchaseUnit(
+      material.production_units_per_purchase_unit !== null &&
+        material.production_units_per_purchase_unit !== undefined
+        ? String(material.production_units_per_purchase_unit)
+        : "1"
+    );
   }
 
   function openMaterialCard(material: MaterialItem) {
@@ -250,6 +276,12 @@ export default function MaterialsDirectory() {
           min_stock: minStock ? Number(minStock) : null,
           comment: comment.trim() || null,
           is_active: isActive,
+          purchase_unit_id: purchaseUnitId || unitId || null,
+          production_unit_id: productionUnitId || null,
+          production_units_per_purchase_unit:
+            productionUnitsPerPurchaseUnit && Number(productionUnitsPerPurchaseUnit) > 0
+              ? Number(productionUnitsPerPurchaseUnit)
+              : 1,
         })
         .select()
         .single();
@@ -309,6 +341,13 @@ export default function MaterialsDirectory() {
           min_stock: editMinStock ? Number(editMinStock) : null,
           comment: editComment.trim() || null,
           is_active: editIsActive,
+          purchase_unit_id: editPurchaseUnitId || editUnitId || null,
+          production_unit_id: editProductionUnitId || null,
+          production_units_per_purchase_unit:
+            editProductionUnitsPerPurchaseUnit &&
+            Number(editProductionUnitsPerPurchaseUnit) > 0
+              ? Number(editProductionUnitsPerPurchaseUnit)
+              : 1,
         })
         .eq("id", viewMaterialId)
         .select()
@@ -375,20 +414,37 @@ export default function MaterialsDirectory() {
     return categories.find((item) => item.id === categoryIdValue)?.name || "—";
   }
 
-  function getColorName(colorIdValue: string | null) {
-    if (!colorIdValue) return "—";
-    return colors.find((item) => item.id === colorIdValue)?.name || "—";
-  }
-
   function getColorItem(colorIdValue: string | null) {
     if (!colorIdValue) return null;
     return colors.find((item) => item.id === colorIdValue) || null;
   }
 
-  function getUnitLabel(unitIdValue: string) {
+  function getColorName(colorIdValue: string | null) {
+    return getColorItem(colorIdValue)?.name || "—";
+  }
+
+  function getUnitLabel(unitIdValue: string | null | undefined) {
+    if (!unitIdValue) return "—";
     const unit = units.find((item) => item.id === unitIdValue);
     if (!unit) return "—";
     return `${unit.name} (${unit.short_name})`;
+  }
+
+  function getUnitShortName(unitIdValue: string | null | undefined) {
+    if (!unitIdValue) return "ед.";
+    return units.find((item) => item.id === unitIdValue)?.short_name || "ед.";
+  }
+
+  function getMaterialConversionText(material: MaterialItem) {
+    const purchaseUnitIdValue = material.purchase_unit_id || material.unit_id;
+    const productionUnitIdValue = material.production_unit_id;
+    const coefficient = Number(material.production_units_per_purchase_unit || 1);
+
+    if (!productionUnitIdValue) {
+      return "Конвертация для производства не настроена";
+    }
+
+    return `1 ${getUnitShortName(purchaseUnitIdValue)} = ${coefficient} ${getUnitShortName(productionUnitIdValue)}`;
   }
 
   const filteredMaterials = useMemo(() => {
@@ -657,8 +713,20 @@ export default function MaterialsDirectory() {
                     value={<ColorValue color={getColorItem(viewMaterial.color_id)} />}
                   />
                   <Info
-                    label="Единица измерения"
+                    label="Единица учёта склада"
                     value={getUnitLabel(viewMaterial.unit_id)}
+                  />
+                  <Info
+                    label="Единица закупки"
+                    value={getUnitLabel(viewMaterial.purchase_unit_id || viewMaterial.unit_id)}
+                  />
+                  <Info
+                    label="Единица производства"
+                    value={getUnitLabel(viewMaterial.production_unit_id)}
+                  />
+                  <Info
+                    label="Коэффициент пересчёта"
+                    value={getMaterialConversionText(viewMaterial)}
                   />
                   <Info label="Состав" value={viewMaterial.composition || "—"} />
                   <Info
@@ -701,6 +769,18 @@ export default function MaterialsDirectory() {
                     label="Активность"
                     value={viewMaterial.is_active ? "Активен" : "Неактивен"}
                   />
+                </div>
+
+                <div
+                  style={conversionBoxStyle}
+                >
+                  <div style={conversionTitleStyle}>Конвертация для производства</div>
+                  <div style={conversionValueStyle}>
+                    {getMaterialConversionText(viewMaterial)}
+                  </div>
+                  <div style={conversionHintStyle}>
+                    Закупка и склад могут идти в одной единице, а техкарта — в другой.
+                  </div>
                 </div>
 
                 <div
@@ -798,7 +878,7 @@ export default function MaterialsDirectory() {
                   <ColorPreview color={getColorItem(editColorId)} />
                 </Field>
 
-                <Field label="Единица измерения">
+                <Field label="Единица учёта склада">
                   <select
                     value={editUnitId}
                     onChange={(e) => setEditUnitId(e.target.value)}
@@ -811,6 +891,50 @@ export default function MaterialsDirectory() {
                       </option>
                     ))}
                   </select>
+                </Field>
+
+                <Field label="Единица закупки">
+                  <select
+                    value={editPurchaseUnitId}
+                    onChange={(e) => setEditPurchaseUnitId(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">Не выбрано</option>
+                    {units.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} ({item.short_name})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Единица производства">
+                  <select
+                    value={editProductionUnitId}
+                    onChange={(e) => setEditProductionUnitId(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">Не выбрано</option>
+                    {units.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} ({item.short_name})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Коэффициент пересчёта">
+                  <input
+                    value={editProductionUnitsPerPurchaseUnit}
+                    onChange={(e) =>
+                      setEditProductionUnitsPerPurchaseUnit(e.target.value)
+                    }
+                    type="number"
+                    min="0"
+                    step="0.0001"
+                    placeholder="Например: 3.2"
+                    style={inputStyle}
+                  />
                 </Field>
 
                 <Field label="Состав">
@@ -1025,7 +1149,7 @@ export default function MaterialsDirectory() {
                 <ColorPreview color={getColorItem(colorId)} />
               </Field>
 
-              <Field label="Единица измерения">
+              <Field label="Единица учёта склада">
                 <select
                   value={unitId}
                   onChange={(e) => setUnitId(e.target.value)}
@@ -1038,6 +1162,48 @@ export default function MaterialsDirectory() {
                     </option>
                   ))}
                 </select>
+              </Field>
+
+              <Field label="Единица закупки">
+                <select
+                  value={purchaseUnitId}
+                  onChange={(e) => setPurchaseUnitId(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Не выбрано</option>
+                  {units.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.short_name})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Единица производства">
+                <select
+                  value={productionUnitId}
+                  onChange={(e) => setProductionUnitId(e.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Не выбрано</option>
+                  {units.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.short_name})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Коэффициент пересчёта">
+                <input
+                  value={productionUnitsPerPurchaseUnit}
+                  onChange={(e) => setProductionUnitsPerPurchaseUnit(e.target.value)}
+                  placeholder="Например: 3.2"
+                  type="number"
+                  min="0"
+                  step="0.0001"
+                  style={inputStyle}
+                />
               </Field>
 
               <Field label="Состав">
@@ -1166,64 +1332,6 @@ function Field({
   );
 }
 
-
-function ColorValue({ color }: { color: ColorItem | null }) {
-  if (!color) return <span>—</span>;
-
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-      }}
-    >
-      <span
-        style={{
-          width: 16,
-          height: 16,
-          borderRadius: 999,
-          background: color.hex || "#e5e7eb",
-          border: "1px solid #cbd5e1",
-          boxShadow: "0 2px 6px rgba(15, 23, 42, 0.12)",
-          flexShrink: 0,
-        }}
-      />
-      <span>{color.name}</span>
-    </span>
-  );
-}
-
-function ColorPreview({ color }: { color: ColorItem | null }) {
-  if (!color) return null;
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        marginTop: 8,
-        color: "#64748b",
-        fontSize: 13,
-      }}
-    >
-      <span
-        style={{
-          width: 18,
-          height: 18,
-          borderRadius: 999,
-          background: color.hex || "#e5e7eb",
-          border: "1px solid #cbd5e1",
-          boxShadow: "0 2px 6px rgba(15, 23, 42, 0.12)",
-        }}
-      />
-      <span>{color.name}</span>
-      <span>{color.hex || ""}</span>
-    </div>
-  );
-}
-
 function Info({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div
@@ -1257,6 +1365,108 @@ function Info({ label, value }: { label: string; value: React.ReactNode }) {
     </div>
   );
 }
+
+
+function ColorValue({ color }: { color: ColorItem | null }) {
+  if (!color) return <span>—</span>;
+
+  return (
+    <span style={colorValueStyle}>
+      <span
+        style={{
+          ...colorSwatchStyle,
+          background: color.hex || "#e5e7eb",
+        }}
+      />
+      <span>{color.name}</span>
+      {color.hex && <span style={colorHexStyle}>{color.hex}</span>}
+    </span>
+  );
+}
+
+function ColorPreview({ color }: { color: ColorItem | null }) {
+  if (!color) return null;
+
+  return (
+    <div style={colorPreviewStyle}>
+      <span
+        style={{
+          ...colorSwatchStyle,
+          background: color.hex || "#e5e7eb",
+        }}
+      />
+      <span style={{ fontWeight: 700 }}>{color.name}</span>
+      {color.hex && <span style={colorHexStyle}>{color.hex}</span>}
+    </div>
+  );
+}
+
+
+const colorValueStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  color: "#0f172a",
+  fontWeight: 700,
+};
+
+const colorSwatchStyle: React.CSSProperties = {
+  width: 18,
+  height: 18,
+  borderRadius: 999,
+  border: "1px solid #cbd5e1",
+  boxShadow: "inset 0 1px 2px rgba(15, 23, 42, 0.12)",
+  flexShrink: 0,
+};
+
+const colorHexStyle: React.CSSProperties = {
+  color: "#94a3b8",
+  fontSize: 12,
+  fontWeight: 600,
+};
+
+const colorPreviewStyle: React.CSSProperties = {
+  minHeight: 36,
+  borderRadius: 10,
+  border: "1px solid #dbe4f0",
+  background: "#f8fbff",
+  padding: "8px 10px",
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  color: "#0f172a",
+  fontSize: 14,
+};
+
+
+const conversionBoxStyle: React.CSSProperties = {
+  gridColumn: "1 / -1",
+  marginTop: 14,
+  border: "1px solid #ddd6fe",
+  background: "#f5f3ff",
+  borderRadius: 14,
+  padding: 14,
+};
+
+const conversionTitleStyle: React.CSSProperties = {
+  color: "#6d28d9",
+  fontSize: 13,
+  fontWeight: 800,
+  marginBottom: 4,
+};
+
+const conversionValueStyle: React.CSSProperties = {
+  color: "#3b0764",
+  fontSize: 18,
+  fontWeight: 900,
+};
+
+const conversionHintStyle: React.CSSProperties = {
+  color: "#7c3aed",
+  fontSize: 13,
+  marginTop: 5,
+  lineHeight: 1.4,
+};
 
 const sectionStyle: React.CSSProperties = {
   background: "#ffffff",

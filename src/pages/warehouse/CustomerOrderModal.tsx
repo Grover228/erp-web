@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
+import CustomerRelatedDocumentModal from "./CustomerRelatedDocumentModal";
+import CustomerLinkedDocumentsModal from "./CustomerLinkedDocumentsModal";
 
 export type SalesItemType = "product" | "material" | "consumable";
 
@@ -150,6 +152,8 @@ export default function CustomerOrderModal({
   const [deleting, setDeleting] = useState(false);
   const [isEditingOrder, setIsEditingOrder] = useState(false);
   const [error, setError] = useState("");
+  const [isRelatedDocumentModalOpen, setIsRelatedDocumentModalOpen] = useState(false);
+  const [isLinkedDocumentsModalOpen, setIsLinkedDocumentsModalOpen] = useState(false);
 
   const [statuses, setStatuses] = useState<Status[]>([]);
   const [stockAvailability, setStockAvailability] = useState<StockAvailability[]>([]);
@@ -509,7 +513,7 @@ export default function CustomerOrderModal({
   }
 
   function openLinkedDocumentsStub() {
-    window.alert("Связанные документы по заказу покупателя подключим следующим шагом.");
+    setIsLinkedDocumentsModalOpen(true);
   }
 
   function openPaymentStub() {
@@ -939,18 +943,10 @@ export default function CustomerOrderModal({
 
                 <button
                   type="button"
-                  onClick={() => window.alert("Создание отгрузки из заказа добавим следующим шагом.")}
+                  onClick={() => setIsRelatedDocumentModalOpen(true)}
                   style={createShipmentButtonStyle}
                 >
-                  + Создать отгрузку
-                </button>
-
-                <button type="button" onClick={openPaymentStub} style={paymentButtonStyle}>
-                  💳 Финансы
-                </button>
-
-                <button type="button" onClick={openProductionStub} style={productionButtonStyle}>
-                  🏭 Производство
+                  + Создать документ
                 </button>
 
                 <button type="button" onClick={startEditOrder} style={editOrderButtonStyle}>
@@ -1110,6 +1106,22 @@ export default function CustomerOrderModal({
               )}
             </div>
           </>
+        )}
+
+        {isLinkedDocumentsModalOpen && order && (
+          <CustomerLinkedDocumentsModal
+            order={order}
+            onClose={() => setIsLinkedDocumentsModalOpen(false)}
+            onUpdated={onSaved}
+          />
+        )}
+
+        {isRelatedDocumentModalOpen && order && (
+          <CustomerRelatedDocumentModal
+            order={order}
+            orderItems={orderItems}
+            onClose={() => setIsRelatedDocumentModalOpen(false)}
+          />
         )}
 
         {isProductPickerOpen && (
@@ -1352,28 +1364,3 @@ const customerFiltersStyle: React.CSSProperties = { display: "grid", gridTemplat
 function customerRowStyle(active: boolean): React.CSSProperties {
   return { border: active ? "1px solid #93c5fd" : "1px solid #dbe4f0", background: active ? "#eff6ff" : "#ffffff", color: "#0f172a", borderRadius: 12, padding: "12px 14px", cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", textAlign: "left" };
 }
-
-const paymentButtonStyle: React.CSSProperties = {
-  border: "1px solid #fed7aa",
-  background: "#fff7ed",
-  color: "#c2410c",
-  borderRadius: 12,
-  padding: "10px 13px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 13,
-  whiteSpace: "nowrap",
-};
-
-const productionButtonStyle: React.CSSProperties = {
-  border: "1px solid #ddd6fe",
-  background: "#f5f3ff",
-  color: "#6d28d9",
-  borderRadius: 12,
-  padding: "10px 13px",
-  cursor: "pointer",
-  fontWeight: 900,
-  fontSize: 13,
-  whiteSpace: "nowrap",
-};
-

@@ -14,6 +14,9 @@ type ProductionOrder = {
   comment: string | null;
   planned_total_cost: number | null;
   planned_time_min: number | null;
+  materials_reserved_at?: string | null;
+  materials_written_off_at?: string | null;
+  finished_goods_received_at?: string | null;
   created_at: string | null;
   product?: {
     name: string;
@@ -101,12 +104,46 @@ type TechCardOperation = {
 
 type MaterialPrice = {
   id: string;
+  name?: string | null;
   default_price: number | null;
+  production_units_per_purchase_unit?: number | null;
 };
 
 type ConsumablePrice = {
   id: string;
+  name?: string | null;
   default_price: number | null;
+};
+
+type ProductionStockCheckResult = {
+  item_type: "material" | "consumable" | string;
+  item_id: string;
+  item_name: string;
+  required_quantity: number | null;
+  available_quantity: number | null;
+  missing_quantity: number | null;
+};
+
+type StockAvailableRow = {
+  item_type: "product" | "material" | "consumable" | string;
+  product_id: string | null;
+  material_id: string | null;
+  consumable_id: string | null;
+  quantity_available: number | null;
+};
+
+type ProductionMaterialRequirement = {
+  item_type: "material";
+  material_id: string;
+  quantity: number;
+  name: string;
+};
+
+type ProductionConsumableRequirement = {
+  item_type: "consumable";
+  consumable_id: string;
+  quantity: number;
+  name: string;
 };
 
 type Job = {
@@ -193,6 +230,60 @@ function formatTimer(seconds: number) {
   return [hours, minutes, restSeconds]
     .map((item) => String(item).padStart(2, "0"))
     .join(":");
+}
+
+function formatQuantity(value: number) {
+  return Number(value || 0).toLocaleString("ru-RU", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  });
+}
+
+function getConversionFactor(value: number | null | undefined) {
+  const factor = Number(value || 1);
+  return factor > 0 ? factor : 1;
+}
+
+function convertProductionUnitsToStockUnits(
+  productionQuantity: number,
+  productionUnitsPerPurchaseUnit: number | null | undefined
+) {
+  return productionQuantity / getConversionFactor(productionUnitsPerPurchaseUnit);
+}
+
+function getStockKey(row: {
+  item_type: string;
+  product_id?: string | null;
+  material_id?: string | null;
+  consumable_id?: string | null;
+}) {
+  if (row.item_type === "product") return `product:${row.product_id || ""}`;
+  if (row.item_type === "material") return `material:${row.material_id || ""}`;
+  if (row.item_type === "consumable") {
+    return `consumable:${row.consumable_id || ""}`;
+  }
+
+  return "";
+}
+
+async function loadWarehouseAvailableMap() {
+  const availableMap = new Map<string, number>();
+
+  const { data: stockRows, error: stockError } = await supabase
+    .from("stock_available")
+    .select(
+      "item_type, product_id, material_id, consumable_id, quantity_available",
+    );
+
+  if (stockError) {
+    throw stockError;
+  }
+
+  ((stockRows as StockAvailableRow[]) || []).forEach((row) => {
+    availableMap.set(getStockKey(row), Number(row.quantity_available || 0));
+  });
+
+  return availableMap;
 }
 
 function getElapsedSeconds(startedAt: string | null, nowTick: number) {
@@ -562,6 +653,33 @@ export default function Production({
       const techOperations =
         (techOperationsResult.data as TechCardOperation[]) || [];
 
+      const { data: stockCheckData, error: stockCheckError } =
+        await supabase.rpc("check_production_stock", {
+          p_tech_card_id: techCard.id,
+          p_order_quantity: orderQuantity,
+        });
+
+      if (stockCheckError) throw stockCheckError;
+
+      const stockShortages = (
+        (stockCheckData as ProductionStockCheckResult[]) || []
+      ).filter((item) => Number(item.missing_quantity || 0) > 0);
+
+      if (stockShortages.length > 0) {
+        throw new Error(
+          `Недостаточно остатков для запуска производства: ${stockShortages
+            .map(
+              (item) =>
+                `${item.item_name}: нужно ${formatQuantity(
+                  Number(item.required_quantity || 0),
+                )}, доступно ${formatQuantity(
+                  Number(item.available_quantity || 0),
+                )}`,
+            )
+            .join("; ")}`,
+        );
+      }
+
       const materialIds = techMaterials.map((item) => item.material_id);
       const consumableIds = techConsumables.map((item) => item.consumable_id);
 
@@ -570,14 +688,14 @@ export default function Production({
           materialIds.length > 0
             ? supabase
                 .from("materials")
-                .select("id, default_price")
+                .select("id, name, default_price, production_units_per_purchase_unit")
                 .in("id", materialIds)
             : Promise.resolve({ data: [], error: null }),
 
           consumableIds.length > 0
             ? supabase
                 .from("consumables")
-                .select("id, default_price")
+                .select("id, name, default_price")
                 .in("id", consumableIds)
             : Promise.resolve({ data: [], error: null }),
         ]);
@@ -599,6 +717,44 @@ export default function Production({
           Number(item.default_price || 0),
         ])
       );
+
+      const materialInfoMap = new Map(
+        materialPrices.map((item) => [item.id, item]),
+      );
+
+      const consumableInfoMap = new Map(
+        consumablePrices.map((item) => [item.id, item]),
+      );
+
+      const materialStockRequirements: ProductionMaterialRequirement[] =
+        techMaterials.map((item) => {
+          const materialInfo = materialInfoMap.get(item.material_id);
+          const requiredProductionQuantity =
+            Number(item.quantity || 0) * orderQuantity;
+          const requiredStockQuantity = convertProductionUnitsToStockUnits(
+            requiredProductionQuantity,
+            materialInfo?.production_units_per_purchase_unit,
+          );
+
+          return {
+            item_type: "material",
+            material_id: item.material_id,
+            quantity: requiredStockQuantity,
+            name: materialInfo?.name || "Материал",
+          };
+        });
+
+      const consumableStockRequirements: ProductionConsumableRequirement[] =
+        techConsumables.map((item) => {
+          const consumableInfo = consumableInfoMap.get(item.consumable_id);
+
+          return {
+            item_type: "consumable",
+            consumable_id: item.consumable_id,
+            quantity: Number(item.quantity || 0) * orderQuantity,
+            name: consumableInfo?.name || "Расходник",
+          };
+        });
 
       const plannedMaterialsCost = techMaterials.reduce((sum, item) => {
         const price = materialPriceMap.get(item.material_id) || 0;
@@ -715,7 +871,51 @@ export default function Production({
         if (error) throw error;
       }
 
-      setMessage(`Производственный заказ ${orderNumber} создан.`);
+      const stockReservationRows = [
+        ...materialStockRequirements.map((item) => ({
+          source_document_type: "production_order",
+          source_document_id: orderId,
+          production_order_id: orderId,
+          item_type: "material",
+          material_id: item.material_id,
+          product_id: null,
+          consumable_id: null,
+          quantity: item.quantity,
+          status: "active",
+          created_at: new Date().toISOString(),
+        })),
+        ...consumableStockRequirements.map((item) => ({
+          source_document_type: "production_order",
+          source_document_id: orderId,
+          production_order_id: orderId,
+          item_type: "consumable",
+          material_id: null,
+          product_id: null,
+          consumable_id: item.consumable_id,
+          quantity: item.quantity,
+          status: "active",
+          created_at: new Date().toISOString(),
+        })),
+      ].filter((item) => Number(item.quantity || 0) > 0);
+
+      if (stockReservationRows.length > 0) {
+        const { error: reservationError } = await supabase
+          .from("stock_reservations")
+          .insert(stockReservationRows);
+
+        if (reservationError) throw reservationError;
+
+        const { error: reserveOrderError } = await supabase
+          .from("production_orders")
+          .update({
+            materials_reserved_at: new Date().toISOString(),
+          })
+          .eq("id", orderId);
+
+        if (reserveOrderError) throw reserveOrderError;
+      }
+
+      setMessage(`Производственный заказ ${orderNumber} создан. Материалы зарезервированы.`);
       setIsCreateOpen(false);
       setQuantity("");
       setComment("");
@@ -856,6 +1056,16 @@ export default function Production({
       setMessage("");
 
       const deleteSteps = [
+        supabase
+          .from("stock_reservations")
+          .delete()
+          .eq("production_order_id", order.id),
+
+        supabase
+          .from("stock_movements")
+          .delete()
+          .eq("production_order_id", order.id),
+
         supabase
           .from("production_operation_logs")
           .delete()
@@ -1051,6 +1261,179 @@ export default function Production({
     }
   }
 
+
+  async function finalizeProductionOrderStock(orderId: string) {
+    const now = new Date().toISOString();
+
+    const { data: freshOrder, error: freshOrderError } = await supabase
+      .from("production_orders")
+      .select(
+        "id, product_id, quantity, status, materials_written_off_at, finished_goods_received_at",
+      )
+      .eq("id", orderId)
+      .single();
+
+    if (freshOrderError) throw freshOrderError;
+
+    if (
+      freshOrder.materials_written_off_at &&
+      freshOrder.finished_goods_received_at
+    ) {
+      const { error: doneOrderError } = await supabase
+        .from("production_orders")
+        .update({ status: "done" })
+        .eq("id", orderId);
+
+      if (doneOrderError) throw doneOrderError;
+      return;
+    }
+
+    const [orderMaterialsResult, orderConsumablesResult] = await Promise.all([
+      supabase
+        .from("production_order_materials")
+        .select(
+          `
+          material_id,
+          total_quantity,
+          materials (
+            id,
+            name,
+            production_units_per_purchase_unit
+          )
+        `,
+        )
+        .eq("production_order_id", orderId),
+
+      supabase
+        .from("production_order_consumables")
+        .select("consumable_id, total_quantity")
+        .eq("production_order_id", orderId),
+    ]);
+
+    if (orderMaterialsResult.error) throw orderMaterialsResult.error;
+    if (orderConsumablesResult.error) throw orderConsumablesResult.error;
+
+    const materialMovementRows = ((orderMaterialsResult.data || []) as any[])
+      .map((row) => {
+        const material = Array.isArray(row.materials)
+          ? row.materials[0]
+          : row.materials;
+
+        const quantity = convertProductionUnitsToStockUnits(
+          Number(row.total_quantity || 0),
+          material?.production_units_per_purchase_unit,
+        );
+
+        return {
+          movement_type: "production_write_off",
+          source_document_type: "production_order",
+          source_document_id: orderId,
+          production_order_id: orderId,
+          item_type: "material",
+          product_id: null,
+          material_id: row.material_id,
+          consumable_id: null,
+          quantity: -Math.abs(quantity),
+          created_at: now,
+        };
+      })
+      .filter((item) => Number(item.quantity || 0) !== 0);
+
+    const consumableMovementRows = ((orderConsumablesResult.data || []) as any[])
+      .map((row) => ({
+        movement_type: "production_write_off",
+        source_document_type: "production_order",
+        source_document_id: orderId,
+        production_order_id: orderId,
+        item_type: "consumable",
+        product_id: null,
+        material_id: null,
+        consumable_id: row.consumable_id,
+        quantity: -Math.abs(Number(row.total_quantity || 0)),
+        created_at: now,
+      }))
+      .filter((item) => Number(item.quantity || 0) !== 0);
+
+    const finishedProductMovementRow = {
+      movement_type: "production_receipt",
+      source_document_type: "production_order",
+      source_document_id: orderId,
+      production_order_id: orderId,
+      item_type: "product",
+      product_id: freshOrder.product_id,
+      material_id: null,
+      consumable_id: null,
+      quantity: Number(freshOrder.quantity || 0),
+      created_at: now,
+    };
+
+    const stockMovementRows = [
+      ...materialMovementRows,
+      ...consumableMovementRows,
+      finishedProductMovementRow,
+    ];
+
+    if (stockMovementRows.length > 0) {
+      const { error: movementsError } = await supabase
+        .from("stock_movements")
+        .insert(stockMovementRows);
+
+      if (movementsError) throw movementsError;
+    }
+
+    const { error: releaseReservationsError } = await supabase
+      .from("stock_reservations")
+      .update({
+        status: "released",
+        updated_at: now,
+      })
+      .eq("production_order_id", orderId)
+      .eq("status", "active");
+
+    if (releaseReservationsError) throw releaseReservationsError;
+
+    const { error: batchesError } = await supabase
+      .from("production_batches")
+      .update({
+        status: "done",
+        completed_at: now,
+      })
+      .eq("production_order_id", orderId)
+      .neq("status", "done");
+
+    if (batchesError) throw batchesError;
+
+    const { error: orderError } = await supabase
+      .from("production_orders")
+      .update({
+        status: "done",
+        materials_written_off_at: freshOrder.materials_written_off_at || now,
+        finished_goods_received_at: freshOrder.finished_goods_received_at || now,
+      })
+      .eq("id", orderId);
+
+    if (orderError) throw orderError;
+  }
+
+  async function isProductionOrderFullyDone(orderId: string, orderQuantity: number) {
+    const { data: freshOperations, error: freshOperationsError } = await supabase
+      .from("production_order_operations")
+      .select("id, completed_quantity")
+      .eq("production_order_id", orderId);
+
+    if (freshOperationsError) throw freshOperationsError;
+
+    return (
+      ((freshOperations as Array<{ completed_quantity: number | null }>) || [])
+        .length > 0 &&
+      ((freshOperations as Array<{ completed_quantity: number | null }>) || [])
+        .every(
+          (item) =>
+            Number(item.completed_quantity || 0) >= Number(orderQuantity || 0),
+        )
+    );
+  }
+
   async function handleFinishOperation(e: React.FormEvent) {
     e.preventDefault();
 
@@ -1212,14 +1595,14 @@ export default function Production({
       );
 
       if (allDone) {
-        const { error: orderError } = await supabase
-          .from("production_orders")
-          .update({
-            status: "done",
-          })
-          .eq("id", order.id);
+        const fullyDone = await isProductionOrderFullyDone(
+          order.id,
+          Number(order.quantity || 0),
+        );
 
-        if (orderError) throw orderError;
+        if (fullyDone) {
+          await finalizeProductionOrderStock(order.id);
+        }
       }
 
       if (finishOperation.sort_order === 1) {
@@ -1504,15 +1887,15 @@ export default function Production({
         refreshedBatches.length > 0 &&
         refreshedBatches.every((item) => item.status === "done");
 
-      if (allOperationsDone && allBatchesDone) {
-        const { error: orderError } = await supabase
-          .from("production_orders")
-          .update({
-            status: "done",
-          })
-          .eq("id", order.id);
+      if (allOperationsDone) {
+        const fullyDone = await isProductionOrderFullyDone(
+          order.id,
+          Number(order.quantity || 0),
+        );
 
-        if (orderError) throw orderError;
+        if (fullyDone) {
+          await finalizeProductionOrderStock(order.id);
+        }
       }
 
       setMessage(

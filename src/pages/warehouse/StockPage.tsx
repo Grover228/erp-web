@@ -1,73 +1,84 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../supabase";
-import StockItemModal from "./StockItemModal";
 
-type PurchaseItemType = "material" | "consumable";
-type StockTab = "all" | "material" | "consumable";
+type StockItemType = "product" | "material" | "consumable";
+type StockTab = "all" | StockItemType;
+type AdjustmentMode = "receipt" | "write_off";
 
-type ReceiptStatus = {
-  code: string | null;
-  name: string | null;
-  color: string | null;
-};
-
-type ReceiptForStock = {
-  id: string;
-  receipt_number: string | null;
-  receipt_date: string | null;
-  supplier_name: string | null;
-  status: string | null;
-  statuses?: ReceiptStatus | null;
-};
-
-type StockReceiptItem = {
-  id: string;
-  item_type: PurchaseItemType;
+type StockAvailableRow = {
+  item_type: StockItemType | string;
+  product_id: string | null;
   material_id: string | null;
   consumable_id: string | null;
-  quantity: number;
-  price: number;
-  amount: number;
-  supplier_receipt_id: string | null;
-  materials?: {
-    name: string | null;
-    article: string | null;
-    color_id: string | null;
-    colors?: {
-      name: string | null;
-      hex: string | null;
-    } | null;
-  } | null;
-  consumables?: {
-    name: string | null;
-    article: string | null;
-  } | null;
-  supplier_receipts?: ReceiptForStock | null;
+  quantity_on_hand: number | null;
+  quantity_reserved: number | null;
+  quantity_available: number | null;
+};
+
+type ProductCatalogItem = {
+  id: string;
+  name: string | null;
+  article: string | null;
+};
+
+type MaterialCatalogItem = {
+  id: string;
+  name: string | null;
+  article: string | null;
+  color_id: string | null;
+  default_price: number | null;
+};
+
+type ConsumableCatalogItem = {
+  id: string;
+  name: string | null;
+  article: string | null;
+  default_price: number | null;
+};
+
+type ColorCatalogItem = {
+  id: string;
+  name: string | null;
+  hex: string | null;
+};
+
+type StockMovementRow = {
+  id?: string;
+  item_type: StockItemType | string;
+  product_id: string | null;
+  material_id: string | null;
+  consumable_id: string | null;
+  movement_type: string | null;
+  source_document_type: string | null;
+  source_document_id?: string | null;
+  production_order_id?: string | null;
+  quantity?: number | null;
+  created_at: string | null;
+};
+
+type ProductionOrderCostRow = {
+  product_id: string | null;
+  quantity: number | null;
+  planned_total_cost: number | null;
 };
 
 type StockRow = {
   key: string;
-  itemType: PurchaseItemType;
+  itemType: StockItemType;
   itemId: string;
   name: string;
   article: string;
   colorName: string;
   colorHex: string;
-  quantity: number;
-  amount: number;
+  quantityOnHand: number;
+  quantityReserved: number;
+  quantityAvailable: number;
   avgPrice: number;
-  receiptsCount: number;
-  lastReceiptDate: string;
-  lastSupplierName: string;
+  amount: number;
+  lastMovementDate: string;
+  lastMovementType: string;
+  lastDocumentType: string;
 };
-
-function getReceiptStatusCode(item: StockReceiptItem) {
-  return item.supplier_receipts?.statuses?.code || item.supplier_receipts?.status || "";
-}
-
-function isPostedReceiptItem(item: StockReceiptItem) {
-  return getReceiptStatusCode(item) === "posted";
-}
 
 function formatMoney(value: number) {
   return value.toLocaleString("ru-RU", {
@@ -83,13 +94,58 @@ function formatQuantity(value: number) {
   });
 }
 
+function getStockKey(itemType: string, itemId: string | null) {
+  return `${itemType}-${itemId || ""}`;
+}
+
+function getStockRowId(row: StockAvailableRow) {
+  if (row.item_type === "product") return row.product_id;
+  if (row.item_type === "material") return row.material_id;
+  if (row.item_type === "consumable") return row.consumable_id;
+  return null;
+}
+
+function getMovementLabel(type: string) {
+  if (type === "receipt") return "Поступление";
+  if (type === "incoming") return "Приход";
+  if (type === "outgoing") return "Расход";
+  if (type === "production_receipt") return "Выпуск продукции";
+  if (type === "production_write_off") return "Списание в производство";
+  if (type === "manual_receipt") return "Оприходование";
+  if (type === "manual_write_off") return "Списание";
+  if (type === "reservation") return "Резерв";
+  if (type === "release") return "Снятие резерва";
+  return type || "—";
+}
+
+function getDocumentLabel(type: string) {
+  if (type === "supplier_receipt") return "Приёмка поставщика";
+  if (type === "production_order") return "Производство";
+  if (type === "customer_shipment") return "Отгрузка покупателю";
+  if (type === "customer_order") return "Заказ покупателя";
+  if (type === "stock_adjustment") return "Корректировка склада";
+  return type || "—";
+}
+
 export default function StockPage() {
-  const [items, setItems] = useState<StockReceiptItem[]>([]);
+  const [stockAvailable, setStockAvailable] = useState<StockAvailableRow[]>([]);
+  const [products, setProducts] = useState<ProductCatalogItem[]>([]);
+  const [materials, setMaterials] = useState<MaterialCatalogItem[]>([]);
+  const [consumables, setConsumables] = useState<ConsumableCatalogItem[]>([]);
+  const [colors, setColors] = useState<ColorCatalogItem[]>([]);
+  const [movements, setMovements] = useState<StockMovementRow[]>([]);
+  const [productionCosts, setProductionCosts] = useState<ProductionOrderCostRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<StockTab>("all");
   const [search, setSearch] = useState("");
-  const [selectedStockRow, setSelectedStockRow] = useState<StockRow | null>(null);
+  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
+  const [adjustmentMode, setAdjustmentMode] = useState<AdjustmentMode | null>(null);
+  const [adjustmentQuantity, setAdjustmentQuantity] = useState("");
+  const [adjustmentReason, setAdjustmentReason] = useState("");
+  const [adjustmentComment, setAdjustmentComment] = useState("");
+  const [adjustmentSaving, setAdjustmentSaving] = useState(false);
+  const [adjustmentError, setAdjustmentError] = useState("");
 
   useEffect(() => {
     loadStockItems();
@@ -100,40 +156,69 @@ export default function StockPage() {
       setLoading(true);
       setError("");
 
-      const { data, error } = await supabase
-        .from("supplier_receipt_items")
-        .select(
-          `
-          id,
-          item_type,
-          material_id,
-          consumable_id,
-          quantity,
-          price,
-          amount,
-          supplier_receipt_id,
-          materials(
-            name,
-            article,
-            color_id,
-            colors(name, hex)
+      const [
+        stockResult,
+        productsResult,
+        materialsResult,
+        consumablesResult,
+        colorsResult,
+        movementsResult,
+        productionCostsResult,
+      ] = await Promise.all([
+        supabase
+          .from("stock_available")
+          .select(
+            "item_type, product_id, material_id, consumable_id, quantity_on_hand, quantity_reserved, quantity_available",
           ),
-          consumables(name, article),
-          supplier_receipts(
-            id,
-            receipt_number,
-            receipt_date,
-            supplier_name,
-            status,
-            statuses(code, name, color)
+
+        supabase
+          .from("products")
+          .select("id, name, article")
+          .order("name", { ascending: true }),
+
+        supabase
+          .from("materials")
+          .select("id, name, article, color_id, default_price")
+          .order("name", { ascending: true }),
+
+        supabase
+          .from("consumables")
+          .select("id, name, article, default_price")
+          .order("name", { ascending: true }),
+
+        supabase
+          .from("colors")
+          .select("id, name, hex")
+          .order("name", { ascending: true }),
+
+        supabase
+          .from("stock_movements")
+          .select(
+            "id, item_type, product_id, material_id, consumable_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
           )
-        `,
-        )
-        .order("created_at", { ascending: false });
+          .order("created_at", { ascending: false }),
 
-      if (error) throw error;
+        supabase
+          .from("production_orders")
+          .select("product_id, quantity, planned_total_cost")
+          .eq("status", "done"),
+      ]);
 
-      setItems((data as StockReceiptItem[]) || []);
+      if (stockResult.error) throw stockResult.error;
+      if (productsResult.error) throw productsResult.error;
+      if (materialsResult.error) throw materialsResult.error;
+      if (consumablesResult.error) throw consumablesResult.error;
+      if (colorsResult.error) throw colorsResult.error;
+      if (movementsResult.error) throw movementsResult.error;
+      if (productionCostsResult.error) throw productionCostsResult.error;
+
+      setStockAvailable((stockResult.data as StockAvailableRow[]) || []);
+      setProducts((productsResult.data as ProductCatalogItem[]) || []);
+      setMaterials((materialsResult.data as MaterialCatalogItem[]) || []);
+      setConsumables((consumablesResult.data as ConsumableCatalogItem[]) || []);
+      setColors((colorsResult.data as ColorCatalogItem[]) || []);
+      setMovements((movementsResult.data as StockMovementRow[]) || []);
+      setProductionCosts((productionCostsResult.data as ProductionOrderCostRow[]) || []);
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Ошибка загрузки остатков",
@@ -143,77 +228,221 @@ export default function StockPage() {
     }
   }
 
-  const postedItems = useMemo(() => items.filter(isPostedReceiptItem), [items]);
+
+  function openAdjustment(mode: AdjustmentMode) {
+    setAdjustmentMode(mode);
+    setAdjustmentQuantity("");
+    setAdjustmentReason("");
+    setAdjustmentComment("");
+    setAdjustmentError("");
+  }
+
+  function closeAdjustmentForm() {
+    setAdjustmentMode(null);
+    setAdjustmentQuantity("");
+    setAdjustmentReason("");
+    setAdjustmentComment("");
+    setAdjustmentError("");
+  }
+
+  async function handleSaveAdjustment(event: React.FormEvent) {
+    event.preventDefault();
+
+    if (!selectedRow || !adjustmentMode) return;
+
+    const quantityValue = Number(adjustmentQuantity.replace(",", "."));
+
+    if (!adjustmentQuantity || Number.isNaN(quantityValue) || quantityValue <= 0) {
+      setAdjustmentError("Укажи количество больше 0.");
+      return;
+    }
+
+    if (
+      adjustmentMode === "write_off" &&
+      quantityValue > Number(selectedRow.quantityAvailable || 0)
+    ) {
+      setAdjustmentError(
+        `Нельзя списать ${formatQuantity(quantityValue)}. Доступно только ${formatQuantity(
+          selectedRow.quantityAvailable,
+        )}.`,
+      );
+      return;
+    }
+
+    try {
+      setAdjustmentSaving(true);
+      setAdjustmentError("");
+      setError("");
+
+      const signedQuantity =
+        adjustmentMode === "receipt" ? quantityValue : -Math.abs(quantityValue);
+
+      const movementRow = {
+        movement_type:
+          adjustmentMode === "receipt" ? "manual_receipt" : "manual_write_off",
+        source_document_type: "stock_adjustment",
+        source_document_id: null,
+        production_order_id: null,
+        item_type: selectedRow.itemType,
+        product_id: selectedRow.itemType === "product" ? selectedRow.itemId : null,
+        material_id:
+          selectedRow.itemType === "material" ? selectedRow.itemId : null,
+        consumable_id:
+          selectedRow.itemType === "consumable" ? selectedRow.itemId : null,
+        quantity: signedQuantity,
+        created_at: new Date().toISOString(),
+};
+
+      const { error: movementError } = await supabase
+        .from("stock_movements")
+        .insert(movementRow);
+
+      if (movementError) throw movementError;
+
+      closeAdjustmentForm();
+      await loadStockItems();
+    } catch (error) {
+      setAdjustmentError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось сохранить складское движение.",
+      );
+    } finally {
+      setAdjustmentSaving(false);
+    }
+  }
 
   const stockRows = useMemo(() => {
-    const rows = new Map<string, StockRow>();
+    const productMap = new Map(products.map((item) => [item.id, item]));
+    const materialMap = new Map(materials.map((item) => [item.id, item]));
+    const consumableMap = new Map(consumables.map((item) => [item.id, item]));
+    const colorMap = new Map(colors.map((item) => [item.id, item]));
+    const productCostMap = new Map<string, { quantity: number; cost: number }>();
 
-    postedItems.forEach((item) => {
-      const isMaterial = item.item_type === "material";
-      const itemId = isMaterial ? item.material_id : item.consumable_id;
+    productionCosts.forEach((order) => {
+      if (!order.product_id) return;
 
-      if (!itemId) return;
+      const quantity = Number(order.quantity || 0);
+      const cost = Number(order.planned_total_cost || 0);
 
-      const key = `${item.item_type}-${itemId}`;
-      const existing = rows.get(key);
-      const quantity = Number(item.quantity || 0);
-      const amount = Number(item.amount || quantity * Number(item.price || 0));
-      const receiptDate = item.supplier_receipts?.receipt_date || "";
-      const supplierName = item.supplier_receipts?.supplier_name || "";
+      if (quantity <= 0 || cost <= 0) return;
 
-      const name = isMaterial
-        ? item.materials?.name || "Материал"
-        : item.consumables?.name || "Расходник";
+      const current = productCostMap.get(order.product_id) || {
+        quantity: 0,
+        cost: 0,
+      };
 
-      const article = isMaterial
-        ? item.materials?.article || ""
-        : item.consumables?.article || "";
-
-      const colorName = isMaterial ? item.materials?.colors?.name || "" : "";
-      const colorHex = isMaterial ? item.materials?.colors?.hex || "" : "";
-
-      if (!existing) {
-        rows.set(key, {
-          key,
-          itemType: item.item_type,
-          itemId,
-          name,
-          article,
-          colorName,
-          colorHex,
-          quantity,
-          amount,
-          avgPrice: quantity > 0 ? amount / quantity : 0,
-          receiptsCount: 1,
-          lastReceiptDate: receiptDate,
-          lastSupplierName: supplierName,
-        });
-
-        return;
-      }
-
-      const nextQuantity = existing.quantity + quantity;
-      const nextAmount = existing.amount + amount;
-      const currentDate = existing.lastReceiptDate || "";
-      const shouldUpdateLastReceipt = receiptDate && receiptDate >= currentDate;
-
-      rows.set(key, {
-        ...existing,
-        quantity: nextQuantity,
-        amount: nextAmount,
-        avgPrice: nextQuantity > 0 ? nextAmount / nextQuantity : 0,
-        receiptsCount: existing.receiptsCount + 1,
-        lastReceiptDate: shouldUpdateLastReceipt ? receiptDate : existing.lastReceiptDate,
-        lastSupplierName: shouldUpdateLastReceipt
-          ? supplierName
-          : existing.lastSupplierName,
+      productCostMap.set(order.product_id, {
+        quantity: current.quantity + quantity,
+        cost: current.cost + cost,
       });
     });
 
-    return Array.from(rows.values()).sort((a, b) =>
-      a.name.localeCompare(b.name, "ru"),
-    );
-  }, [postedItems]);
+    const lastMovementMap = new Map<string, StockMovementRow>();
+
+    movements.forEach((movement) => {
+      const itemId =
+        movement.item_type === "product"
+          ? movement.product_id
+          : movement.item_type === "material"
+            ? movement.material_id
+            : movement.consumable_id;
+
+      if (!itemId) return;
+
+      const key = getStockKey(movement.item_type, itemId);
+      if (!lastMovementMap.has(key)) {
+        lastMovementMap.set(key, movement);
+      }
+    });
+
+    return stockAvailable
+      .map((row) => {
+        const itemId = getStockRowId(row);
+        if (!itemId) return null;
+
+        const itemType = row.item_type as StockItemType;
+        const key = getStockKey(itemType, itemId);
+        const quantityOnHand = Number(row.quantity_on_hand || 0);
+        const quantityReserved = Number(row.quantity_reserved || 0);
+        const quantityAvailable = Number(row.quantity_available || 0);
+        const lastMovement = lastMovementMap.get(key);
+
+        if (itemType === "product") {
+          const product = productMap.get(itemId);
+          const productCost = productCostMap.get(itemId);
+          const price =
+            productCost && productCost.quantity > 0
+              ? productCost.cost / productCost.quantity
+              : 0;
+
+          return {
+            key,
+            itemType,
+            itemId,
+            name: product?.name || "Готовая продукция / товар",
+            article: product?.article || "",
+            colorName: "",
+            colorHex: "",
+            quantityOnHand,
+            quantityReserved,
+            quantityAvailable,
+            avgPrice: price,
+            amount: quantityOnHand * price,
+            lastMovementDate: lastMovement?.created_at || "",
+            lastMovementType: getMovementLabel(lastMovement?.movement_type || ""),
+            lastDocumentType: getDocumentLabel(lastMovement?.source_document_type || ""),
+          } as StockRow;
+        }
+
+        if (itemType === "material") {
+          const material = materialMap.get(itemId);
+          const color = material?.color_id ? colorMap.get(material.color_id) : null;
+          const price = Number(material?.default_price || 0);
+
+          return {
+            key,
+            itemType,
+            itemId,
+            name: material?.name || "Материал",
+            article: material?.article || "",
+            colorName: color?.name || "",
+            colorHex: color?.hex || "",
+            quantityOnHand,
+            quantityReserved,
+            quantityAvailable,
+            avgPrice: price,
+            amount: quantityOnHand * price,
+            lastMovementDate: lastMovement?.created_at || "",
+            lastMovementType: getMovementLabel(lastMovement?.movement_type || ""),
+            lastDocumentType: getDocumentLabel(lastMovement?.source_document_type || ""),
+          } as StockRow;
+        }
+
+        const consumable = consumableMap.get(itemId);
+        const price = Number(consumable?.default_price || 0);
+
+        return {
+          key,
+          itemType,
+          itemId,
+          name: consumable?.name || "Расходник",
+          article: consumable?.article || "",
+          colorName: "",
+          colorHex: "",
+          quantityOnHand,
+          quantityReserved,
+          quantityAvailable,
+          avgPrice: price,
+          amount: quantityOnHand * price,
+          lastMovementDate: lastMovement?.created_at || "",
+          lastMovementType: getMovementLabel(lastMovement?.movement_type || ""),
+          lastDocumentType: getDocumentLabel(lastMovement?.source_document_type || ""),
+        } as StockRow;
+      })
+      .filter(Boolean)
+      .sort((a, b) => a!.name.localeCompare(b!.name, "ru")) as StockRow[];
+  }, [stockAvailable, products, materials, consumables, colors, movements, productionCosts]);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -225,34 +454,31 @@ export default function StockPage() {
         row.name.toLowerCase().includes(query) ||
         row.article.toLowerCase().includes(query) ||
         row.colorName.toLowerCase().includes(query) ||
-        row.lastSupplierName.toLowerCase().includes(query);
+        row.lastMovementType.toLowerCase().includes(query) ||
+        row.lastDocumentType.toLowerCase().includes(query);
 
       return matchesTab && matchesSearch;
     });
   }, [stockRows, activeTab, search]);
 
-  const selectedStockMovements = useMemo(() => {
-    if (!selectedStockRow) return [];
+              
+  const selectedRow =
+    stockRows.find((row) => row.key === selectedRowKey) || null;
 
-    return postedItems
-      .filter((item) => {
-        const itemId =
-          item.item_type === "material" ? item.material_id : item.consumable_id;
-
-        return item.item_type === selectedStockRow.itemType && itemId === selectedStockRow.itemId;
-      })
-      .sort((a, b) => {
-        const dateA = a.supplier_receipts?.receipt_date || "";
-        const dateB = b.supplier_receipts?.receipt_date || "";
-
-        return dateB.localeCompare(dateA);
-      });
-  }, [postedItems, selectedStockRow]);
-
-  const totalAmount = stockRows.reduce((sum, row) => sum + row.amount, 0);
-  const totalQuantity = stockRows.reduce((sum, row) => sum + row.quantity, 0);
-  const materialRowsCount = stockRows.filter((row) => row.itemType === "material").length;
-  const consumableRowsCount = stockRows.filter((row) => row.itemType === "consumable").length;
+  const selectedMovements = selectedRow
+    ? movements
+        .filter((movement) => {
+          if (movement.item_type !== selectedRow.itemType) return false;
+          if (selectedRow.itemType === "product") return movement.product_id === selectedRow.itemId;
+          if (selectedRow.itemType === "material") return movement.material_id === selectedRow.itemId;
+          return movement.consumable_id === selectedRow.itemId;
+        })
+        .sort(
+          (a, b) =>
+            new Date(b.created_at || 0).getTime() -
+            new Date(a.created_at || 0).getTime(),
+        )
+    : [];
 
   return (
     <div style={pageStyle}>
@@ -264,7 +490,8 @@ export default function StockPage() {
               <span style={sectionTitleStyle}>Остатки</span>
             </div>
             <div style={sectionSubtitleStyle}>
-              Остатки считаются только по проведённым приёмкам со статусом posted.
+              Остатки считаются по всем складским движениям: приёмки, производство,
+              списания, выпуск продукции, отгрузки и активные резервы.
             </div>
           </div>
 
@@ -275,35 +502,20 @@ export default function StockPage() {
 
         {error && <div style={errorStyle}>{error}</div>}
 
-        <div style={summaryGridStyle}>
-          <SummaryCard label="Номенклатур" value={String(stockRows.length)} />
-          <SummaryCard label="Материалов" value={String(materialRowsCount)} />
-          <SummaryCard label="Расходников" value={String(consumableRowsCount)} />
-          <SummaryCard label="Общее кол-во" value={formatQuantity(totalQuantity)} />
-          <SummaryCard label="Стоимость" value={`${formatMoney(totalAmount)} ₽`} />
-        </div>
+        
 
         <div style={toolbarStyle}>
           <div style={filterTabsStyle}>
-            <button
-              type="button"
-              onClick={() => setActiveTab("all")}
-              style={filterTabStyle(activeTab === "all")}
-            >
+            <button type="button" onClick={() => setActiveTab("all")} style={filterTabStyle(activeTab === "all")}>
               Все
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("material")}
-              style={filterTabStyle(activeTab === "material")}
-            >
+            <button type="button" onClick={() => setActiveTab("product")} style={filterTabStyle(activeTab === "product")}>
+              Товары / продукция
+            </button>
+            <button type="button" onClick={() => setActiveTab("material")} style={filterTabStyle(activeTab === "material")}>
               Материалы
             </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab("consumable")}
-              style={filterTabStyle(activeTab === "consumable")}
-            >
+            <button type="button" onClick={() => setActiveTab("consumable")} style={filterTabStyle(activeTab === "consumable")}>
               Расходники
             </button>
           </div>
@@ -311,7 +523,7 @@ export default function StockPage() {
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Поиск по названию, артикулу, цвету или поставщику"
+            placeholder="Поиск по названию, артикулу, цвету или движению"
             style={searchInputStyle}
           />
         </div>
@@ -320,7 +532,8 @@ export default function StockPage() {
           <div style={loadingStyle}>Загружаю остатки...</div>
         ) : filteredRows.length === 0 ? (
           <div style={emptyStyle}>
-            Остатков пока нет. Проведи приёмку, чтобы товар появился здесь.
+            Остатков пока нет. Создай складское движение: приёмку, выпуск продукции
+            или другой документ движения склада.
           </div>
         ) : (
           <div style={tableWrapStyle}>
@@ -332,10 +545,11 @@ export default function StockPage() {
                   <th style={thStyle}>Артикул</th>
                   <th style={thStyle}>Цвет</th>
                   <th style={thStyle}>Остаток</th>
-                  <th style={thStyle}>Средняя цена</th>
+                  <th style={thStyle}>Резерв</th>
+                  <th style={thStyle}>Доступно</th>
+                  <th style={thStyle}>Цена</th>
                   <th style={thStyle}>Стоимость</th>
-                  <th style={thStyle}>Приёмок</th>
-                  <th style={thStyle}>Последнее поступление</th>
+                  <th style={thStyle}>Последнее движение</th>
                 </tr>
               </thead>
 
@@ -343,26 +557,40 @@ export default function StockPage() {
                 {filteredRows.map((row) => (
                   <tr
                     key={row.key}
-                    onClick={() => setSelectedStockRow(row)}
+                    onClick={() => setSelectedRowKey(row.key)}
                     style={clickableRowStyle}
-                    title="Открыть карточку остатка"
                   >
                     <td style={tdStyle}>
                       <span style={typeBadgeStyle(row.itemType)}>
-                        {row.itemType === "material" ? "Материал" : "Расходник"}
+                        {getItemTypeLabel(row.itemType)}
                       </span>
                     </td>
-                    <td style={tdStrongStyle}>{row.name}</td>
+                    <td style={tdStrongStyle}>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setSelectedRowKey(row.key);
+                        }}
+                        style={rowNameButtonStyle}
+                      >
+                        {row.name}
+                      </button>
+                    </td>
                     <td style={tdStyle}>{row.article || "—"}</td>
                     <td style={tdStyle}>{renderColor(row)}</td>
-                    <td style={tdStrongStyle}>{formatQuantity(row.quantity)}</td>
+                    <td style={tdStrongStyle}>{formatQuantity(row.quantityOnHand)}</td>
+                    <td style={tdStyle}>{formatQuantity(row.quantityReserved)}</td>
+                    <td style={row.quantityAvailable < 0 ? tdDangerStyle : tdStrongStyle}>
+                      {formatQuantity(row.quantityAvailable)}
+                    </td>
                     <td style={tdStyle}>{formatMoney(row.avgPrice)} ₽</td>
                     <td style={tdStrongStyle}>{formatMoney(row.amount)} ₽</td>
-                    <td style={tdStyle}>{row.receiptsCount}</td>
                     <td style={tdStyle}>
                       <div style={{ display: "grid", gap: 3 }}>
-                        <span>{row.lastReceiptDate || "—"}</span>
-                        <span style={supplierTextStyle}>{row.lastSupplierName || "—"}</span>
+                        <span>{row.lastMovementType || "—"}</span>
+                        <span style={supplierTextStyle}>{row.lastDocumentType || "—"}</span>
+                        <span style={supplierTextStyle}>{row.lastMovementDate ? new Date(row.lastMovementDate).toLocaleString("ru-RU") : "—"}</span>
                       </div>
                     </td>
                   </tr>
@@ -373,12 +601,205 @@ export default function StockPage() {
         )}
       </div>
 
-      {selectedStockRow && (
-        <StockItemModal
-          stockRow={selectedStockRow}
-          movements={selectedStockMovements}
-          onClose={() => setSelectedStockRow(null)}
-        />
+      {selectedRow && (
+        <div
+          onClick={() => {
+            closeAdjustmentForm();
+            setSelectedRowKey(null);
+          }}
+          style={modalOverlayStyle}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={stockCardModalStyle}
+          >
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>{selectedRow.name}</div>
+                <div style={modalSubtitleStyle}>
+                  {getItemTypeLabel(selectedRow.itemType)}
+                  {selectedRow.article ? ` · ${selectedRow.article}` : ""}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  closeAdjustmentForm();
+                  setSelectedRowKey(null);
+                }}
+                style={modalCloseButtonStyle}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={modalSummaryGridStyle}>
+              <SummaryCard label="Остаток" value={formatQuantity(selectedRow.quantityOnHand)} />
+              <SummaryCard label="Резерв" value={formatQuantity(selectedRow.quantityReserved)} />
+              <SummaryCard label="Доступно" value={formatQuantity(selectedRow.quantityAvailable)} />
+              <SummaryCard label="Цена" value={`${formatMoney(selectedRow.avgPrice)} ₽`} />
+              <SummaryCard label="Стоимость" value={`${formatMoney(selectedRow.amount)} ₽`} />
+            </div>
+
+            <div style={modalActionRowStyle}>
+              <button
+                type="button"
+                onClick={() => openAdjustment("receipt")}
+                style={receiptActionButtonStyle}
+              >
+                + Оприходовать
+              </button>
+
+              <button
+                type="button"
+                onClick={() => openAdjustment("write_off")}
+                style={writeOffActionButtonStyle}
+              >
+                − Списать
+              </button>
+            </div>
+
+            {adjustmentMode && (
+              <form onSubmit={handleSaveAdjustment} style={adjustmentFormStyle}>
+                <div>
+                  <div style={adjustmentTitleStyle}>
+                    {adjustmentMode === "receipt"
+                      ? "Оприходование товара"
+                      : "Списание товара"}
+                  </div>
+                  <div style={supplierTextStyle}>
+                    Документ будет сохранён как складская корректировка и сразу
+                    попадёт в историю движений.
+                  </div>
+                </div>
+
+                {adjustmentError && (
+                  <div style={adjustmentErrorStyle}>{adjustmentError}</div>
+                )}
+
+                <div style={adjustmentGridStyle}>
+                  <label style={adjustmentFieldStyle}>
+                    <span style={adjustmentLabelStyle}>Количество</span>
+                    <input
+                      value={adjustmentQuantity}
+                      onChange={(event) =>
+                        setAdjustmentQuantity(event.target.value)
+                      }
+                      placeholder="Например: 1"
+                      style={adjustmentInputStyle}
+                    />
+                  </label>
+
+                  <label style={adjustmentFieldStyle}>
+                    <span style={adjustmentLabelStyle}>Причина</span>
+                    <input
+                      value={adjustmentReason}
+                      onChange={(event) =>
+                        setAdjustmentReason(event.target.value)
+                      }
+                      placeholder={
+                        adjustmentMode === "receipt"
+                          ? "Например: инвентаризация"
+                          : "Например: брак / порча"
+                      }
+                      style={adjustmentInputStyle}
+                    />
+                  </label>
+
+                  <label style={{ ...adjustmentFieldStyle, gridColumn: "1 / -1" }}>
+                    <span style={adjustmentLabelStyle}>Комментарий</span>
+                    <textarea
+                      value={adjustmentComment}
+                      onChange={(event) =>
+                        setAdjustmentComment(event.target.value)
+                      }
+                      placeholder="Необязательно"
+                      style={adjustmentTextareaStyle}
+                    />
+                  </label>
+                </div>
+
+                <div style={adjustmentButtonsStyle}>
+                  <button
+                    type="button"
+                    onClick={closeAdjustmentForm}
+                    style={cancelAdjustmentButtonStyle}
+                    disabled={adjustmentSaving}
+                  >
+                    Отмена
+                  </button>
+
+                  <button
+                    type="submit"
+                    style={
+                      adjustmentMode === "receipt"
+                        ? saveReceiptButtonStyle
+                        : saveWriteOffButtonStyle
+                    }
+                    disabled={adjustmentSaving}
+                  >
+                    {adjustmentSaving
+                      ? "Сохраняю..."
+                      : adjustmentMode === "receipt"
+                        ? "Оприходовать"
+                        : "Списать"}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            <div style={cardInfoGridStyle}>
+              <div style={cardInfoBlockStyle}>
+                <div style={cardInfoLabelStyle}>Цвет</div>
+                <div style={cardInfoValueStyle}>{renderColor(selectedRow)}</div>
+              </div>
+
+              <div style={cardInfoBlockStyle}>
+                <div style={cardInfoLabelStyle}>Последнее движение</div>
+                <div style={cardInfoValueStyle}>{selectedRow.lastMovementType || "—"}</div>
+                <div style={supplierTextStyle}>{selectedRow.lastMovementDate ? new Date(selectedRow.lastMovementDate).toLocaleString("ru-RU") : "—"}</div>
+              </div>
+            </div>
+
+            <div style={historyHeaderStyle}>
+              <div style={historyTitleStyle}>История движений</div>
+              <div style={supplierTextStyle}>
+                Последние операции по этой номенклатуре
+              </div>
+            </div>
+
+            {selectedMovements.length === 0 ? (
+              <div style={emptyStyle}>Движений по этой позиции пока нет.</div>
+            ) : (
+              <div style={movementHistoryStyle}>
+                {selectedMovements.map((movement, index) => {
+                  const quantity = Number(movement.quantity || 0);
+
+                  return (
+                    <div key={movement.id || `${movement.created_at}-${index}`} style={movementItemStyle}>
+                      <div style={movementTopLineStyle}>
+                        <span style={movementTitleStyle}>
+                          {getMovementLabel(movement.movement_type || "")}
+                        </span>
+                        <span style={quantity >= 0 ? movementQtyPlusStyle : movementQtyMinusStyle}>
+                          {quantity >= 0 ? "+" : ""}
+                          {formatQuantity(quantity)}
+                        </span>
+                      </div>
+
+                      <div style={movementMetaStyle}>
+                        <span>{getDocumentLabel(movement.source_document_type || "")}</span>
+                        <span>·</span>
+                        <span>{movement.created_at ? new Date(movement.created_at).toLocaleString("ru-RU") : "—"}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -391,6 +812,12 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
       <div style={summaryValueStyle}>{value}</div>
     </div>
   );
+}
+
+function getItemTypeLabel(itemType: StockItemType) {
+  if (itemType === "product") return "Товар / продукция";
+  if (itemType === "material") return "Материал";
+  return "Расходник";
 }
 
 function renderColor(row: StockRow) {
@@ -412,6 +839,282 @@ function renderColor(row: StockRow) {
     </span>
   );
 }
+
+
+
+const modalActionRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const receiptActionButtonStyle: React.CSSProperties = {
+  border: "1px solid #86efac",
+  background: "#dcfce7",
+  color: "#15803d",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const writeOffActionButtonStyle: React.CSSProperties = {
+  border: "1px solid #fecaca",
+  background: "#fef2f2",
+  color: "#b91c1c",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const adjustmentFormStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#f8fafc",
+  borderRadius: 18,
+  padding: 16,
+  display: "grid",
+  gap: 14,
+};
+
+const adjustmentTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 18,
+  fontWeight: 900,
+};
+
+const adjustmentErrorStyle: React.CSSProperties = {
+  border: "1px solid #fecaca",
+  background: "#fef2f2",
+  color: "#991b1b",
+  borderRadius: 14,
+  padding: "10px 12px",
+  fontWeight: 800,
+};
+
+const adjustmentGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+  gap: 12,
+};
+
+const adjustmentFieldStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 6,
+};
+
+const adjustmentLabelStyle: React.CSSProperties = {
+  color: "#334155",
+  fontWeight: 900,
+};
+
+const adjustmentInputStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "12px 14px",
+  background: "#ffffff",
+  color: "#0f172a",
+  fontSize: 15,
+  outline: "none",
+};
+
+const adjustmentTextareaStyle: React.CSSProperties = {
+  ...adjustmentInputStyle,
+  minHeight: 76,
+  resize: "vertical",
+};
+
+const adjustmentButtonsStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const cancelAdjustmentButtonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const saveReceiptButtonStyle: React.CSSProperties = {
+  border: "1px solid #16a34a",
+  background: "#16a34a",
+  color: "#ffffff",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const saveWriteOffButtonStyle: React.CSSProperties = {
+  border: "1px solid #dc2626",
+  background: "#dc2626",
+  color: "#ffffff",
+  borderRadius: 14,
+  padding: "12px 16px",
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const clickableRowStyle: React.CSSProperties = {
+  cursor: "pointer",
+};
+
+const rowNameButtonStyle: React.CSSProperties = {
+  border: 0,
+  background: "transparent",
+  color: "#0f172a",
+  fontWeight: 900,
+  cursor: "pointer",
+  padding: 0,
+  font: "inherit",
+  textAlign: "left",
+};
+
+const modalOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 10070,
+  background: "rgba(15, 23, 42, 0.48)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 18,
+};
+
+const stockCardModalStyle: React.CSSProperties = {
+  width: "min(980px, 96vw)",
+  maxHeight: "88vh",
+  overflowY: "auto",
+  background: "#ffffff",
+  border: "1px solid #dbe4f0",
+  borderRadius: 22,
+  boxShadow: "0 28px 70px rgba(15, 23, 42, 0.35)",
+  padding: 22,
+  display: "grid",
+  gap: 16,
+};
+
+const modalHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 16,
+  alignItems: "flex-start",
+};
+
+const modalTitleStyle: React.CSSProperties = {
+  fontSize: 28,
+  fontWeight: 900,
+  color: "#0f172a",
+};
+
+const modalSubtitleStyle: React.CSSProperties = {
+  color: "#64748b",
+  marginTop: 6,
+  fontSize: 15,
+};
+
+const modalCloseButtonStyle: React.CSSProperties = {
+  width: 48,
+  height: 48,
+  borderRadius: 16,
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  cursor: "pointer",
+  fontSize: 26,
+  fontWeight: 900,
+};
+
+const modalSummaryGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+  gap: 10,
+};
+
+const cardInfoGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+  gap: 10,
+};
+
+const cardInfoBlockStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#f8fafc",
+  borderRadius: 16,
+  padding: 14,
+};
+
+const cardInfoLabelStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontWeight: 800,
+  marginBottom: 8,
+};
+
+const cardInfoValueStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontWeight: 900,
+};
+
+const historyHeaderStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 4,
+};
+
+const historyTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 20,
+  fontWeight: 900,
+};
+
+const movementHistoryStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 8,
+};
+
+const movementItemStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#ffffff",
+  borderRadius: 16,
+  padding: 13,
+  display: "grid",
+  gap: 7,
+};
+
+const movementTopLineStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+};
+
+const movementTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontWeight: 900,
+};
+
+const movementQtyPlusStyle: React.CSSProperties = {
+  color: "#15803d",
+  fontWeight: 900,
+};
+
+const movementQtyMinusStyle: React.CSSProperties = {
+  color: "#b91c1c",
+  fontWeight: 900,
+};
+
+const movementMetaStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 7,
+  flexWrap: "wrap",
+  color: "#64748b",
+  fontSize: 13,
+};
 
 const pageStyle: React.CSSProperties = {
   display: "grid",
@@ -564,10 +1267,6 @@ const thStyle: React.CSSProperties = {
   borderBottom: "1px solid #e2e8f0",
 };
 
-const clickableRowStyle: React.CSSProperties = {
-  cursor: "pointer",
-};
-
 const tdStyle: React.CSSProperties = {
   padding: "13px 12px",
   color: "#334155",
@@ -582,13 +1281,26 @@ const tdStrongStyle: React.CSSProperties = {
   fontWeight: 900,
 };
 
-function typeBadgeStyle(itemType: PurchaseItemType): React.CSSProperties {
+const tdDangerStyle: React.CSSProperties = {
+  ...tdStyle,
+  color: "#991b1b",
+  fontWeight: 900,
+};
+
+function typeBadgeStyle(itemType: StockItemType): React.CSSProperties {
+  const palette =
+    itemType === "product"
+      ? { border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#15803d" }
+      : itemType === "material"
+        ? { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8" }
+        : { border: "1px solid #ddd6fe", background: "#f5f3ff", color: "#7c3aed" };
+
   return {
     display: "inline-flex",
     width: "fit-content",
-    border: itemType === "material" ? "1px solid #bfdbfe" : "1px solid #ddd6fe",
-    background: itemType === "material" ? "#eff6ff" : "#f5f3ff",
-    color: itemType === "material" ? "#1d4ed8" : "#7c3aed",
+    border: palette.border,
+    background: palette.background,
+    color: palette.color,
     borderRadius: 999,
     padding: "5px 9px",
     fontSize: 12,
