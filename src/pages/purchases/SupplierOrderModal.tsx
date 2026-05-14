@@ -3,6 +3,7 @@ import { supabase } from "../../supabase";
 import RelatedDocumentModal from "./RelatedDocumentModal";
 import LinkedDocumentsModal from "./LinkedDocumentsModal";
 import ReceiptModal, { type SupplierReceipt } from "../warehouse/ReceiptModal";
+import SupplierPaymentModal from "./SupplierPaymentModal";
 
 export type PurchaseItemType = "material" | "consumable";
 
@@ -13,7 +14,6 @@ export type SupplierOrder = {
   supplier_id: string | null;
   supplier_name: string | null;
   status: string;
-  status_id?: string | null;
   comment: string | null;
   total_amount: number;
   created_at: string | null;
@@ -65,11 +65,42 @@ export type Counterparty = {
   type: string | null;
 };
 
-type Status = {
+type FinanceAccount = {
   id: string;
-  code: string;
   name: string;
-  color: string | null;
+  type: string;
+  currency: string;
+  current_balance: number | string;
+};
+
+type FinanceTransaction = {
+  id: string;
+  account_id: string;
+  type: "income" | "expense" | string;
+  amount: number | string;
+  operation_date: string | null;
+  description: string | null;
+  source_document_type: string | null;
+  source_document_id: string | null;
+  created_at: string | null;
+};
+
+type SupplierPayment = {
+  id: string;
+  supplier_order_id: string;
+  finance_account_id: string | null;
+  finance_transaction_id: string | null;
+  payment_number: string | null;
+  payment_date: string | null;
+  amount: number | string;
+  comment: string | null;
+  created_at: string | null;
+};
+
+type SupplierReceiptStatus = {
+  id: string;
+  status: string;
+  total_amount: number | string;
 };
 
 type OrderItemDraft = {
@@ -92,7 +123,7 @@ type SupplierOrderModalProps = {
   counterparties: Counterparty[];
   directoriesLoading: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (createdOrderId?: string) => void;
 };
 
 const emptyItem = (): OrderItemDraft => ({
@@ -133,22 +164,30 @@ export default function SupplierOrderModal({
   const [isEditingOrder, setIsEditingOrder] = useState(false);
   const [isRelatedDocumentModalOpen, setIsRelatedDocumentModalOpen] =
     useState(false);
+  const [initialRelatedDocumentType, setInitialRelatedDocumentType] =
+    useState<"receipt" | "payment" | "invoice">("receipt");
   const [isLinkedDocumentsModalOpen, setIsLinkedDocumentsModalOpen] =
     useState(false);
+  const [linkedDocumentsSourceType, setLinkedDocumentsSourceType] =
+    useState<"supplier_order" | "supplier_receipt" | "supplier_payment">("supplier_order");
+  const [linkedDocumentsSourceId, setLinkedDocumentsSourceId] = useState(order?.id || "");
   const [linkedReceipt, setLinkedReceipt] = useState<SupplierReceipt | null>(
     null,
   );
+  const [linkedPaymentId, setLinkedPaymentId] = useState<string | null>(null);
   const [linkedReceiptLoading, setLinkedReceiptLoading] = useState(false);
-  const [orderStatuses, setOrderStatuses] = useState<Status[]>([]);
-  const [isStatusPickerOpen, setIsStatusPickerOpen] = useState(false);
-  const [updatingStatus, setUpdatingStatus] = useState(false);
-  const [currentOrderStatusCode, setCurrentOrderStatusCode] = useState(
-    order?.status || "",
-  );
-  const [currentOrderStatusId, setCurrentOrderStatusId] = useState<string | null>(
-    order?.status_id || null,
-  );
   const [error, setError] = useState("");
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
+  const [financeTransactions, setFinanceTransactions] = useState<FinanceTransaction[]>([]);
+  const [supplierPayments, setSupplierPayments] = useState<SupplierPayment[]>([]);
+  const [supplierReceipts, setSupplierReceipts] = useState<SupplierReceiptStatus[]>([]);
+  const [currentOrderStatus, setCurrentOrderStatus] = useState(order?.status || "draft");
+  const [statusUpdating, setStatusUpdating] = useState(false);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [financeSaving, setFinanceSaving] = useState(false);
+  const [paymentAccountId, setPaymentAccountId] = useState("");
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentComment, setPaymentComment] = useState("");
 
   const [orderDate, setOrderDate] = useState(
     order?.order_date || new Date().toISOString().slice(0, 10),
@@ -177,36 +216,351 @@ export default function SupplierOrderModal({
   }, [mode]);
 
   useEffect(() => {
-    loadOrderStatuses();
-  }, []);
+    setCurrentOrderStatus(order?.status || "draft");
+    setLinkedDocumentsSourceType("supplier_order");
+    setLinkedDocumentsSourceId(order?.id || "");
+  }, [order?.id, order?.status]);
 
   useEffect(() => {
-    setCurrentOrderStatusCode(order?.status || "");
-    setCurrentOrderStatusId(order?.status_id || null);
-    setIsStatusPickerOpen(false);
-  }, [order?.id, order?.status, order?.status_id]);
+    loadFinanceData();
+  }, [order?.id]);
 
-  async function loadOrderStatuses() {
+
+  function getTodayDate() {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  function formatCurrency(value: number | string, currency = "RUB") {
+    return new Intl.NumberFormat("ru-RU", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+    }).format(Number(value || 0));
+  }
+
+  async function loadFinanceData() {
     try {
-      const { data, error } = await supabase
-        .from("statuses")
-        .select(
-          `
-          id,
-          code,
-          name,
-          color,
-          status_categories!inner(code)
-        `,
-        )
-        .eq("status_categories.code", "supplier_orders")
-        .order("sort_order", { ascending: true });
+      setFinanceLoading(true);
 
-      if (error) throw error;
+      const accountsQuery = supabase
+        .from("finance_accounts")
+        .select("id, name, type, currency, current_balance")
+        .eq("is_active", true)
+        .order("created_at", { ascending: true });
 
-      setOrderStatuses(((data || []) as Status[]) || []);
+      const transactionsQuery = order?.id
+        ? supabase
+            .from("finance_transactions")
+            .select(
+              "id, account_id, type, amount, operation_date, description, source_document_type, source_document_id, created_at",
+            )
+            .eq("source_document_type", "supplier_order")
+            .eq("source_document_id", order.id)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null });
+
+      const paymentsQuery = order?.id
+        ? supabase
+            .from("supplier_payments")
+            .select(
+              "id, supplier_order_id, finance_account_id, finance_transaction_id, payment_number, payment_date, amount, comment, created_at",
+            )
+            .eq("supplier_order_id", order.id)
+            .order("created_at", { ascending: false })
+        : Promise.resolve({ data: [], error: null });
+
+      const receiptsQuery = order?.id
+        ? supabase
+            .from("supplier_receipts")
+            .select("id, status, total_amount")
+            .eq("supplier_order_id", order.id)
+        : Promise.resolve({ data: [], error: null });
+
+      const [
+        accountsResult,
+        transactionsResult,
+        paymentsResult,
+        receiptsResult,
+      ] = await Promise.all([
+        accountsQuery,
+        transactionsQuery,
+        paymentsQuery,
+        receiptsQuery,
+      ]);
+
+      if (accountsResult.error) throw accountsResult.error;
+      if (transactionsResult.error) throw transactionsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+      if (receiptsResult.error) throw receiptsResult.error;
+
+      const nextAccounts = (accountsResult.data as FinanceAccount[]) || [];
+      const nextTransactions =
+        (transactionsResult.data as FinanceTransaction[]) || [];
+      const nextPayments = (paymentsResult.data as SupplierPayment[]) || [];
+      const nextReceipts = (receiptsResult.data as SupplierReceiptStatus[]) || [];
+
+      setFinanceAccounts(nextAccounts);
+      setFinanceTransactions(nextTransactions);
+      setSupplierPayments(nextPayments);
+      setSupplierReceipts(nextReceipts);
+
+      await syncSupplierOrderStatus({
+        transactions: nextTransactions,
+        receipts: nextReceipts,
+      });
+
+      if (!paymentAccountId && nextAccounts.length > 0) {
+        setPaymentAccountId(nextAccounts[0].id);
+      }
+
+      if (order?.id) {
+        const paidAmount = nextTransactions
+          .filter((item) => item.type === "expense")
+          .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+        const restAmount = Math.max(0, Number(order.total_amount || 0) - paidAmount);
+        setPaymentAmount(restAmount > 0 ? String(restAmount.toFixed(2)) : "");
+      }
     } catch (error) {
-      console.error("Ошибка загрузки статусов заказа поставщику", error);
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка загрузки финансов по заказу",
+      );
+    } finally {
+      setFinanceLoading(false);
+    }
+  }
+
+
+  function getAutoOrderStatus({
+    transactions,
+    receipts,
+  }: {
+    transactions: FinanceTransaction[];
+    receipts: SupplierReceiptStatus[];
+  }) {
+    if (!order) return "draft";
+    if (currentOrderStatus === "cancelled" || order.status === "cancelled") {
+      return "cancelled";
+    }
+
+    const paidAmount = transactions
+      .filter((item) => item.type === "expense")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+    const totalAmount = Number(order.total_amount || 0);
+    const hasAnyReceipt = receipts.length > 0;
+    const hasPostedReceipt = receipts.some((receipt) => receipt.status === "posted");
+    const isFullyPaid = totalAmount > 0 && paidAmount >= totalAmount;
+
+    if (hasPostedReceipt && isFullyPaid) return "received";
+    if (hasPostedReceipt) return "received";
+    if (hasAnyReceipt || paidAmount > 0) return "ordered";
+
+    return "draft";
+  }
+
+  async function syncSupplierOrderStatus({
+    transactions = financeTransactions,
+    receipts = supplierReceipts,
+  }: {
+    transactions?: FinanceTransaction[];
+    receipts?: SupplierReceiptStatus[];
+  } = {}) {
+    if (!order) return;
+    if (currentOrderStatus === "cancelled" || order.status === "cancelled") return;
+
+    const nextStatus = getAutoOrderStatus({ transactions, receipts });
+
+    if (!nextStatus || nextStatus === currentOrderStatus || nextStatus === order.status) {
+      setCurrentOrderStatus(nextStatus || currentOrderStatus);
+      return;
+    }
+
+    const { error: statusError } = await supabase
+      .from("supplier_orders")
+      .update({
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", order.id);
+
+    if (statusError) throw statusError;
+
+    setCurrentOrderStatus(nextStatus);
+  }
+
+  async function changeSupplierOrderStatus(nextStatus: string) {
+    if (!order) return;
+
+    try {
+      setStatusUpdating(true);
+      setError("");
+
+      const { error: statusError } = await supabase
+        .from("supplier_orders")
+        .update({
+          status: nextStatus,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", order.id);
+
+      if (statusError) throw statusError;
+
+      setCurrentOrderStatus(nextStatus);
+      onSaved();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось изменить статус заказа",
+      );
+    } finally {
+      setStatusUpdating(false);
+    }
+  }
+
+  function getPaidAmount() {
+    return financeTransactions
+      .filter((item) => item.type === "expense")
+      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  }
+
+  function getPaymentDebt() {
+    return Math.max(0, Number(order?.total_amount || 0) - getPaidAmount());
+  }
+
+  async function createFinanceTransaction({
+    accountId,
+    type,
+    amount,
+    description,
+    sourceDocumentType,
+    sourceDocumentId,
+    category,
+    counterpartyId,
+    comment,
+  }: {
+    accountId: string;
+    type: "income" | "expense";
+    amount: number;
+    description: string;
+    sourceDocumentType: string;
+    sourceDocumentId: string;
+    category: string;
+    counterpartyId: string | null;
+    comment: string | null;
+  }) {
+    const account = financeAccounts.find((item) => item.id === accountId);
+
+    if (!account) {
+      throw new Error("Выбери финансовый счёт");
+    }
+
+    const currentBalance = Number(account.current_balance || 0);
+
+    if (type === "expense" && amount > currentBalance) {
+      throw new Error("Недостаточно средств на выбранном счёте");
+    }
+
+    const { data: transaction, error: transactionError } = await supabase
+      .from("finance_transactions")
+      .insert({
+        account_id: accountId,
+        type,
+        amount,
+        operation_date: getTodayDate(),
+        description,
+        source_document_type: sourceDocumentType,
+        source_document_id: sourceDocumentId,
+        category,
+        counterparty_id: counterpartyId,
+        comment,
+      })
+      .select("id")
+      .single();
+
+    if (transactionError) throw transactionError;
+
+    const nextBalance =
+      type === "expense" ? currentBalance - amount : currentBalance + amount;
+
+    const { error: accountError } = await supabase
+      .from("finance_accounts")
+      .update({
+        current_balance: nextBalance,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", accountId);
+
+    if (accountError) throw accountError;
+
+    return transaction.id as string;
+  }
+
+  async function paySupplierOrder() {
+    if (!order) return;
+
+    const amount = Number(paymentAmount.replace(",", "."));
+
+    if (!paymentAccountId) {
+      setError("Выбери счёт оплаты");
+      return;
+    }
+
+    if (!paymentAmount || Number.isNaN(amount) || amount <= 0) {
+      setError("Сумма оплаты должна быть больше 0");
+      return;
+    }
+
+    const debt = getPaymentDebt();
+
+    if (amount > debt) {
+      setError(`Сумма оплаты больше долга. Осталось оплатить ${formatCurrency(debt)}.`);
+      return;
+    }
+
+    try {
+      setFinanceSaving(true);
+      setError("");
+
+      const financeTransactionId = await createFinanceTransaction({
+        accountId: paymentAccountId,
+        type: "expense",
+        amount,
+        description: `Оплата поставщику по заказу ${order.order_number || order.id.slice(0, 8)}`,
+        sourceDocumentType: "supplier_order",
+        sourceDocumentId: order.id,
+        category: "supplier_payment",
+        counterpartyId: order.supplier_id || null,
+        comment: paymentComment.trim() || null,
+      });
+
+      const { error: paymentError } = await supabase
+        .from("supplier_payments")
+        .insert({
+          supplier_order_id: order.id,
+          finance_account_id: paymentAccountId,
+          finance_transaction_id: financeTransactionId,
+          payment_date: getTodayDate(),
+          amount,
+          comment: paymentComment.trim() || null,
+        });
+
+      if (paymentError) throw paymentError;
+
+      setPaymentComment("");
+      await loadFinanceData();
+      onSaved();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось провести оплату поставщику",
+      );
+    } finally {
+      setFinanceSaving(false);
     }
   }
 
@@ -223,6 +577,13 @@ export default function SupplierOrderModal({
     setProductPickerSearch("");
     setComment("");
     setItems([emptyItem()]);
+    setPaymentAccountId("");
+    setPaymentAmount("");
+    setPaymentComment("");
+    setFinanceTransactions([]);
+    setSupplierPayments([]);
+    setSupplierReceipts([]);
+    setCurrentOrderStatus("draft");
     setError("");
   }
 
@@ -425,102 +786,6 @@ export default function SupplierOrderModal({
       }));
   }
 
-  function getOrderStatus(statusCode: string | null | undefined, statusId?: string | null) {
-    if (statusId) {
-      const statusById = orderStatuses.find((item) => item.id === statusId);
-      if (statusById) return statusById;
-    }
-
-    if (!statusCode) return null;
-
-    return orderStatuses.find((item) => item.code === statusCode) || null;
-  }
-
-  function getDraftStatusId() {
-    return orderStatuses.find((item) => item.code === "draft")?.id || null;
-  }
-
-  function getStatusLabel(statusCode: string | null | undefined, statusId?: string | null) {
-    const status = getOrderStatus(statusCode, statusId);
-
-    if (status?.name) return status.name;
-    if (statusCode === "draft") return "Черновик";
-    if (statusCode === "ordered") return "Заказан";
-    if (statusCode === "received") return "Поступил";
-    if (statusCode === "cancelled") return "Отменён";
-
-    return statusCode || "—";
-  }
-
-  function renderStatusBadge(
-    statusCode: string | null | undefined,
-    statusId?: string | null,
-    clickable = false,
-  ) {
-    const status = getOrderStatus(statusCode, statusId);
-    const color = status?.color || "#2563eb";
-
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          if (clickable) setIsStatusPickerOpen(true);
-        }}
-        disabled={!clickable || updatingStatus}
-        title={clickable ? "Сменить статус" : undefined}
-        style={{
-          ...statusBadgeStyle,
-          borderColor: `${color}40`,
-          background: `${color}12`,
-          color,
-          cursor: clickable && !updatingStatus ? "pointer" : "default",
-          opacity: updatingStatus ? 0.65 : 1,
-        }}
-      >
-        {updatingStatus ? "Сохраняю..." : getStatusLabel(statusCode, statusId)}
-      </button>
-    );
-  }
-
-  async function changeOrderStatus(nextStatus: Status) {
-    if (!order) return;
-
-    const currentLabel = getStatusLabel(currentOrderStatusCode, currentOrderStatusId);
-    const confirmed = window.confirm(
-      `Сменить статус заказа ${order.order_number || "Без номера"} с "${currentLabel}" на "${nextStatus.name}"?`,
-    );
-
-    if (!confirmed) return;
-
-    try {
-      setUpdatingStatus(true);
-      setError("");
-
-      const { error: updateError } = await supabase
-        .from("supplier_orders")
-        .update({
-          status: nextStatus.code,
-          status_id: nextStatus.id,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", order.id);
-
-      if (updateError) throw updateError;
-
-      order.status = nextStatus.code;
-      order.status_id = nextStatus.id;
-      setCurrentOrderStatusCode(nextStatus.code);
-      setCurrentOrderStatusId(nextStatus.id);
-      setIsStatusPickerOpen(false);
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Ошибка смены статуса заказа",
-      );
-    } finally {
-      setUpdatingStatus(false);
-    }
-  }
-
   async function createSupplierOrder() {
     try {
       setSaving(true);
@@ -541,7 +806,6 @@ export default function SupplierOrderModal({
           supplier_id: supplierId || null,
           supplier_name: selectedSupplierName || null,
           status: "draft",
-          status_id: getDraftStatusId(),
           comment: comment.trim() || null,
           total_amount: getTotalAmount(),
         })
@@ -561,7 +825,7 @@ export default function SupplierOrderModal({
 
       if (itemsError) throw itemsError;
 
-      onSaved();
+      onSaved(createdOrder.id);
     } catch (error) {
       setError(
         error instanceof Error
@@ -633,15 +897,169 @@ export default function SupplierOrderModal({
   async function deleteOrder() {
     if (!order) return;
 
-    const confirmed = window.confirm(
-      `Удалить заказ ${order.order_number || "Без номера"}?`,
-    );
-
-    if (!confirmed) return;
-
     try {
       setDeleting(true);
       setError("");
+
+      const [receiptsResult, paymentsResult] = await Promise.all([
+        supabase
+          .from("supplier_receipts")
+          .select("id, receipt_number, status")
+          .eq("supplier_order_id", order.id),
+
+        supabase
+          .from("supplier_payments")
+          .select(
+            "id, payment_number, finance_account_id, finance_transaction_id, amount",
+          )
+          .eq("supplier_order_id", order.id),
+      ]);
+
+      if (receiptsResult.error) throw receiptsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+
+      const linkedReceipts =
+        (receiptsResult.data as {
+          id: string;
+          receipt_number: string | null;
+          status: string | null;
+        }[]) || [];
+
+      const linkedPayments =
+        (paymentsResult.data as {
+          id: string;
+          payment_number: string | null;
+          finance_account_id: string | null;
+          finance_transaction_id: string | null;
+          amount: number | string;
+        }[]) || [];
+
+      const hasLinkedDocuments =
+        linkedReceipts.length > 0 || linkedPayments.length > 0;
+
+      const confirmText = hasLinkedDocuments
+        ? [
+            `У заказа ${order.order_number || "Без номера"} есть связанные документы:`,
+            linkedReceipts.length
+              ? `• приёмок: ${linkedReceipts.length}`
+              : "",
+            linkedPayments.length
+              ? `• оплат: ${linkedPayments.length}`
+              : "",
+            "",
+            "Удалить заказ вместе со связанными документами?",
+            "",
+            "Будет выполнен откат:",
+            "• складские движения приёмок будут удалены;",
+            "• деньги по оплатам вернутся на финансовые счета;",
+            "• документы оплат и приёмок будут удалены;",
+            "• заказ поставщику будет удалён.",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : `Удалить заказ ${order.order_number || "Без номера"}?`;
+
+      const confirmed = window.confirm(confirmText);
+
+      if (!confirmed) {
+        setDeleting(false);
+        return;
+      }
+
+      const receiptIds = linkedReceipts.map((receipt) => receipt.id);
+      const paymentIds = linkedPayments.map((payment) => payment.id);
+      const financeTransactionIds = linkedPayments
+        .map((payment) => payment.finance_transaction_id)
+        .filter(Boolean) as string[];
+
+      if (receiptIds.length > 0) {
+        const { error: movementsError } = await supabase
+          .from("stock_movements")
+          .delete()
+          .eq("source_document_type", "supplier_receipt")
+          .in("source_document_id", receiptIds);
+
+        if (movementsError) throw movementsError;
+
+        const { error: receiptItemsError } = await supabase
+          .from("supplier_receipt_items")
+          .delete()
+          .in("supplier_receipt_id", receiptIds);
+
+        if (receiptItemsError) throw receiptItemsError;
+
+        const { error: receiptsError } = await supabase
+          .from("supplier_receipts")
+          .delete()
+          .in("id", receiptIds);
+
+        if (receiptsError) throw receiptsError;
+      }
+
+      if (linkedPayments.length > 0) {
+        const accountIds = Array.from(
+          new Set(
+            linkedPayments
+              .map((payment) => payment.finance_account_id)
+              .filter(Boolean) as string[],
+          ),
+        );
+
+        if (accountIds.length > 0) {
+          const { data: accountsData, error: accountsError } = await supabase
+            .from("finance_accounts")
+            .select("id, current_balance")
+            .in("id", accountIds);
+
+          if (accountsError) throw accountsError;
+
+          const accountBalanceMap = new Map(
+            ((accountsData as { id: string; current_balance: number | string }[]) ||
+              []).map((account) => [
+              account.id,
+              Number(account.current_balance || 0),
+            ]),
+          );
+
+          for (const payment of linkedPayments) {
+            if (!payment.finance_account_id) continue;
+
+            const currentBalance =
+              accountBalanceMap.get(payment.finance_account_id) || 0;
+            const nextBalance = currentBalance + Number(payment.amount || 0);
+
+            const { error: accountError } = await supabase
+              .from("finance_accounts")
+              .update({
+                current_balance: nextBalance,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", payment.finance_account_id);
+
+            if (accountError) throw accountError;
+
+            accountBalanceMap.set(payment.finance_account_id, nextBalance);
+          }
+        }
+
+        if (paymentIds.length > 0) {
+          const { error: paymentsDeleteError } = await supabase
+            .from("supplier_payments")
+            .delete()
+            .in("id", paymentIds);
+
+          if (paymentsDeleteError) throw paymentsDeleteError;
+        }
+
+        if (financeTransactionIds.length > 0) {
+          const { error: transactionsDeleteError } = await supabase
+            .from("finance_transactions")
+            .delete()
+            .in("id", financeTransactionIds);
+
+          if (transactionsDeleteError) throw transactionsDeleteError;
+        }
+      }
 
       const { error: itemsError } = await supabase
         .from("supplier_order_items")
@@ -692,16 +1110,41 @@ export default function SupplierOrderModal({
   }
 
   function handleOpenLinkedDocument(
-    type: "supplier_order" | "supplier_receipt",
+    type: "supplier_order" | "supplier_receipt" | "supplier_payment",
     id: string,
   ) {
-    if (type === "supplier_order") return;
+    setIsLinkedDocumentsModalOpen(false);
+    setIsRelatedDocumentModalOpen(false);
 
+    if (type === "supplier_order") {
+      setLinkedReceipt(null);
+      setLinkedPaymentId(null);
+      return;
+    }
+
+    if (type === "supplier_payment") {
+      setLinkedReceipt(null);
+      setLinkedPaymentId(id);
+      return;
+    }
+
+    setLinkedPaymentId(null);
     openLinkedReceipt(id);
   }
 
-  function openRelatedDocumentModal() {
+  function openRelatedDocumentModal(
+    type: "receipt" | "payment" | "invoice" = "receipt",
+  ) {
+    setInitialRelatedDocumentType(type);
     setIsRelatedDocumentModalOpen(true);
+  }
+
+  function getStatusLabel(status: string) {
+    if (status === "draft") return "Черновик";
+    if (status === "ordered") return "Заказан";
+    if (status === "received") return "Поступил";
+    if (status === "cancelled") return "Отменён";
+    return status;
   }
 
   function getItemName(item: SupplierOrderItem) {
@@ -1004,7 +1447,13 @@ export default function SupplierOrderModal({
               <>
                 <button
                   type="button"
-                  onClick={() => setIsLinkedDocumentsModalOpen(true)}
+                  onClick={() => {
+                    if (order?.id) {
+                      setLinkedDocumentsSourceType("supplier_order");
+                      setLinkedDocumentsSourceId(order.id);
+                    }
+                    setIsLinkedDocumentsModalOpen(true);
+                  }}
                   style={linkedDocumentsButtonStyle}
                 >
                   🔗 Связанные документы
@@ -1138,9 +1587,17 @@ export default function SupplierOrderModal({
             <div style={modalInfoGridStyle}>
               <div style={modalInfoCardStyle}>
                 <div style={modalInfoLabelStyle}>Статус</div>
-                <div style={modalInfoValueStyle}>
-                  {renderStatusBadge(currentOrderStatusCode, currentOrderStatusId, true)}
-                </div>
+                <select
+                  value={currentOrderStatus}
+                  onChange={(event) => changeSupplierOrderStatus(event.target.value)}
+                  disabled={statusUpdating}
+                  style={statusSelectStyle}
+                >
+                  <option value="draft">Черновик</option>
+                  <option value="ordered">Заказан</option>
+                  <option value="received">Поступил</option>
+                  <option value="cancelled">Отменён</option>
+                </select>
               </div>
 
               <div style={modalInfoCardStyle}>
@@ -1154,6 +1611,29 @@ export default function SupplierOrderModal({
                 </div>
               </div>
             </div>
+
+            {getPaymentDebt() > 0 && (
+              <div style={paymentWarningStyle}>
+                <div>
+                  <div style={paymentWarningTitleStyle}>
+                    Заказ не оплачен
+                  </div>
+                  <div style={paymentWarningTextStyle}>
+                    Осталось оплатить {formatCurrency(getPaymentDebt())}.
+                    Создай документ оплаты поставщику, чтобы закрыть долг и
+                    списать деньги со счёта.
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => openRelatedDocumentModal("payment")}
+                  style={paymentWarningButtonStyle}
+                >
+                  Создать оплату
+                </button>
+              </div>
+            )}
 
             {order?.comment && <div style={commentBoxStyle}>{order.comment}</div>}
 
@@ -1232,8 +1712,8 @@ export default function SupplierOrderModal({
 
         {isLinkedDocumentsModalOpen && order && (
           <LinkedDocumentsModal
-            sourceType="supplier_order"
-            sourceId={order.id}
+            sourceType={linkedDocumentsSourceType}
+            sourceId={linkedDocumentsSourceId || order.id}
             supplierOrderId={order.id}
             onClose={() => setIsLinkedDocumentsModalOpen(false)}
             onOpenDocument={handleOpenLinkedDocument}
@@ -1244,7 +1724,34 @@ export default function SupplierOrderModal({
           <RelatedDocumentModal
             order={order}
             orderItems={orderItems}
-            onClose={() => setIsRelatedDocumentModalOpen(false)}
+            initialType={initialRelatedDocumentType}
+            onCreatedDocument={(type, id) => {
+              setIsRelatedDocumentModalOpen(false);
+              setIsLinkedDocumentsModalOpen(false);
+
+              if (type === "supplier_receipt") {
+                setLinkedPaymentId(null);
+                openLinkedReceipt(id);
+                loadFinanceData();
+                return;
+              }
+
+              if (type === "supplier_payment") {
+                setLinkedReceipt(null);
+                setLinkedPaymentId(id);
+                loadFinanceData();
+                return;
+              }
+
+              setLinkedDocumentsSourceType(type);
+              setLinkedDocumentsSourceId(id);
+              setIsLinkedDocumentsModalOpen(true);
+              loadFinanceData();
+            }}
+            onClose={() => {
+              setIsRelatedDocumentModalOpen(false);
+              loadFinanceData();
+            }}
           />
         )}
 
@@ -1255,78 +1762,22 @@ export default function SupplierOrderModal({
             onClose={() => setLinkedReceipt(null)}
             onSaved={() => {
               setLinkedReceipt(null);
-              onSaved();
+              loadFinanceData();
             }}
+            onOpenDocument={handleOpenLinkedDocument}
           />
         )}
 
-        {isStatusPickerOpen && order && (
-          <div
-            onClick={() => setIsStatusPickerOpen(false)}
-            style={supplierPickerOverlayStyle}
-          >
-            <div
-              onClick={(event) => event.stopPropagation()}
-              style={statusPickerModalStyle}
-            >
-              <div style={supplierPickerHeaderStyle}>
-                <div>
-                  <div style={supplierPickerTitleStyle}>Сменить статус</div>
-                  <div style={{ color: "#64748b", marginTop: 4 }}>
-                    Заказ {order.order_number || "Без номера"}. Выбери новый статус из справочника.
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setIsStatusPickerOpen(false)}
-                  style={modalCloseButtonStyle}
-                >
-                  ×
-                </button>
-              </div>
-
-              <div style={statusListStyle}>
-                {orderStatuses.length === 0 ? (
-                  <div style={emptyStyle}>Статусы заказов поставщикам не найдены.</div>
-                ) : (
-                  orderStatuses.map((status) => {
-                    const active =
-                      status.id === currentOrderStatusId ||
-                      (!currentOrderStatusId && status.code === currentOrderStatusCode);
-
-                    return (
-                      <button
-                        key={status.id}
-                        type="button"
-                        onClick={() => {
-                          if (!active) changeOrderStatus(status);
-                        }}
-                        disabled={active || updatingStatus}
-                        style={statusOptionStyle(active, status.color)}
-                      >
-                        <span
-                          style={{
-                            ...statusOptionDotStyle,
-                            background: status.color || "#94a3b8",
-                          }}
-                        />
-
-                        <span style={{ display: "grid", gap: 3 }}>
-                          <span style={{ fontWeight: 900 }}>{status.name}</span>
-                          <span style={{ color: "#64748b", fontSize: 12, fontWeight: 800 }}>
-                            {status.code}
-                          </span>
-                        </span>
-
-                        {active && <span style={currentStatusMarkStyle}>Текущий</span>}
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-          </div>
+        {linkedPaymentId && (
+          <SupplierPaymentModal
+            paymentId={linkedPaymentId}
+            onClose={() => setLinkedPaymentId(null)}
+            onSaved={() => {
+              setLinkedPaymentId(null);
+              loadFinanceData();
+            }}
+            onOpenDocument={handleOpenLinkedDocument}
+          />
         )}
 
         {isProductPickerOpen && (
@@ -1858,61 +2309,6 @@ const chooseProductButtonStyle: React.CSSProperties = {
   flexShrink: 0,
 };
 
-const statusPickerModalStyle: React.CSSProperties = {
-  width: "min(520px, 94vw)",
-  maxHeight: "76vh",
-  overflowY: "auto",
-  background: "#ffffff",
-  borderRadius: 18,
-  padding: 16,
-  border: "1px solid #dbe4f0",
-  boxShadow: "0 20px 48px rgba(15, 23, 42, 0.28)",
-  display: "grid",
-  gap: 14,
-};
-
-const statusListStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 8,
-};
-
-const statusOptionDotStyle: React.CSSProperties = {
-  width: 13,
-  height: 13,
-  borderRadius: 999,
-  border: "1px solid #cbd5e1",
-  flexShrink: 0,
-};
-
-const currentStatusMarkStyle: React.CSSProperties = {
-  marginLeft: "auto",
-  border: "1px solid #bfdbfe",
-  background: "#eff6ff",
-  color: "#1d4ed8",
-  borderRadius: 999,
-  padding: "6px 9px",
-  fontSize: 12,
-  fontWeight: 900,
-};
-
-function statusOptionStyle(active: boolean, color: string | null): React.CSSProperties {
-  const statusColor = color || "#94a3b8";
-
-  return {
-    border: active ? `1px solid ${statusColor}` : "1px solid #dbe4f0",
-    background: active ? `${statusColor}12` : "#ffffff",
-    color: "#0f172a",
-    borderRadius: 14,
-    padding: "12px 13px",
-    cursor: active ? "default" : "pointer",
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    textAlign: "left",
-    opacity: active ? 0.82 : 1,
-  };
-}
-
 const productPickerModalStyle: React.CSSProperties = {
   width: "min(760px, 94vw)",
   maxHeight: "78vh",
@@ -2116,6 +2512,56 @@ function supplierRowStyle(active: boolean): React.CSSProperties {
   };
 }
 
+
+
+
+const paymentWarningStyle: React.CSSProperties = {
+  border: "1px solid #fdba74",
+  background: "#fff7ed",
+  color: "#9a3412",
+  borderRadius: 16,
+  padding: 14,
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const paymentWarningTitleStyle: React.CSSProperties = {
+  fontSize: 16,
+  fontWeight: 900,
+  marginBottom: 4,
+};
+
+const paymentWarningTextStyle: React.CSSProperties = {
+  color: "#9a3412",
+  lineHeight: 1.45,
+  fontWeight: 700,
+};
+
+const paymentWarningButtonStyle: React.CSSProperties = {
+  border: "1px solid #f97316",
+  background: "#f97316",
+  color: "#ffffff",
+  borderRadius: 12,
+  padding: "11px 15px",
+  fontWeight: 900,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const statusSelectStyle: React.CSSProperties = {
+  width: "100%",
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "10px 12px",
+  background: "#ffffff",
+  color: "#0f172a",
+  fontWeight: 900,
+  outline: "none",
+};
+
 const modalOverlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -2239,23 +2685,6 @@ const modalInfoValueStyle: React.CSSProperties = {
   color: "#0f172a",
   fontSize: 18,
   fontWeight: 900,
-};
-
-const statusBadgeStyle: React.CSSProperties = {
-  appearance: "none",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: "fit-content",
-  border: "1px solid #bfdbfe",
-  background: "#eff6ff",
-  color: "#1d4ed8",
-  borderRadius: 999,
-  padding: "7px 12px",
-  fontSize: 15,
-  fontWeight: 900,
-  lineHeight: 1,
-  fontFamily: "inherit",
 };
 
 const commentBoxStyle: React.CSSProperties = {

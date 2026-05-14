@@ -1,13 +1,35 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../supabase";
 import type { SupplierOrder, SupplierOrderItem } from "./SupplierOrderModal";
 
 type RelatedDocumentType = "receipt" | "payment" | "invoice";
 
+type FinanceAccount = {
+  id: string;
+  name: string;
+  type: string;
+  currency: string;
+  current_balance: number | string;
+};
+
+type SupplierPayment = {
+  id: string;
+  supplier_order_id: string;
+  finance_account_id: string | null;
+  finance_transaction_id: string | null;
+  payment_number: string | null;
+  payment_date: string | null;
+  amount: number | string;
+  comment: string | null;
+  created_at: string | null;
+};
+
 type RelatedDocumentModalProps = {
   order: SupplierOrder;
   orderItems: SupplierOrderItem[];
+  initialType?: RelatedDocumentType;
   onClose: () => void;
+  onCreatedDocument?: (type: "supplier_receipt" | "supplier_payment", id: string) => void;
 };
 
 const documentTypes: {
@@ -25,7 +47,7 @@ const documentTypes: {
   {
     type: "payment",
     title: "Оплата поставщику",
-    subtitle: "Создать исходящий платеж по заказу поставщику",
+    subtitle: "Создать исходящий платёж по заказу поставщику",
     icon: "💸",
   },
   {
@@ -36,27 +58,124 @@ const documentTypes: {
   },
 ];
 
+function todayDate() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatMoney(value: number | string, currency = "RUB") {
+  return new Intl.NumberFormat("ru-RU", {
+    style: "currency",
+    currency,
+    minimumFractionDigits: 2,
+  }).format(Number(value || 0));
+}
+
 export default function RelatedDocumentModal({
   order,
   orderItems,
+  initialType = "receipt",
   onClose,
+  onCreatedDocument,
 }: RelatedDocumentModalProps) {
   const [selectedType, setSelectedType] =
-    useState<RelatedDocumentType>("receipt");
+    useState<RelatedDocumentType>(initialType);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
+  const [supplierPayments, setSupplierPayments] = useState<SupplierPayment[]>([]);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [paymentAccountId, setPaymentAccountId] = useState("");
+  const [paymentDate, setPaymentDate] = useState(todayDate());
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentComment, setPaymentComment] = useState("");
 
   const selectedDocument = documentTypes.find(
     (document) => document.type === selectedType,
   );
 
+  const paidAmount = useMemo(() => {
+    return supplierPayments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0),
+      0,
+    );
+  }, [supplierPayments]);
+
+  const paymentDebt = Math.max(0, Number(order.total_amount || 0) - paidAmount);
+
+  useEffect(() => {
+    setSelectedType(initialType);
+  }, [initialType]);
+
+  useEffect(() => {
+    loadFinanceData();
+  }, [order.id]);
+
+  useEffect(() => {
+    if (selectedType === "payment" && !paymentAmount && paymentDebt > 0) {
+      setPaymentAmount(paymentDebt.toFixed(2));
+    }
+  }, [selectedType, paymentDebt, paymentAmount]);
+
+  async function loadFinanceData() {
+    try {
+      setFinanceLoading(true);
+      setError("");
+
+      const [accountsResult, paymentsResult] = await Promise.all([
+        supabase
+          .from("finance_accounts")
+          .select("id, name, type, currency, current_balance")
+          .eq("is_active", true)
+          .order("created_at", { ascending: true }),
+
+        supabase
+          .from("supplier_payments")
+          .select(
+            "id, supplier_order_id, finance_account_id, finance_transaction_id, payment_number, payment_date, amount, comment, created_at",
+          )
+          .eq("supplier_order_id", order.id)
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (accountsResult.error) throw accountsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+
+      const nextAccounts = (accountsResult.data as FinanceAccount[]) || [];
+      const nextPayments = (paymentsResult.data as SupplierPayment[]) || [];
+
+      setFinanceAccounts(nextAccounts);
+      setSupplierPayments(nextPayments);
+
+      if (!paymentAccountId && nextAccounts.length > 0) {
+        setPaymentAccountId(nextAccounts[0].id);
+      }
+
+      const nextPaid = nextPayments.reduce(
+        (sum, payment) => sum + Number(payment.amount || 0),
+        0,
+      );
+      const nextDebt = Math.max(0, Number(order.total_amount || 0) - nextPaid);
+
+      setPaymentAmount(nextDebt > 0 ? nextDebt.toFixed(2) : "");
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка загрузки финансовых данных",
+      );
+    } finally {
+      setFinanceLoading(false);
+    }
+  }
+
   function getDocumentDescription() {
     if (selectedType === "receipt") {
-      return "Приёмка создаст складской документ на основании позиций заказа. Следующим шагом здесь будет проведение документа и увеличение остатков.";
+      return "Приёмка создаст складской документ на основании позиций заказа. После проведения документа остатки материалов увеличатся.";
     }
 
     if (selectedType === "payment") {
-      return "Оплата создаст финансовый документ. Следующим шагом здесь будет выбор счёта списания и уменьшение баланса.";
+      return "Оплата создаст отдельный финансовый документ, спишет деньги с выбранного счёта и появится в связанных документах заказа.";
     }
 
     return "Накладная поставщика позволит зафиксировать номер и дату входящего документа поставщика.";
@@ -98,6 +217,85 @@ export default function RelatedDocumentModal({
       );
 
     if (itemsError) throw itemsError;
+
+    return receipt.id as string;
+  }
+
+  async function createSupplierPaymentDocument() {
+    const amount = Number(paymentAmount.replace(",", "."));
+    const account = financeAccounts.find((item) => item.id === paymentAccountId);
+
+    if (!account) {
+      throw new Error("Выбери счёт оплаты");
+    }
+
+    if (!paymentAmount || Number.isNaN(amount) || amount <= 0) {
+      throw new Error("Сумма оплаты должна быть больше 0");
+    }
+
+    if (amount > paymentDebt) {
+      throw new Error(
+        `Сумма оплаты больше долга. Осталось оплатить ${formatMoney(paymentDebt)}.`,
+      );
+    }
+
+    const currentBalance = Number(account.current_balance || 0);
+
+    if (amount > currentBalance) {
+      throw new Error("Недостаточно средств на выбранном счёте");
+    }
+
+    const description = `Оплата поставщику по заказу ${
+      order.order_number || order.id.slice(0, 8)
+    }`;
+
+    const { data: transaction, error: transactionError } = await supabase
+      .from("finance_transactions")
+      .insert({
+        account_id: account.id,
+        type: "expense",
+        amount,
+        operation_date: paymentDate || todayDate(),
+        description,
+        source_document_type: "supplier_order",
+        source_document_id: order.id,
+        category: "supplier_payment",
+        counterparty_id: order.supplier_id || null,
+        comment: paymentComment.trim() || null,
+      })
+      .select("id")
+      .single();
+
+    if (transactionError) throw transactionError;
+
+    const nextBalance = currentBalance - amount;
+
+    const { error: accountError } = await supabase
+      .from("finance_accounts")
+      .update({
+        current_balance: nextBalance,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", account.id);
+
+    if (accountError) throw accountError;
+
+    const { data: payment, error: paymentError } = await supabase
+      .from("supplier_payments")
+      .insert({
+        supplier_order_id: order.id,
+        finance_account_id: account.id,
+        finance_transaction_id: transaction.id,
+        payment_date: paymentDate || todayDate(),
+        amount,
+        comment: paymentComment.trim() || null,
+      })
+      .select("id")
+      .single();
+
+    if (paymentError) throw paymentError;
+
+    return payment.id as string;
   }
 
   async function handleCreateDocument() {
@@ -106,14 +304,18 @@ export default function RelatedDocumentModal({
       setError("");
 
       if (selectedType === "receipt") {
-        await createReceiptDraft();
+        const receiptId = await createReceiptDraft();
         window.alert("Черновик приёмки создан");
+        onCreatedDocument?.("supplier_receipt", receiptId);
         onClose();
         return;
       }
 
       if (selectedType === "payment") {
-        window.alert("Создание оплаты поставщику будет следующим шагом.");
+        const paymentId = await createSupplierPaymentDocument();
+        window.alert("Оплата поставщику создана");
+        onCreatedDocument?.("supplier_payment", paymentId);
+        onClose();
         return;
       }
 
@@ -239,10 +441,71 @@ export default function RelatedDocumentModal({
             {selectedType === "payment" && (
               <div style={itemsPreviewStyle}>
                 <div style={sectionTitleStyle}>Параметры оплаты</div>
-                <div style={emptyStyle}>
-                  Следующим шагом добавим выбор финансового счёта, дату оплаты и
-                  сумму платежа.
-                </div>
+
+                {financeLoading ? (
+                  <div style={emptyStyle}>Загружаю счета...</div>
+                ) : paymentDebt <= 0 ? (
+                  <div style={paidBoxStyle}>Заказ уже полностью оплачен.</div>
+                ) : (
+                  <div style={paymentFormStyle}>
+                    <label style={labelStyle}>
+                      <span style={labelTextStyle}>Счёт списания</span>
+                      <select
+                        value={paymentAccountId}
+                        onChange={(event) =>
+                          setPaymentAccountId(event.target.value)
+                        }
+                        style={inputStyle}
+                      >
+                        <option value="">Выбери счёт</option>
+                        {financeAccounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name} ·{" "}
+                            {formatMoney(account.current_balance, account.currency)}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label style={labelStyle}>
+                      <span style={labelTextStyle}>Дата оплаты</span>
+                      <input
+                        type="date"
+                        value={paymentDate}
+                        onChange={(event) => setPaymentDate(event.target.value)}
+                        style={inputStyle}
+                      />
+                    </label>
+
+                    <label style={labelStyle}>
+                      <span style={labelTextStyle}>Сумма оплаты</span>
+                      <input
+                        value={paymentAmount}
+                        onChange={(event) => setPaymentAmount(event.target.value)}
+                        placeholder="0.00"
+                        style={inputStyle}
+                      />
+                    </label>
+
+                    <label style={{ ...labelStyle, gridColumn: "1 / -1" }}>
+                      <span style={labelTextStyle}>Комментарий</span>
+                      <textarea
+                        value={paymentComment}
+                        onChange={(event) =>
+                          setPaymentComment(event.target.value)
+                        }
+                        placeholder="Необязательно"
+                        rows={2}
+                        style={{ ...inputStyle, resize: "vertical" }}
+                      />
+                    </label>
+
+                    <div style={paymentHintStyle}>
+                      Оплачено: <strong>{formatMoney(paidAmount)}</strong> ·
+                      Осталось: <strong>{formatMoney(paymentDebt)}</strong>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -264,11 +527,25 @@ export default function RelatedDocumentModal({
               <button
                 type="button"
                 onClick={handleCreateDocument}
-                disabled={creating}
+                disabled={
+                  creating ||
+                  (selectedType === "payment" &&
+                    (financeAccounts.length === 0 || paymentDebt <= 0))
+                }
                 style={{
                   ...createButtonStyle,
-                  opacity: creating ? 0.65 : 1,
-                  cursor: creating ? "not-allowed" : "pointer",
+                  opacity:
+                    creating ||
+                    (selectedType === "payment" &&
+                      (financeAccounts.length === 0 || paymentDebt <= 0))
+                      ? 0.65
+                      : 1,
+                  cursor:
+                    creating ||
+                    (selectedType === "payment" &&
+                      (financeAccounts.length === 0 || paymentDebt <= 0))
+                      ? "not-allowed"
+                      : "pointer",
                 }}
               >
                 {creating ? "Создаю..." : "Создать документ"}
@@ -499,6 +776,54 @@ const emptyStyle: React.CSSProperties = {
   color: "#64748b",
   background: "#ffffff",
   lineHeight: 1.5,
+};
+
+const paymentFormStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+  gap: 10,
+};
+
+const labelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 6,
+};
+
+const labelTextStyle: React.CSSProperties = {
+  color: "#334155",
+  fontSize: 13,
+  fontWeight: 900,
+};
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "11px 12px",
+  background: "#ffffff",
+  color: "#0f172a",
+  outline: "none",
+  fontSize: 14,
+};
+
+const paymentHintStyle: React.CSSProperties = {
+  gridColumn: "1 / -1",
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1e3a8a",
+  borderRadius: 14,
+  padding: 12,
+  lineHeight: 1.5,
+};
+
+const paidBoxStyle: React.CSSProperties = {
+  border: "1px solid #86efac",
+  background: "#dcfce7",
+  color: "#15803d",
+  borderRadius: 14,
+  padding: 14,
+  fontWeight: 900,
 };
 
 const actionsStyle: React.CSSProperties = {

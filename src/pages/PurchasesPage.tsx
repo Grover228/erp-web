@@ -10,25 +10,17 @@ import SupplierOrderModal, {
   type SupplierOrderItem,
 } from "./purchases/SupplierOrderModal";
 
+type Tab = "orders" | "receipts";
 type ModalMode = "create" | "view";
 
-type Status = {
-  id: string;
-  code: string;
-  name: string;
-  color: string | null;
-  status_categories?: {
-    code: string | null;
-  } | null;
-};
-
 export default function PurchasesPage() {
+  const [activeTab, setActiveTab] = useState<Tab>("orders");
+
   const [orders, setOrders] = useState<SupplierOrder[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [consumables, setConsumables] = useState<Consumable[]>([]);
   const [colors, setColors] = useState<Color[]>([]);
   const [counterparties, setCounterparties] = useState<Counterparty[]>([]);
-  const [statuses, setStatuses] = useState<Status[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [directoriesLoading, setDirectoriesLoading] = useState(false);
@@ -79,7 +71,6 @@ export default function PurchasesPage() {
         consumablesResult,
         colorsResult,
         counterpartiesResult,
-        statusesResult,
       ] = await Promise.all([
         supabase
           .from("materials")
@@ -103,41 +94,22 @@ export default function PurchasesPage() {
           .select("id, name, type")
           .eq("is_active", true)
           .order("name", { ascending: true }),
-
-        supabase
-          .from("statuses")
-          .select(
-            `
-            id,
-            code,
-            name,
-            color,
-            status_categories(code)
-          `,
-          )
-          .order("sort_order", { ascending: true }),
       ]);
 
       if (materialsResult.error) throw materialsResult.error;
       if (consumablesResult.error) throw consumablesResult.error;
       if (colorsResult.error) throw colorsResult.error;
       if (counterpartiesResult.error) throw counterpartiesResult.error;
-      if (statusesResult.error) throw statusesResult.error;
 
       setMaterials((materialsResult.data as Material[]) || []);
       setConsumables((consumablesResult.data as Consumable[]) || []);
       setColors((colorsResult.data as Color[]) || []);
       setCounterparties((counterpartiesResult.data as Counterparty[]) || []);
-      setStatuses(
-        ((statusesResult.data as Status[]) || []).filter(
-          (status) => status.status_categories?.code === "supplier_orders",
-        ),
-      );
     } catch (error) {
       setError(
         error instanceof Error
           ? error.message
-          : "Ошибка загрузки материалов, расходников, цветов, поставщиков и статусов",
+          : "Ошибка загрузки материалов, расходников, цветов и поставщиков",
       );
     } finally {
       setDirectoriesLoading(false);
@@ -189,112 +161,175 @@ export default function PurchasesPage() {
     setSelectedOrderItems([]);
   }
 
-  async function handleOrderSaved() {
-    closeModal();
+  async function handleOrderSaved(createdOrderId?: string) {
     await loadOrders();
+
+    if (!createdOrderId) {
+      closeModal();
+      return;
+    }
+
+    try {
+      setSelectedOrderLoading(true);
+      setError("");
+
+      const { data: createdOrder, error: orderError } = await supabase
+        .from("supplier_orders")
+        .select("*")
+        .eq("id", createdOrderId)
+        .single();
+
+      if (orderError) throw orderError;
+
+      const { data: createdItems, error: itemsError } = await supabase
+        .from("supplier_order_items")
+        .select(
+          `
+          *,
+          materials(name, article, color_id),
+          consumables(name, article)
+        `,
+        )
+        .eq("supplier_order_id", createdOrderId)
+        .order("created_at", { ascending: true });
+
+      if (itemsError) throw itemsError;
+
+      setSelectedOrder(createdOrder as SupplierOrder);
+      setSelectedOrderItems((createdItems as SupplierOrderItem[]) || []);
+      setModalMode("view");
+    } catch (error) {
+      closeModal();
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Заказ создан, но открыть его не удалось",
+      );
+    } finally {
+      setSelectedOrderLoading(false);
+    }
   }
 
-  function getStatusByCode(statusCode: string) {
-    return statuses.find((status) => status.code === statusCode) || null;
-  }
-
-  function getStatusName(statusCode: string) {
-    const status = getStatusByCode(statusCode);
-
-    return status?.name || statusCode;
-  }
-
-  function getStatusStyle(statusCode: string): React.CSSProperties {
-    const status = getStatusByCode(statusCode);
-
-    return {
-      ...statusStyle,
-      background: status?.color ? `${status.color}20` : statusStyle.background,
-      borderColor: status?.color || "#bfdbfe",
-      color: status?.color || "#1d4ed8",
-    };
+  function getStatusLabel(status: string) {
+    if (status === "draft") return "Черновик";
+    if (status === "ordered") return "Заказан";
+    if (status === "received") return "Поступил";
+    if (status === "cancelled") return "Отменён";
+    return status;
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={compactTabsWrapStyle}>
+        <button
+          onClick={() => setActiveTab("orders")}
+          style={compactTabStyle(activeTab === "orders")}
+        >
+          <span style={compactTabIconStyle}>📄</span>
+          <span>Заказы</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab("receipts")}
+          style={compactTabStyle(activeTab === "receipts")}
+        >
+          <span style={compactTabIconStyle}>📦</span>
+          <span>Поступления</span>
+        </button>
+      </div>
+
       {error && <div style={errorStyle}>{error}</div>}
 
-      <div style={sectionStyle}>
-        <div style={sectionHeaderStyle}>
-          <div>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
-              Заказы поставщикам
+      {activeTab === "orders" && (
+        <div style={sectionStyle}>
+          <div style={sectionHeaderStyle}>
+            <div>
+              <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
+                Заказы поставщикам
+              </div>
+              <div style={{ color: "#64748b", marginTop: 4 }}>
+                Планируем закупку тканей, расходников и услуг.
+              </div>
             </div>
-            <div style={{ color: "#64748b", marginTop: 4 }}>
-              Планируем закупку тканей, расходников и услуг.
+
+            <button onClick={openCreateOrder} style={primaryButtonStyle}>
+              + Новый заказ поставщику
+            </button>
+          </div>
+
+          {loading ? (
+            <div style={{ color: "#64748b", fontWeight: 700 }}>
+              Загружаю заказы...
             </div>
-          </div>
-
-          <button onClick={openCreateOrder} style={primaryButtonStyle}>
-            + Новый заказ поставщику
-          </button>
-        </div>
-
-        {loading ? (
-          <div style={{ color: "#64748b", fontWeight: 700 }}>
-            Загружаю заказы...
-          </div>
-        ) : orders.length === 0 ? (
-          <div style={emptyStyle}>
-            Заказов поставщикам пока нет. Создай первый заказ.
-          </div>
-        ) : (
-          <div style={tableWrapStyle}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={thStyle}>Номер</th>
-                  <th style={thStyle}>Дата</th>
-                  <th style={thStyle}>Поставщик</th>
-                  <th style={thStyle}>Сумма</th>
-                  <th style={thStyle}>Статус</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {orders.map((order) => (
-                  <tr key={order.id}>
-                    <td style={tdStyle}>
-                      <button
-                        onClick={() => openOrder(order)}
-                        style={linkButtonStyle}
-                      >
-                        {order.order_number || "Без номера"}
-                      </button>
-                    </td>
-
-                    <td style={tdStyle}>{order.order_date || "—"}</td>
-
-                    <td style={tdStyle}>{order.supplier_name || "—"}</td>
-
-                    <td style={tdStyle}>
-                      {Number(order.total_amount || 0).toLocaleString(
-                        "ru-RU",
-                        {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        },
-                      )}{" "}
-                      ₽
-                    </td>
-
-                    <td style={tdStyle}>
-                      <span style={getStatusStyle(order.status)}>
-                        {getStatusName(order.status)}
-                      </span>
-                    </td>
+          ) : orders.length === 0 ? (
+            <div style={emptyStyle}>
+              Заказов поставщикам пока нет. Создай первый заказ.
+            </div>
+          ) : (
+            <div style={tableWrapStyle}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>Номер</th>
+                    <th style={thStyle}>Дата</th>
+                    <th style={thStyle}>Поставщик</th>
+                    <th style={thStyle}>Сумма</th>
+                    <th style={thStyle}>Статус</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+
+                <tbody>
+                  {orders.map((order) => (
+                    <tr key={order.id}>
+                      <td style={tdStyle}>
+                        <button
+                          onClick={() => openOrder(order)}
+                          style={linkButtonStyle}
+                        >
+                          {order.order_number || "Без номера"}
+                        </button>
+                      </td>
+
+                      <td style={tdStyle}>{order.order_date || "—"}</td>
+
+                      <td style={tdStyle}>{order.supplier_name || "—"}</td>
+
+                      <td style={tdStyle}>
+                        {Number(order.total_amount || 0).toLocaleString(
+                          "ru-RU",
+                          {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          },
+                        )}{" "}
+                        ₽
+                      </td>
+
+                      <td style={tdStyle}>
+                        <span style={statusStyle}>
+                          {getStatusLabel(order.status)}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === "receipts" && (
+        <div style={sectionStyle}>
+          <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
+            Поступления
           </div>
-        )}
-      </div>
+
+          <div style={{ color: "#64748b", marginTop: 8 }}>
+            Здесь будем фиксировать фактический приход материалов на склад.
+          </div>
+        </div>
+      )}
 
       {modalMode && (
         <SupplierOrderModal
@@ -313,6 +348,34 @@ export default function PurchasesPage() {
       )}
     </div>
   );
+}
+
+const compactTabsWrapStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  marginTop: -4,
+};
+
+const compactTabIconStyle: React.CSSProperties = {
+  fontSize: 18,
+};
+
+function compactTabStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? "1px solid #93c5fd" : "1px solid #dbe4f0",
+    background: active ? "#eff6ff" : "#ffffff",
+    color: active ? "#1d4ed8" : "#475569",
+    borderRadius: 14,
+    padding: "9px 12px",
+    cursor: "pointer",
+    fontWeight: 800,
+    fontSize: 13,
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    boxShadow: active ? "0 6px 14px rgba(37, 99, 235, 0.12)" : "none",
+  };
 }
 
 const sectionStyle: React.CSSProperties = {

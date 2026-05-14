@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 
-type DocumentType = "supplier_order" | "supplier_receipt";
+type DocumentType = "supplier_order" | "supplier_receipt" | "supplier_payment";
 
 type SupplierOrderLink = {
   id: string;
@@ -22,6 +22,20 @@ type SupplierReceiptLink = {
   total_amount: number;
 };
 
+type SupplierPaymentLink = {
+  id: string;
+  supplier_order_id: string | null;
+  finance_account_id: string | null;
+  finance_transaction_id: string | null;
+  payment_number: string | null;
+  payment_date: string | null;
+  amount: number;
+  comment: string | null;
+  finance_accounts?: {
+    name: string | null;
+  } | null;
+};
+
 type LinkedDocumentsModalProps = {
   sourceType: DocumentType;
   sourceId: string;
@@ -39,6 +53,7 @@ export default function LinkedDocumentsModal({
 }: LinkedDocumentsModalProps) {
   const [order, setOrder] = useState<SupplierOrderLink | null>(null);
   const [receipts, setReceipts] = useState<SupplierReceiptLink[]>([]);
+  const [payments, setPayments] = useState<SupplierPaymentLink[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -69,13 +84,26 @@ export default function LinkedDocumentsModal({
         resolvedOrderId = receiptData?.supplier_order_id || null;
       }
 
+      if (sourceType === "supplier_payment" && !resolvedOrderId) {
+        const { data: paymentData, error: paymentError } = await supabase
+          .from("supplier_payments")
+          .select("supplier_order_id")
+          .eq("id", sourceId)
+          .single();
+
+        if (paymentError) throw paymentError;
+
+        resolvedOrderId = paymentData?.supplier_order_id || null;
+      }
+
       if (!resolvedOrderId) {
         setOrder(null);
         setReceipts([]);
+        setPayments([]);
         return;
       }
 
-      const [orderResult, receiptsResult] = await Promise.all([
+      const [orderResult, receiptsResult, paymentsResult] = await Promise.all([
         supabase
           .from("supplier_orders")
           .select("id, order_number, order_date, supplier_name, status, total_amount")
@@ -86,13 +114,20 @@ export default function LinkedDocumentsModal({
           .select("id, supplier_order_id, receipt_number, receipt_date, supplier_name, status, total_amount")
           .eq("supplier_order_id", resolvedOrderId)
           .order("created_at", { ascending: true }),
+        supabase
+          .from("supplier_payments")
+          .select("id, supplier_order_id, finance_account_id, finance_transaction_id, payment_number, payment_date, amount, comment, finance_accounts(name)")
+          .eq("supplier_order_id", resolvedOrderId)
+          .order("created_at", { ascending: true }),
       ]);
 
       if (orderResult.error) throw orderResult.error;
       if (receiptsResult.error) throw receiptsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
 
       setOrder(orderResult.data as SupplierOrderLink);
       setReceipts((receiptsResult.data as SupplierReceiptLink[]) || []);
+      setPayments((paymentsResult.data as SupplierPaymentLink[]) || []);
     } catch (error) {
       setError(
         error instanceof Error
@@ -120,6 +155,14 @@ export default function LinkedDocumentsModal({
     });
   }
 
+  function getPaidAmount() {
+    return payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  }
+
+  function getPaymentDebt() {
+    return Math.max(0, Number(order?.total_amount || 0) - getPaidAmount());
+  }
+
   function handleOpenDocument(type: DocumentType, id: string) {
     if (sourceType === type && sourceId === id) return;
 
@@ -133,7 +176,7 @@ export default function LinkedDocumentsModal({
           <div>
             <div style={titleStyle}>Связанные документы</div>
             <div style={subtitleStyle}>
-              Цепочка документов по закупке и поступлению
+              Цепочка документов по закупке, оплате и поступлению
             </div>
           </div>
 
@@ -179,47 +222,100 @@ export default function LinkedDocumentsModal({
             <div style={connectorStyle} />
 
             <div style={childDocumentsStyle}>
-              {receipts.length === 0 ? (
+              {payments.length === 0 && receipts.length === 0 && getPaymentDebt() <= 0 ? (
                 <div style={emptyChildStyle}>
-                  Приёмок по этому заказу пока нет.
+                  Оплат и приёмок по этому заказу пока нет.
                 </div>
               ) : (
-                receipts.map((receipt) => (
-                  <div
-                    key={receipt.id}
-                    style={documentNodeStyle(
-                      sourceType === "supplier_receipt" &&
-                        sourceId === receipt.id,
-                    )}
-                  >
-                    <div style={nodeHeaderStyle}>
-                      <span style={nodeIconStyle}>📦</span>
-                      <span style={nodeTitleStyle}>Приёмка</span>
-                    </div>
+                <>
+                  {getPaymentDebt() > 0 && (
+                    <div style={unpaidNodeStyle}>
+                      <div style={nodeHeaderStyle}>
+                        <span style={nodeIconStyle}>⚠️</span>
+                        <span style={nodeTitleStyle}>Оплата нужна</span>
+                      </div>
 
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleOpenDocument("supplier_receipt", receipt.id)
-                      }
-                      style={documentButtonStyle}
+                      <div style={unpaidTextStyle}>
+                        По заказу осталось оплатить{" "}
+                        <strong>{formatMoney(getPaymentDebt())} ₽</strong>.
+                        Создай документ оплаты через кнопку
+                        <strong> “+ Создать документ”</strong> в заказе.
+                      </div>
+                    </div>
+                  )}
+
+                  {payments.map((payment) => (
+                    <div
+                      key={payment.id}
+                      style={documentNodeStyle(
+                        sourceType === "supplier_payment" &&
+                          sourceId === payment.id,
+                      )}
                     >
-                      <div style={documentNumberStyle}>
-                        {receipt.receipt_number || "Черновик приёмки"}
+                      <div style={nodeHeaderStyle}>
+                        <span style={nodeIconStyle}>💸</span>
+                        <span style={nodeTitleStyle}>Оплата поставщику</span>
                       </div>
-                      <div style={documentMetaStyle}>
-                        {receipt.receipt_date || "—"} ·{" "}
-                        {receipt.supplier_name || "—"}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenDocument("supplier_payment", payment.id)
+                        }
+                        style={documentButtonStyle}
+                      >
+                        <div style={documentNumberStyle}>
+                          {payment.payment_number || "Оплата без номера"}
+                        </div>
+                        <div style={documentMetaStyle}>
+                          {payment.payment_date || "—"} ·{" "}
+                          {payment.finance_accounts?.name || "Счёт"}
+                        </div>
+                        <div style={documentFooterStyle}>
+                          <span style={paidBadgeStyle}>Оплачено</span>
+                          <strong>{formatMoney(payment.amount)} ₽</strong>
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+
+                  {receipts.map((receipt) => (
+                    <div
+                      key={receipt.id}
+                      style={documentNodeStyle(
+                        sourceType === "supplier_receipt" &&
+                          sourceId === receipt.id,
+                      )}
+                    >
+                      <div style={nodeHeaderStyle}>
+                        <span style={nodeIconStyle}>📦</span>
+                        <span style={nodeTitleStyle}>Приёмка</span>
                       </div>
-                      <div style={documentFooterStyle}>
-                        <span style={statusBadgeStyle}>
-                          {getStatusLabel(receipt.status)}
-                        </span>
-                        <strong>{formatMoney(receipt.total_amount)} ₽</strong>
-                      </div>
-                    </button>
-                  </div>
-                ))
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          handleOpenDocument("supplier_receipt", receipt.id)
+                        }
+                        style={documentButtonStyle}
+                      >
+                        <div style={documentNumberStyle}>
+                          {receipt.receipt_number || "Черновик приёмки"}
+                        </div>
+                        <div style={documentMetaStyle}>
+                          {receipt.receipt_date || "—"} ·{" "}
+                          {receipt.supplier_name || "—"}
+                        </div>
+                        <div style={documentFooterStyle}>
+                          <span style={statusBadgeStyle}>
+                            {getStatusLabel(receipt.status)}
+                          </span>
+                          <strong>{formatMoney(receipt.total_amount)} ₽</strong>
+                        </div>
+                      </button>
+                    </div>
+                  ))}
+                </>
               )}
             </div>
           </div>
@@ -379,6 +475,31 @@ const statusBadgeStyle: React.CSSProperties = {
   background: "#eff6ff",
   color: "#1d4ed8",
   border: "1px solid #bfdbfe",
+  borderRadius: 999,
+  padding: "5px 10px",
+  fontSize: 12,
+  fontWeight: 900,
+  whiteSpace: "nowrap",
+};
+
+
+const unpaidNodeStyle: React.CSSProperties = {
+  border: "1px solid #fdba74",
+  background: "#fff7ed",
+  borderRadius: 16,
+  padding: 12,
+};
+
+const unpaidTextStyle: React.CSSProperties = {
+  color: "#9a3412",
+  lineHeight: 1.45,
+  fontWeight: 700,
+};
+
+const paidBadgeStyle: React.CSSProperties = {
+  background: "#dcfce7",
+  color: "#15803d",
+  border: "1px solid #86efac",
   borderRadius: 999,
   padding: "5px 10px",
   fontSize: 12,
