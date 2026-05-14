@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 import CustomerShipmentModal, { type CustomerShipment, type CustomerShipmentItem } from "./CustomerShipmentModal";
 import CustomerInvoiceModal, { type CustomerInvoice } from "./CustomerInvoiceModal";
@@ -9,6 +9,7 @@ type CustomerRelatedDocumentModalProps = {
   order: CustomerOrder;
   orderItems: CustomerOrderItem[];
   onClose: () => void;
+  onCreatedDocument?: (type: "customer_shipment" | "customer_invoice" | "incoming_payment", id: string) => void;
 };
 
 type RelatedDocumentType =
@@ -18,10 +19,19 @@ type RelatedDocumentType =
   | "production_order"
   | "supplier_order";
 
+type FinanceAccount = {
+  id: string;
+  name: string;
+  currency?: string | null;
+  current_balance?: number | string | null;
+};
+
+
 export default function CustomerRelatedDocumentModal({
   order,
   orderItems,
   onClose,
+  onCreatedDocument,
 }: CustomerRelatedDocumentModalProps) {
   const [creatingShipment, setCreatingShipment] = useState(false);
   const [createdShipment, setCreatedShipment] = useState<CustomerShipment | null>(null);
@@ -29,7 +39,39 @@ export default function CustomerRelatedDocumentModal({
   const [createdInvoice, setCreatedInvoice] = useState<CustomerInvoice | null>(null);
   const [createdPayment, setCreatedPayment] = useState<CustomerPayment | null>(null);
   const [creatingFinanceDocument, setCreatingFinanceDocument] = useState(false);
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
+  const [selectedFinanceAccountId, setSelectedFinanceAccountId] = useState("");
+  const [paymentAmount, setPaymentAmount] = useState(String(Number(order.total_amount || 0)));
+  const [paymentComment, setPaymentComment] = useState("");
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    loadFinanceAccounts();
+  }, []);
+
+  async function loadFinanceAccounts() {
+    try {
+      const { data, error } = await supabase
+        .from("finance_accounts")
+        .select("id, name, currency, current_balance")
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+
+      const accounts = (data as FinanceAccount[]) || [];
+      setFinanceAccounts(accounts);
+      setSelectedFinanceAccountId((prev) => prev || accounts[0]?.id || "");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Ошибка загрузки финансовых счетов");
+    }
+  }
+
+  function formatMoney(value: number | string | null | undefined) {
+    return `${Number(value || 0).toLocaleString("ru-RU", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })} ₽`;
+  }
 
   async function createShipmentFromOrder() {
     try {
@@ -141,6 +183,7 @@ export default function CustomerRelatedDocumentModal({
       if (invoiceError) throw invoiceError;
 
       setCreatedInvoice(invoice as CustomerInvoice);
+      onCreatedDocument?.("customer_invoice", invoice.id);
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Ошибка создания счёта",
@@ -155,6 +198,24 @@ export default function CustomerRelatedDocumentModal({
       setCreatingFinanceDocument(true);
       setError("");
 
+      const amount = Number(paymentAmount || 0);
+
+      if (!selectedFinanceAccountId) {
+        throw new Error("Выбери счёт поступления денег");
+      }
+
+      if (amount <= 0) {
+        throw new Error("Сумма оплаты должна быть больше 0");
+      }
+
+      const account = financeAccounts.find(
+        (item) => item.id === selectedFinanceAccountId,
+      );
+
+      if (!account) {
+        throw new Error("Финансовый счёт не найден");
+      }
+
       const { data: postedStatus } = await supabase
         .from("statuses")
         .select("id, code, status_categories(code)")
@@ -162,25 +223,74 @@ export default function CustomerRelatedDocumentModal({
         .eq("status_categories.code", "customer_payments")
         .maybeSingle();
 
+      const now = new Date().toISOString();
+
       const { data: payment, error: paymentError } = await supabase
         .from("customer_payments")
         .insert({
-          payment_date: new Date().toISOString().slice(0, 10),
+          payment_date: now.slice(0, 10),
           customer_order_id: order.id,
           customer_invoice_id: null,
           customer_id: order.customer_id || null,
           customer_name: order.customer_name || null,
+          finance_account_id: selectedFinanceAccountId,
           status: "posted",
           status_id: postedStatus?.id || null,
-          amount: order.total_amount || 0,
-          comment: `Оплата по заказу покупателя ${order.order_number || order.id}`,
+          amount,
+          comment:
+            paymentComment.trim() ||
+            `Оплата по заказу покупателя ${order.order_number || order.id}`,
         })
         .select("*")
         .single();
 
       if (paymentError) throw paymentError;
 
-      setCreatedPayment(payment as CustomerPayment);
+      const { data: transaction, error: transactionError } = await supabase
+        .from("finance_transactions")
+        .insert({
+          account_id: selectedFinanceAccountId,
+          type: "income",
+          amount,
+          operation_date: now.slice(0, 10),
+          description: `Оплата покупателя по заказу ${order.order_number || ""}`.trim(),
+          source_document_type: "customer_payment",
+          source_document_id: payment.id,
+          category: "customer_payment",
+          counterparty_id: order.customer_id || null,
+          comment: paymentComment.trim() || null,
+          created_at: now,
+        })
+        .select("id")
+        .single();
+
+      if (transactionError) throw transactionError;
+
+      const { error: updatePaymentError } = await supabase
+        .from("customer_payments")
+        .update({
+          finance_transaction_id: transaction.id,
+        })
+        .eq("id", payment.id);
+
+      if (updatePaymentError) throw updatePaymentError;
+
+      const { error: accountError } = await supabase
+        .from("finance_accounts")
+        .update({
+          current_balance: Number(account.current_balance || 0) + amount,
+          updated_at: now,
+        })
+        .eq("id", selectedFinanceAccountId);
+
+      if (accountError) throw accountError;
+
+      setCreatedPayment({
+        ...(payment as CustomerPayment),
+        finance_transaction_id: transaction.id,
+        finance_account_id: selectedFinanceAccountId,
+      } as CustomerPayment);
+      onCreatedDocument?.("incoming_payment", payment.id);
     } catch (error) {
       setError(
         error instanceof Error ? error.message : "Ошибка создания платежа",
@@ -354,6 +464,47 @@ function handleCreateDocument(type: RelatedDocumentType) {
               </div>
             </div>
 
+            <div style={paymentSettingsStyle}>
+              <div style={positionsTitleStyle}>Параметры входящего платежа</div>
+              <div style={paymentGridStyle}>
+                <label style={paymentLabelStyle}>
+                  <span>Счёт поступления</span>
+                  <select
+                    value={selectedFinanceAccountId}
+                    onChange={(event) => setSelectedFinanceAccountId(event.target.value)}
+                    style={paymentInputStyle}
+                  >
+                    <option value="">Выбери счёт</option>
+                    {financeAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name} · {formatMoney(account.current_balance || 0)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={paymentLabelStyle}>
+                  <span>Сумма оплаты</span>
+                  <input
+                    type="number"
+                    value={paymentAmount}
+                    onChange={(event) => setPaymentAmount(event.target.value)}
+                    style={paymentInputStyle}
+                  />
+                </label>
+              </div>
+
+              <label style={paymentLabelStyle}>
+                <span>Комментарий к оплате</span>
+                <input
+                  value={paymentComment}
+                  onChange={(event) => setPaymentComment(event.target.value)}
+                  placeholder="Необязательно"
+                  style={paymentInputStyle}
+                />
+              </label>
+            </div>
+
             <div style={positionsTitleStyle}>Что попадёт в документ</div>
 
             <div style={positionsListStyle}>
@@ -376,10 +527,18 @@ function handleCreateDocument(type: RelatedDocumentType) {
 
               <button
                 type="button"
+                onClick={() => handleCreateDocument("incoming_payment")}
+                style={financeButtonStyle}
+              >
+                {creatingFinanceDocument ? "Создаю..." : "Создать оплату"}
+              </button>
+
+              <button
+                type="button"
                 onClick={() => handleCreateDocument("shipment")}
                 style={createButtonStyle}
               >
-                {creatingShipment ? "Создаю..." : "Создать документ"}
+                {creatingShipment ? "Создаю..." : "Создать отгрузку"}
               </button>
             </div>
           </div>
@@ -431,6 +590,47 @@ function getItemName(item: CustomerOrderItem) {
 
   return item.products?.name || "Товар";
 }
+
+const paymentSettingsStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  borderRadius: 14,
+  padding: 12,
+  display: "grid",
+  gap: 10,
+};
+
+const paymentGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 180px",
+  gap: 10,
+};
+
+const paymentLabelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 6,
+  color: "#334155",
+  fontSize: 13,
+  fontWeight: 900,
+};
+
+const paymentInputStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "10px 11px",
+  background: "#ffffff",
+  color: "#0f172a",
+};
+
+const financeButtonStyle: React.CSSProperties = {
+  border: "1px solid #86efac",
+  background: "#dcfce7",
+  color: "#15803d",
+  borderRadius: 12,
+  padding: "12px 16px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
 
 const errorStyle: React.CSSProperties = {
   background: "#fef2f2",

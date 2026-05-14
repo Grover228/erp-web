@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import { supabase } from "../../supabase";
+
 export type CustomerPayment = {
   id: string;
   payment_number: string | null;
@@ -6,11 +9,27 @@ export type CustomerPayment = {
   customer_invoice_id: string | null;
   customer_id: string | null;
   customer_name: string | null;
+  finance_account_id?: string | null;
+  finance_transaction_id?: string | null;
   status: string;
   status_id: string | null;
   amount: number;
   comment: string | null;
   created_at: string | null;
+};
+
+type FinanceAccount = {
+  id: string;
+  name: string;
+  current_balance: number | string | null;
+};
+
+type FinanceTransaction = {
+  id: string;
+  description: string | null;
+  operation_date: string | null;
+  amount: number | string;
+  type: string;
 };
 
 type CustomerPaymentModalProps = {
@@ -22,11 +41,117 @@ type CustomerPaymentModalProps = {
 export default function CustomerPaymentModal({
   payment,
   onClose,
+  onSaved,
 }: CustomerPaymentModalProps) {
+  const [account, setAccount] = useState<FinanceAccount | null>(null);
+  const [transaction, setTransaction] = useState<FinanceTransaction | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    loadFinanceLinks();
+  }, [payment.id]);
+
+  async function loadFinanceLinks() {
+    try {
+      setError("");
+
+      const [accountResult, transactionResult] = await Promise.all([
+        payment.finance_account_id
+          ? supabase
+              .from("finance_accounts")
+              .select("id, name, current_balance")
+              .eq("id", payment.finance_account_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+
+        payment.finance_transaction_id
+          ? supabase
+              .from("finance_transactions")
+              .select("id, description, operation_date, amount, type")
+              .eq("id", payment.finance_transaction_id)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null }),
+      ]);
+
+      if (accountResult.error) throw accountResult.error;
+      if (transactionResult.error) throw transactionResult.error;
+
+      setAccount((accountResult.data as FinanceAccount | null) || null);
+      setTransaction((transactionResult.data as FinanceTransaction | null) || null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Ошибка загрузки финансовой связи");
+    }
+  }
+
   function getStatusLabel(status: string) {
     if (status === "posted") return "Проведён";
     if (status === "cancelled") return "Отменён";
     return status;
+  }
+
+  function formatMoney(value: number | string | null | undefined) {
+    return `${Number(value || 0).toLocaleString("ru-RU", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })} ₽`;
+  }
+
+  async function deletePayment() {
+    const confirmed = window.confirm(
+      `Удалить входящий платёж ${payment.payment_number || "Без номера"}? Деньги будут списаны обратно со счёта.`,
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setDeleting(true);
+      setError("");
+
+      if (payment.finance_account_id) {
+        const { data: accountData, error: accountError } = await supabase
+          .from("finance_accounts")
+          .select("id, current_balance")
+          .eq("id", payment.finance_account_id)
+          .single();
+
+        if (accountError) throw accountError;
+
+        const { error: updateAccountError } = await supabase
+          .from("finance_accounts")
+          .update({
+            current_balance:
+              Number(accountData.current_balance || 0) - Number(payment.amount || 0),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", payment.finance_account_id);
+
+        if (updateAccountError) throw updateAccountError;
+      }
+
+      const { error: paymentError } = await supabase
+        .from("customer_payments")
+        .delete()
+        .eq("id", payment.id);
+
+      if (paymentError) throw paymentError;
+
+      if (payment.finance_transaction_id) {
+        const { error: transactionError } = await supabase
+          .from("finance_transactions")
+          .delete()
+          .eq("id", payment.finance_transaction_id);
+
+        if (transactionError) throw transactionError;
+      }
+
+      onSaved?.();
+      onClose();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Ошибка удаления платежа");
+    } finally {
+      setDeleting(false);
+    }
   }
 
   return (
@@ -43,10 +168,27 @@ export default function CustomerPaymentModal({
             </div>
           </div>
 
-          <button type="button" onClick={onClose} style={closeButtonStyle}>
-            ×
-          </button>
+          <div style={actionsStyle}>
+            <button
+              type="button"
+              onClick={deletePayment}
+              disabled={deleting}
+              style={{
+                ...deleteButtonStyle,
+                opacity: deleting ? 0.65 : 1,
+                cursor: deleting ? "not-allowed" : "pointer",
+              }}
+            >
+              {deleting ? "Удаляю..." : "Удалить"}
+            </button>
+
+            <button type="button" onClick={onClose} style={closeButtonStyle}>
+              ×
+            </button>
+          </div>
         </div>
+
+        {error && <div style={errorStyle}>{error}</div>}
 
         <div style={infoGridStyle}>
           <div style={infoCardStyle}>
@@ -56,32 +198,33 @@ export default function CustomerPaymentModal({
 
           <div style={infoCardStyle}>
             <div style={infoLabelStyle}>Сумма оплаты</div>
-            <div style={infoValueStyle}>
-              {Number(payment.amount || 0).toLocaleString("ru-RU", {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2,
-              })}{" "}
-              ₽
-            </div>
+            <div style={infoValueStyle}>{formatMoney(payment.amount)}</div>
           </div>
 
           <div style={infoCardStyle}>
-            <div style={infoLabelStyle}>Основание</div>
-            <div style={infoValueStyle}>
-              {payment.customer_invoice_id
-                ? "Счёт покупателю"
-                : payment.customer_order_id
-                  ? "Заказ покупателя"
-                  : "—"}
-            </div>
+            <div style={infoLabelStyle}>Счёт поступления</div>
+            <div style={infoValueStyle}>{account?.name || "—"}</div>
+          </div>
+
+          <div style={infoCardStyle}>
+            <div style={infoLabelStyle}>Баланс счёта</div>
+            <div style={infoValueStyle}>{formatMoney(account?.current_balance || 0)}</div>
           </div>
         </div>
 
-        <div style={noticeStyle}>
-          Платёж пока фиксируется как входящий финансовый документ. Следующим
-          шагом добавим отмену оплаты, кассу/банк и автоматический расчёт
-          задолженности.
-        </div>
+        {transaction && (
+          <div style={noticeStyle}>
+            Финансовая операция: {transaction.description || "Оплата покупателя"} ·{" "}
+            {transaction.operation_date || "—"} · {formatMoney(transaction.amount)}
+          </div>
+        )}
+
+        {!transaction && (
+          <div style={noticeStyle}>
+            Платёж создан, но финансовая операция не найдена. Проверь связь
+            finance_transaction_id.
+          </div>
+        )}
 
         {payment.comment && <div style={commentStyle}>{payment.comment}</div>}
       </div>
@@ -120,6 +263,13 @@ const headerStyle: React.CSSProperties = {
   alignItems: "flex-start",
 };
 
+const actionsStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 8,
+  alignItems: "center",
+};
+
 const titleStyle: React.CSSProperties = {
   color: "#0f172a",
   fontSize: 24,
@@ -142,6 +292,25 @@ const closeButtonStyle: React.CSSProperties = {
   fontSize: 24,
   fontWeight: 800,
   color: "#0f172a",
+};
+
+const deleteButtonStyle: React.CSSProperties = {
+  border: "1px solid #fecaca",
+  background: "#fff1f2",
+  color: "#991b1b",
+  borderRadius: 12,
+  padding: "10px 13px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const errorStyle: React.CSSProperties = {
+  background: "#fef2f2",
+  border: "1px solid #fecaca",
+  color: "#991b1b",
+  borderRadius: 14,
+  padding: 14,
+  fontWeight: 800,
 };
 
 const infoGridStyle: React.CSSProperties = {

@@ -86,6 +86,15 @@ type OperationQueueItem = {
   inProgress: number;
 };
 
+type FinanceAccount = {
+  id: string;
+  name: string;
+  type: string | null;
+  currency: string | null;
+  current_balance: number | string;
+};
+
+
 type EmployeeTodayStats = {
   userId: string;
   name: string;
@@ -207,6 +216,10 @@ export default function DashboardPage({
 
   const [loading, setLoading] = useState(false);
   const [payingUserId, setPayingUserId] = useState<string | null>(null);
+  const [selectedPayoutEmployee, setSelectedPayoutEmployee] =
+    useState<PayableEmployeeStats | null>(null);
+  const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
+  const [selectedFinanceAccountId, setSelectedFinanceAccountId] = useState("");
   const [dashboardError, setDashboardError] = useState("");
 
   useEffect(() => {
@@ -221,8 +234,14 @@ export default function DashboardPage({
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
 
-      const [ordersResult, batchesResult, operationsResult, logsResult, shiftsResult] =
-        await Promise.all([
+      const [
+        ordersResult,
+        batchesResult,
+        operationsResult,
+        logsResult,
+        shiftsResult,
+        financeAccountsResult,
+      ] = await Promise.all([
           supabase
             .from("production_orders")
             .select("id, status, quantity, created_at")
@@ -258,6 +277,12 @@ export default function DashboardPage({
             .eq("status", "closed")
             .or("is_paid.eq.false,is_paid.is.null")
             .order("closed_at", { ascending: false }),
+
+          supabase
+            .from("finance_accounts")
+            .select("id, name, type, currency, current_balance")
+            .eq("is_active", true)
+            .order("created_at", { ascending: true }),
         ]);
 
       if (ordersResult.error) throw ordersResult.error;
@@ -265,6 +290,9 @@ export default function DashboardPage({
       if (operationsResult.error) throw operationsResult.error;
       if (logsResult.error) throw logsResult.error;
       if (shiftsResult.error) throw shiftsResult.error;
+      if (financeAccountsResult.error) throw financeAccountsResult.error;
+
+      setFinanceAccounts((financeAccountsResult.data as FinanceAccount[]) || []);
 
       setOrders((ordersResult.data as ProductionOrder[]) || []);
       setBatches((batchesResult.data as ProductionBatch[]) || []);
@@ -280,18 +308,42 @@ export default function DashboardPage({
     }
   }
 
-  async function handlePayEmployeeShifts(item: PayableEmployeeStats) {
+  function openEmployeePayoutModal(item: PayableEmployeeStats) {
     if (item.unpaidShiftIds.length === 0) return;
 
-    const confirmed = window.confirm(
-      `Отметить как выплачено: ${item.name}, ${item.unpaidShiftsCount} смен(ы), сумма ${formatMoney(item.payableAmount)}?`
-    );
+    setSelectedPayoutEmployee(item);
+    setSelectedFinanceAccountId(financeAccounts[0]?.id || "");
+  }
 
-    if (!confirmed) return;
+  async function handlePayEmployeeShifts(
+    item: PayableEmployeeStats,
+    financeAccountId: string,
+  ) {
+    if (item.unpaidShiftIds.length === 0) return;
 
     try {
       setPayingUserId(item.userId);
       setDashboardError("");
+
+      const account = financeAccounts.find(
+        (financeAccount) => financeAccount.id === financeAccountId,
+      );
+
+      if (!account) {
+        throw new Error("Выбери финансовый счёт для выплаты");
+      }
+
+      const amount = Number(item.payableAmount || 0);
+
+      if (amount <= 0) {
+        throw new Error("Сумма выплаты должна быть больше 0");
+      }
+
+      const currentBalance = Number(account.current_balance || 0);
+
+      if (amount > currentBalance) {
+        throw new Error("Недостаточно средств на выбранном счёте");
+      }
 
       const {
         data: { user },
@@ -301,17 +353,47 @@ export default function DashboardPage({
       if (userError) throw userError;
       if (!user) throw new Error("Администратор не найден");
 
+      const now = new Date().toISOString();
+
+      const { error: transactionError } = await supabase
+        .from("finance_transactions")
+        .insert({
+          account_id: financeAccountId,
+          type: "expense",
+          amount,
+          operation_date: now.slice(0, 10),
+          description: `Выплата сотруднику ${item.name}`,
+          source_document_type: "employee_payout",
+          source_document_id: item.unpaidShiftIds[0],
+          category: "employee_salary",
+          counterparty_id: item.userId,
+          comment: `Смен к оплате: ${item.unpaidShiftsCount}; смены: ${item.unpaidShiftIds.join(", ")}`,
+        });
+
+      if (transactionError) throw transactionError;
+
+      const { error: accountError } = await supabase
+        .from("finance_accounts")
+        .update({
+          current_balance: currentBalance - amount,
+          updated_at: now,
+        })
+        .eq("id", financeAccountId);
+
+      if (accountError) throw accountError;
+
       const { error } = await supabase
         .from("employee_shifts")
         .update({
           is_paid: true,
-          paid_at: new Date().toISOString(),
+          paid_at: now,
           paid_by: user.id,
         })
         .in("id", item.unpaidShiftIds);
 
       if (error) throw error;
 
+      setSelectedPayoutEmployee(null);
       await loadDashboardData();
     } catch (error) {
       setDashboardError(
@@ -320,6 +402,15 @@ export default function DashboardPage({
     } finally {
       setPayingUserId(null);
     }
+  }
+
+  async function confirmEmployeePayout() {
+    if (!selectedPayoutEmployee) return;
+
+    await handlePayEmployeeShifts(
+      selectedPayoutEmployee,
+      selectedFinanceAccountId,
+    );
   }
 
   const activeOrders = orders.filter(
@@ -708,7 +799,7 @@ export default function DashboardPage({
                         <PayableActionCell
                           item={payableItem}
                           disabled={payingUserId === item.userId || loading}
-                          onPay={handlePayEmployeeShifts}
+                          onPay={openEmployeePayoutModal}
                         />
                       ) : (
                         <td style={tableCellStyle}>
@@ -952,9 +1043,254 @@ export default function DashboardPage({
           </div>
         )}
       </div>
+      {selectedPayoutEmployee && (
+        <div
+          onClick={() => setSelectedPayoutEmployee(null)}
+          style={payoutModalOverlayStyle}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={payoutModalStyle}
+          >
+            <div style={payoutModalHeaderStyle}>
+              <div>
+                <div style={payoutModalTitleStyle}>Выплата сотруднику</div>
+                <div style={payoutModalSubtitleStyle}>
+                  {selectedPayoutEmployee.name} ·{" "}
+                  {selectedPayoutEmployee.unpaidShiftsCount} смен(ы)
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedPayoutEmployee(null)}
+                style={payoutCloseButtonStyle}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={payoutInfoGridStyle}>
+              <div style={payoutInfoCardStyle}>
+                <div style={payoutInfoLabelStyle}>Количество</div>
+                <div style={payoutInfoValueStyle}>
+                  {selectedPayoutEmployee.payableQuantity} шт
+                </div>
+              </div>
+
+              <div style={payoutInfoCardStyle}>
+                <div style={payoutInfoLabelStyle}>К выплате</div>
+                <div style={payoutInfoValueStyle}>
+                  {formatMoney(selectedPayoutEmployee.payableAmount)}
+                </div>
+              </div>
+            </div>
+
+            <label style={payoutLabelStyle}>
+              <span style={payoutLabelTextStyle}>Счёт списания</span>
+              <select
+                value={selectedFinanceAccountId}
+                onChange={(event) =>
+                  setSelectedFinanceAccountId(event.target.value)
+                }
+                style={payoutSelectStyle}
+              >
+                <option value="">Выбери счёт</option>
+                {financeAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · {formatMoney(Number(account.current_balance || 0))}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={payoutHintStyle}>
+              Будет создана финансовая операция “Выплата сотруднику”, деньги
+              спишутся с выбранного счёта, а смены будут отмечены как
+              выплаченные.
+            </div>
+
+            <div style={payoutActionsStyle}>
+              <button
+                type="button"
+                onClick={() => setSelectedPayoutEmployee(null)}
+                style={payoutCancelButtonStyle}
+              >
+                Отмена
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmEmployeePayout}
+                disabled={
+                  !selectedFinanceAccountId ||
+                  payingUserId === selectedPayoutEmployee.userId
+                }
+                style={{
+                  ...payoutConfirmButtonStyle,
+                  opacity:
+                    !selectedFinanceAccountId ||
+                    payingUserId === selectedPayoutEmployee.userId
+                      ? 0.65
+                      : 1,
+                  cursor:
+                    !selectedFinanceAccountId ||
+                    payingUserId === selectedPayoutEmployee.userId
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {payingUserId === selectedPayoutEmployee.userId
+                  ? "Провожу..."
+                  : "Выплатить"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </>
   );
 }
+
+const payoutModalOverlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(15, 23, 42, 0.45)",
+  zIndex: 10090,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 16,
+};
+
+const payoutModalStyle: React.CSSProperties = {
+  width: "min(560px, 96vw)",
+  background: "#ffffff",
+  borderRadius: 22,
+  padding: 18,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)",
+  display: "grid",
+  gap: 14,
+};
+
+const payoutModalHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
+};
+
+const payoutModalTitleStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 22,
+  fontWeight: 900,
+};
+
+const payoutModalSubtitleStyle: React.CSSProperties = {
+  color: "#64748b",
+  marginTop: 4,
+};
+
+const payoutCloseButtonStyle: React.CSSProperties = {
+  width: 40,
+  height: 40,
+  borderRadius: 14,
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  cursor: "pointer",
+  fontSize: 22,
+  fontWeight: 900,
+};
+
+const payoutInfoGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+  gap: 10,
+};
+
+const payoutInfoCardStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#f8fafc",
+  borderRadius: 14,
+  padding: 12,
+};
+
+const payoutInfoLabelStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 13,
+  fontWeight: 900,
+  marginBottom: 5,
+};
+
+const payoutInfoValueStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 18,
+  fontWeight: 900,
+};
+
+const payoutLabelStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 6,
+};
+
+const payoutLabelTextStyle: React.CSSProperties = {
+  color: "#334155",
+  fontSize: 13,
+  fontWeight: 900,
+};
+
+const payoutSelectStyle: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  padding: "11px 12px",
+  background: "#ffffff",
+  color: "#0f172a",
+  outline: "none",
+  fontSize: 14,
+};
+
+const payoutHintStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1e3a8a",
+  borderRadius: 14,
+  padding: 12,
+  lineHeight: 1.5,
+  fontWeight: 700,
+};
+
+const payoutActionsStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const payoutCancelButtonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  background: "#ffffff",
+  color: "#0f172a",
+  borderRadius: 12,
+  padding: "11px 15px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const payoutConfirmButtonStyle: React.CSSProperties = {
+  border: "none",
+  background: "#16a34a",
+  color: "#ffffff",
+  borderRadius: 12,
+  padding: "11px 16px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (

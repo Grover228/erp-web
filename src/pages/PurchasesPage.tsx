@@ -220,25 +220,7 @@ export default function PurchasesPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      <div style={compactTabsWrapStyle}>
-        <button
-          onClick={() => setActiveTab("orders")}
-          style={compactTabStyle(activeTab === "orders")}
-        >
-          <span style={compactTabIconStyle}>📄</span>
-          <span>Заказы</span>
-        </button>
-
-        <button
-          onClick={() => setActiveTab("receipts")}
-          style={compactTabStyle(activeTab === "receipts")}
-        >
-          <span style={compactTabIconStyle}>📦</span>
-          <span>Поступления</span>
-        </button>
-      </div>
-
-      {error && <div style={errorStyle}>{error}</div>}
+{error && <div style={errorStyle}>{error}</div>}
 
       {activeTab === "orders" && (
         <div style={sectionStyle}>
@@ -350,33 +332,8 @@ export default function PurchasesPage() {
   );
 }
 
-const compactTabsWrapStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "flex-end",
-  gap: 10,
-  marginTop: -4,
-};
 
-const compactTabIconStyle: React.CSSProperties = {
-  fontSize: 18,
-};
 
-function compactTabStyle(active: boolean): React.CSSProperties {
-  return {
-    border: active ? "1px solid #93c5fd" : "1px solid #dbe4f0",
-    background: active ? "#eff6ff" : "#ffffff",
-    color: active ? "#1d4ed8" : "#475569",
-    borderRadius: 14,
-    padding: "9px 12px",
-    cursor: "pointer",
-    fontWeight: 800,
-    fontSize: 13,
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    boxShadow: active ? "0 6px 14px rgba(37, 99, 235, 0.12)" : "none",
-  };
-}
 
 const sectionStyle: React.CSSProperties = {
   background: "#ffffff",

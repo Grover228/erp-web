@@ -5,20 +5,22 @@ import CustomerShipmentModal, {
   type CustomerShipment,
   type CustomerShipmentItem,
 } from "./CustomerShipmentModal";
-import CustomerInvoiceModal, { type CustomerInvoice } from "./CustomerInvoiceModal";
-import CustomerPaymentModal, { type CustomerPayment } from "./CustomerPaymentModal";
+import CustomerPaymentModal from "./CustomerPaymentModal";
+
+type DocumentType = "customer_order" | "customer_shipment" | "customer_payment";
 
 type CustomerLinkedDocumentsModalProps = {
   order: CustomerOrder;
   onClose: () => void;
   onUpdated?: () => void;
+  onOpenDocument?: (type: DocumentType, id: string) => void;
 };
 
 type LinkedDocumentKind =
   | "customer_order"
   | "customer_shipment"
+  | "customer_payment"
   | "customer_invoice"
-  | "incoming_payment"
   | "production_order"
   | "supplier_order";
 
@@ -33,10 +35,20 @@ type LinkedDocumentCard = {
   description: string;
 };
 
+type CustomerPayment = {
+  id: string;
+  customer_order_id: string | null;
+  payment_number: string | null;
+  payment_date: string | null;
+  amount: number | string;
+  created_at: string | null;
+};
+
 export default function CustomerLinkedDocumentsModal({
   order,
   onClose,
   onUpdated,
+  onOpenDocument,
 }: CustomerLinkedDocumentsModalProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -46,8 +58,7 @@ export default function CustomerLinkedDocumentsModal({
   const [selectedShipmentItems, setSelectedShipmentItems] = useState<
     CustomerShipmentItem[]
   >([]);
-  const [selectedInvoice, setSelectedInvoice] = useState<CustomerInvoice | null>(null);
-  const [selectedPayment, setSelectedPayment] = useState<CustomerPayment | null>(null);
+  const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
 
   useEffect(() => {
     loadLinkedDocuments();
@@ -71,15 +82,24 @@ export default function CustomerLinkedDocumentsModal({
         },
       ];
 
-      const { data: shipments, error: shipmentsError } = await supabase
-        .from("customer_shipments")
-        .select("*")
-        .eq("customer_order_id", order.id)
-        .order("created_at", { ascending: true });
+      const [shipmentsResult, paymentsResult] = await Promise.all([
+        supabase
+          .from("customer_shipments")
+          .select("*")
+          .eq("customer_order_id", order.id)
+          .order("created_at", { ascending: true }),
 
-      if (shipmentsError) throw shipmentsError;
+        supabase
+          .from("customer_payments")
+          .select("*")
+          .eq("customer_order_id", order.id)
+          .order("created_at", { ascending: true }),
+      ]);
 
-      const shipmentDocuments = ((shipments || []) as CustomerShipment[]).map(
+      if (shipmentsResult.error) throw shipmentsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+
+      const shipmentDocuments = ((shipmentsResult.data || []) as CustomerShipment[]).map(
         (shipment) => ({
           id: shipment.id,
           kind: "customer_shipment" as const,
@@ -91,66 +111,24 @@ export default function CustomerLinkedDocumentsModal({
           description:
             shipment.status === "posted"
               ? "Проведена, остатки списаны"
-              : shipment.status === "cancelled"
-                ? "Отменена"
-                : "Черновик, ожидает проведения",
+              : "Черновик, ожидает проведения",
         }),
       );
 
-      const { data: invoices, error: invoicesError } = await supabase
-        .from("customer_invoices")
-        .select("*")
-        .eq("customer_order_id", order.id)
-        .order("created_at", { ascending: true });
-
-      if (invoicesError) throw invoicesError;
-
-      const invoiceDocuments = ((invoices || []) as CustomerInvoice[]).map(
-        (invoice) => ({
-          id: invoice.id,
-          kind: "customer_invoice" as const,
-          title: "Счёт покупателю",
-          number: invoice.invoice_number || "Без номера",
-          date: invoice.invoice_date,
-          status: invoice.status || "draft",
-          amount: Number(invoice.total_amount || 0),
-          description:
-            Number(invoice.paid_amount || 0) >= Number(invoice.total_amount || 0)
-              ? "Счёт оплачен"
-              : `Оплачено ${Number(invoice.paid_amount || 0).toLocaleString("ru-RU", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })} ₽`,
-        }),
-      );
-
-      const { data: payments, error: paymentsError } = await supabase
-        .from("customer_payments")
-        .select("*")
-        .eq("customer_order_id", order.id)
-        .order("created_at", { ascending: true });
-
-      if (paymentsError) throw paymentsError;
-
-      const paymentDocuments = ((payments || []) as CustomerPayment[]).map(
+      const paymentDocuments = ((paymentsResult.data || []) as CustomerPayment[]).map(
         (payment) => ({
           id: payment.id,
-          kind: "incoming_payment" as const,
-          title: "Входящий платёж",
-          number: payment.payment_number || "Без номера",
+          kind: "customer_payment" as const,
+          title: "Оплата покупателя",
+          number: payment.payment_number || "Оплата без номера",
           date: payment.payment_date,
-          status: payment.status || "posted",
+          status: "paid",
           amount: Number(payment.amount || 0),
-          description: "Оплата от покупателя",
+          description: "Деньги поступили на финансовый счёт",
         }),
       );
 
-      setDocuments([
-        ...baseDocuments,
-        ...invoiceDocuments,
-        ...paymentDocuments,
-        ...shipmentDocuments,
-      ]);
+      setDocuments([...baseDocuments, ...shipmentDocuments, ...paymentDocuments]);
     } catch (error) {
       setError(
         error instanceof Error
@@ -201,68 +179,29 @@ export default function CustomerLinkedDocumentsModal({
     }
   }
 
-
-  async function openInvoice(invoiceId: string) {
-    try {
-      setLoading(true);
-      setError("");
-
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("customer_invoices")
-        .select("*")
-        .eq("id", invoiceId)
-        .single();
-
-      if (invoiceError) throw invoiceError;
-
-      setSelectedInvoice(invoice as CustomerInvoice);
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Ошибка открытия счёта",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function openPayment(paymentId: string) {
-    try {
-      setLoading(true);
-      setError("");
-
-      const { data: payment, error: paymentError } = await supabase
-        .from("customer_payments")
-        .select("*")
-        .eq("id", paymentId)
-        .single();
-
-      if (paymentError) throw paymentError;
-
-      setSelectedPayment(payment as CustomerPayment);
-    } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Ошибка открытия оплаты",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
-
   function handleOpenDocument(document: LinkedDocumentCard) {
-    if (document.kind === "customer_order") return;
+    if (document.kind === "customer_order") {
+      onOpenDocument?.("customer_order", document.id);
+      return;
+    }
 
     if (document.kind === "customer_shipment") {
+      if (onOpenDocument) {
+        onOpenDocument("customer_shipment", document.id);
+        return;
+      }
+
       openShipment(document.id);
       return;
     }
 
-    if (document.kind === "customer_invoice") {
-      openInvoice(document.id);
-      return;
-    }
+    if (document.kind === "customer_payment") {
+      if (onOpenDocument) {
+        onOpenDocument("customer_payment", document.id);
+        return;
+      }
 
-    if (document.kind === "incoming_payment") {
-      openPayment(document.id);
+      setSelectedPaymentId(document.id);
       return;
     }
 
@@ -273,20 +212,18 @@ export default function CustomerLinkedDocumentsModal({
     if (status === "draft") return "Черновик";
     if (status === "posted") return "Проведена";
     if (status === "completed") return "Завершён";
-    if (status === "issued") return "Выставлен";
-    if (status === "partially_paid") return "Частично оплачен";
-    if (status === "paid") return "Оплачен";
     if (status === "cancelled") return "Отменён";
     if (status === "confirmed") return "Подтверждён";
     if (status === "in_progress") return "В работе";
+    if (status === "paid") return "Оплачено";
     return status;
   }
 
   function getDocumentIcon(kind: LinkedDocumentKind) {
     if (kind === "customer_order") return "🧾";
     if (kind === "customer_shipment") return "🚚";
+    if (kind === "customer_payment") return "💳";
     if (kind === "customer_invoice") return "📄";
-    if (kind === "incoming_payment") return "💳";
     if (kind === "production_order") return "🏭";
     if (kind === "supplier_order") return "📦";
     return "📎";
@@ -301,16 +238,13 @@ export default function CustomerLinkedDocumentsModal({
       };
     }
 
-    if (document.status === "posted" || document.status === "completed") {
-      return {
-        ...documentCardStyle,
-        borderColor: "#86efac",
-        background: "#f0fdf4",
-      };
-    }
-
     return documentCardStyle;
   }
+
+  const paidAmount = documents
+    .filter((item) => item.kind === "customer_payment")
+    .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+  const debt = Math.max(0, Number(order.total_amount || 0) - paidAmount);
 
   return (
     <div onClick={onClose} style={overlayStyle}>
@@ -332,6 +266,18 @@ export default function CustomerLinkedDocumentsModal({
 
         {loading && (
           <div style={loadingStyle}>Загружаю связанные документы...</div>
+        )}
+
+        {debt > 0 && (
+          <div style={debtNoticeStyle}>
+            По заказу осталось получить оплату:{" "}
+            <strong>
+              {debt.toLocaleString("ru-RU", {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })} ₽
+            </strong>
+          </div>
         )}
 
         <div style={timelineStyle}>
@@ -377,22 +323,18 @@ export default function CustomerLinkedDocumentsModal({
               {index < documents.length - 1 && <div style={connectorStyle} />}
             </div>
           ))}
+
+          {documents.length === 0 && (
+            <div style={emptyLinkedStyle}>Связанные документы пока не найдены.</div>
+          )}
         </div>
 
-        {documents.length === 1 && !loading && (
-          <div style={emptyLinkedStyle}>
-            Пока связан только сам заказ покупателя. Следующий документ появится
-            здесь после создания отгрузки, оплаты, производства или закупки.
-          </div>
-        )}
-
         <div style={futureBlockStyle}>
-          <div style={futureTitleStyle}>Будущие связи</div>
+          <div style={futureTitleStyle}>Планируемые связи</div>
           <div style={futureGridStyle}>
             <div style={futureItemStyle}>📄 Счёт покупателю</div>
-            <div style={futureItemStyle}>💳 Входящий платёж</div>
-            <div style={futureItemStyle}>🏭 Производственное задание</div>
-            <div style={futureItemStyle}>📦 Заказ поставщику</div>
+            <div style={futureItemStyle}>🏭 Производство</div>
+            <div style={futureItemStyle}>📦 Закупка под заказ</div>
           </div>
         </div>
 
@@ -406,29 +348,29 @@ export default function CustomerLinkedDocumentsModal({
               loadLinkedDocuments();
               onUpdated?.();
             }}
-          />
-        )}
-
-        {selectedInvoice && (
-          <CustomerInvoiceModal
-            invoice={selectedInvoice}
-            onClose={() => setSelectedInvoice(null)}
-            onSaved={() => {
-              setSelectedInvoice(null);
-              loadLinkedDocuments();
-              onUpdated?.();
+            onOpenDocument={(type, id) => {
+              setSelectedShipment(null);
+              if (type === "customer_payment") {
+                setSelectedPaymentId(id);
+              }
             }}
           />
         )}
 
-        {selectedPayment && (
+        {selectedPaymentId && (
           <CustomerPaymentModal
-            payment={selectedPayment}
-            onClose={() => setSelectedPayment(null)}
+            paymentId={selectedPaymentId}
+            onClose={() => setSelectedPaymentId(null)}
             onSaved={() => {
-              setSelectedPayment(null);
+              setSelectedPaymentId(null);
               loadLinkedDocuments();
               onUpdated?.();
+            }}
+            onOpenDocument={(type, id) => {
+              setSelectedPaymentId(null);
+              if (type === "customer_shipment") {
+                openShipment(id);
+              }
             }}
           />
         )}
@@ -437,215 +379,29 @@ export default function CustomerLinkedDocumentsModal({
   );
 }
 
-const overlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(15, 23, 42, 0.45)",
-  zIndex: 10040,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
-};
-
-const modalStyle: React.CSSProperties = {
-  width: "min(1040px, 96vw)",
-  maxHeight: "84vh",
-  overflowY: "auto",
-  background: "#ffffff",
-  borderRadius: 18,
-  padding: 18,
-  border: "1px solid #dbe4f0",
-  boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)",
-  display: "grid",
-  gap: 14,
-};
-
-const headerStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 14,
-  alignItems: "flex-start",
-};
-
-const titleStyle: React.CSSProperties = {
-  color: "#0f172a",
-  fontSize: 26,
-  fontWeight: 900,
-};
-
-const subtitleStyle: React.CSSProperties = {
-  color: "#64748b",
-  marginTop: 5,
-  fontSize: 16,
-};
-
-const closeButtonStyle: React.CSSProperties = {
-  width: 46,
-  height: 46,
-  borderRadius: 14,
-  border: "1px solid #cbd5e1",
-  background: "#ffffff",
-  cursor: "pointer",
-  fontSize: 26,
-  fontWeight: 800,
-  color: "#0f172a",
-};
-
-const errorStyle: React.CSSProperties = {
-  background: "#fef2f2",
-  border: "1px solid #fecaca",
-  color: "#991b1b",
-  borderRadius: 14,
-  padding: 14,
-  fontWeight: 800,
-};
-
-const loadingStyle: React.CSSProperties = {
-  border: "1px solid #dbe4f0",
-  background: "#f8fafc",
-  color: "#64748b",
-  borderRadius: 14,
-  padding: 14,
-  fontWeight: 800,
-};
-
-const timelineStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 0,
-};
-
-const timelineItemStyle: React.CSSProperties = {
-  display: "grid",
-  justifyItems: "center",
-};
-
-const documentCardStyle: React.CSSProperties = {
-  width: "100%",
-  border: "1px solid #dbe4f0",
-  background: "#ffffff",
-  borderRadius: 16,
-  padding: 14,
-  cursor: "pointer",
-  textAlign: "left",
-  display: "grid",
-  gap: 10,
-  color: "#0f172a",
-};
-
-const documentHeaderStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  alignItems: "flex-start",
-};
-
-const documentTitleWrapStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "42px 1fr",
-  gap: 10,
-  alignItems: "center",
-};
-
-const documentIconStyle: React.CSSProperties = {
-  width: 42,
-  height: 42,
-  border: "1px solid #dbe4f0",
-  background: "#ffffff",
-  borderRadius: 13,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  fontSize: 22,
-};
-
-const documentTitleStyle: React.CSSProperties = {
-  color: "#0f172a",
-  fontSize: 18,
-  fontWeight: 900,
-};
-
-const documentNumberStyle: React.CSSProperties = {
-  color: "#334155",
-  fontSize: 16,
-  fontWeight: 900,
-  marginTop: 3,
-};
-
-function statusBadgeStyle(status: string): React.CSSProperties {
-  const isDone = status === "posted" || status === "completed";
-
-  return {
-    display: "inline-flex",
-    alignItems: "center",
-    width: "fit-content",
-    border: isDone ? "1px solid #86efac" : "1px solid #cbd5e1",
-    background: isDone ? "#dcfce7" : "#f8fafc",
-    color: isDone ? "#15803d" : "#64748b",
-    borderRadius: 999,
-    padding: "6px 10px",
-    fontSize: 13,
-    fontWeight: 900,
-    whiteSpace: "nowrap",
-  };
-}
-
-const documentMetaStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  color: "#64748b",
-  fontSize: 14,
-};
-
-const documentDescriptionStyle: React.CSSProperties = {
-  color: "#64748b",
-  fontSize: 14,
-  lineHeight: 1.4,
-};
-
-const connectorStyle: React.CSSProperties = {
-  width: 2,
-  height: 24,
-  background: "#cbd5e1",
-};
-
-const emptyLinkedStyle: React.CSSProperties = {
-  border: "1px dashed #cbd5e1",
-  borderRadius: 14,
-  padding: 18,
-  textAlign: "center",
-  color: "#64748b",
-  fontWeight: 700,
-};
-
-const futureBlockStyle: React.CSSProperties = {
-  border: "1px solid #dbe4f0",
-  borderRadius: 16,
-  padding: 14,
-  background: "#f8fafc",
-  display: "grid",
-  gap: 10,
-};
-
-const futureTitleStyle: React.CSSProperties = {
-  color: "#0f172a",
-  fontSize: 16,
-  fontWeight: 900,
-};
-
-const futureGridStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-  gap: 8,
-};
-
-const futureItemStyle: React.CSSProperties = {
-  border: "1px solid #e2e8f0",
-  borderRadius: 12,
-  padding: "9px 11px",
-  background: "#ffffff",
-  color: "#475569",
-  fontSize: 13,
-  fontWeight: 800,
-};
+const overlayStyle: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", zIndex: 10100, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 };
+const modalStyle: React.CSSProperties = { width: "min(920px, 96vw)", maxHeight: "86vh", overflowY: "auto", background: "#ffffff", borderRadius: 20, padding: 18, border: "1px solid #dbe4f0", boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)", display: "grid", gap: 16 };
+const headerStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" };
+const titleStyle: React.CSSProperties = { color: "#0f172a", fontSize: 24, fontWeight: 900 };
+const subtitleStyle: React.CSSProperties = { color: "#64748b", marginTop: 4 };
+const closeButtonStyle: React.CSSProperties = { width: 42, height: 42, borderRadius: 14, border: "1px solid #cbd5e1", background: "#ffffff", cursor: "pointer", fontSize: 24, fontWeight: 800, color: "#0f172a" };
+const errorStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 14, padding: 12, fontWeight: 700 };
+const loadingStyle: React.CSSProperties = { color: "#64748b", fontWeight: 700 };
+const debtNoticeStyle: React.CSSProperties = { border: "1px solid #fdba74", background: "#fff7ed", color: "#9a3412", borderRadius: 14, padding: 12, fontWeight: 800 };
+const timelineStyle: React.CSSProperties = { display: "grid", gap: 0 };
+const timelineItemStyle: React.CSSProperties = { display: "grid", justifyItems: "center", gap: 0 };
+const documentCardStyle: React.CSSProperties = { width: "100%", border: "1px solid #dbe4f0", background: "#ffffff", borderRadius: 16, padding: 14, cursor: "pointer", textAlign: "left", display: "grid", gap: 10 };
+const documentHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" };
+const documentTitleWrapStyle: React.CSSProperties = { display: "flex", gap: 10, alignItems: "center" };
+const documentIconStyle: React.CSSProperties = { width: 34, height: 34, borderRadius: 12, border: "1px solid #e2e8f0", background: "#f8fafc", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 };
+const documentTitleStyle: React.CSSProperties = { color: "#0f172a", fontSize: 16, fontWeight: 900 };
+const documentNumberStyle: React.CSSProperties = { color: "#334155", fontSize: 16, fontWeight: 900, marginTop: 3 };
+function statusBadgeStyle(status: string): React.CSSProperties { const isDone = ["posted", "completed", "paid"].includes(status); return { display: "inline-flex", alignItems: "center", width: "fit-content", border: isDone ? "1px solid #86efac" : "1px solid #cbd5e1", background: isDone ? "#dcfce7" : "#f8fafc", color: isDone ? "#15803d" : "#64748b", borderRadius: 999, padding: "6px 10px", fontSize: 13, fontWeight: 900, whiteSpace: "nowrap" }; }
+const documentMetaStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 12, color: "#64748b", fontSize: 14 };
+const documentDescriptionStyle: React.CSSProperties = { color: "#64748b", fontSize: 14, lineHeight: 1.4 };
+const connectorStyle: React.CSSProperties = { width: 2, height: 24, background: "#cbd5e1" };
+const emptyLinkedStyle: React.CSSProperties = { border: "1px dashed #cbd5e1", borderRadius: 14, padding: 18, textAlign: "center", color: "#64748b", fontWeight: 700 };
+const futureBlockStyle: React.CSSProperties = { border: "1px solid #dbe4f0", borderRadius: 16, padding: 14, background: "#f8fafc", display: "grid", gap: 10 };
+const futureTitleStyle: React.CSSProperties = { color: "#0f172a", fontSize: 16, fontWeight: 900 };
+const futureGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 };
+const futureItemStyle: React.CSSProperties = { border: "1px solid #e2e8f0", borderRadius: 12, padding: "9px 11px", background: "#ffffff", color: "#475569", fontSize: 13, fontWeight: 800 };
