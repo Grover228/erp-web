@@ -88,29 +88,38 @@ function App() {
     "Сообщение от сотрудника",
   ];
 
-  const isAdmin = currentEmployee?.app_role === "admin";
-  const canViewDashboard =
-    isAdmin || currentEmployee?.can_view_dashboard === true;
-  const canManageProduction =
-    isAdmin || currentEmployee?.can_manage_production === true;
-  const canManageDirectories =
-    isAdmin || currentEmployee?.can_manage_directories === true;
-  const canUseScanner = isAdmin || currentEmployee?.can_use_scanner !== false;
+  const currentRoleCode =
+    currentEmployee?.app_role || currentEmployee?.role || "employee";
+  const isAdmin = currentRoleCode === "admin";
+  const isManager = currentRoleCode === "manager";
+  const hasFullLayout = isAdmin || isManager;
 
-  const menuItems = isAdmin
-    ? [
-        { key: "dashboard", label: "Дашборд 📊" },
-        { key: "production", label: "Производство 🏭" },
-        { key: "warehouse", label: "Склад 📦" },
-        { key: "finance", label: "Финансы 💰" },
-        { key: "employee-home", label: "Моя смена 👤" },
-        { key: "directories", label: "Справочники 📚" },
-        { key: "scanner", label: "Сканер QR 🔍" },
-      ]
-    : [
-        { key: "scanner", label: "Сканер QR" },
-        { key: "employee-home", label: "Моя смена" },
-      ];
+  const canViewDashboard =
+    isAdmin || isManager || currentEmployee?.can_view_dashboard === true;
+  const canManageProduction =
+    isAdmin || isManager || currentEmployee?.can_manage_production === true;
+  const canManageDirectories =
+    isAdmin || isManager || currentEmployee?.can_manage_directories === true;
+  const canUseScanner =
+    isAdmin || isManager || currentEmployee?.can_use_scanner !== false;
+  const canViewWarehouse = isAdmin || isManager;
+  const canViewFinance = isAdmin;
+
+  const menuItems = [
+    canViewDashboard && { key: "dashboard" as Screen, label: "Дашборд 📊" },
+    canManageProduction && {
+      key: "production" as Screen,
+      label: "Производство 🏭",
+    },
+    canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
+    canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
+    { key: "employee-home" as Screen, label: "Моя смена 👤" },
+    canManageDirectories && {
+      key: "directories" as Screen,
+      label: "Справочники 📚",
+    },
+    canUseScanner && { key: "scanner" as Screen, label: "Сканер QR 🔍" },
+  ].filter(Boolean) as { key: Screen; label: string }[];
 
   const pageTitle =
     currentScreen === "employee-home"
@@ -188,7 +197,7 @@ function App() {
 
   const canGoBack = useMemo(() => {
     return currentScreen !== getDefaultScreen() && currentScreen !== "scanner";
-  }, [currentScreen, isAdmin]);
+  }, [currentScreen, isAdmin, isManager]);
 
   const userEmail = session?.user?.email || "";
   const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
@@ -252,24 +261,30 @@ function App() {
   useEffect(() => {
     if (!session || currentEmployeeLoading) return;
     if (!currentEmployee) return;
-    if (currentEmployee.app_role === "admin") return;
 
-    if (currentScreen === "employee-home" || currentScreen === "scanner") {
+    if (currentScreen === "employee-home") return;
+
+    if (currentScreen === "scanner") {
+      if (!canUseScanner) setCurrentScreen("employee-home");
       return;
     }
 
-    if (
-      currentScreen === "dashboard" &&
-      currentEmployee.can_view_dashboard !== true
-    ) {
+    if (currentScreen === "dashboard" && !canViewDashboard) {
       setCurrentScreen("employee-home");
       return;
     }
 
-    if (
-      currentScreen === "production" &&
-      currentEmployee.can_manage_production !== true
-    ) {
+    if (currentScreen === "production" && !canManageProduction) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
+    if (currentScreen === "warehouse" && !canViewWarehouse) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
+    if (currentScreen === "finance" && !canViewFinance) {
       setCurrentScreen("employee-home");
       return;
     }
@@ -288,11 +303,22 @@ function App() {
         currentScreen === "directory-statuses" ||
         currentScreen === "procurement-statuses" ||
         currentScreen === "warehouse-statuses") &&
-      currentEmployee.can_manage_directories !== true
+      !canManageDirectories
     ) {
       setCurrentScreen("employee-home");
     }
-  }, [session, currentEmployee, currentEmployeeLoading, currentScreen]);
+  }, [
+    session,
+    currentEmployee,
+    currentEmployeeLoading,
+    currentScreen,
+    canUseScanner,
+    canViewDashboard,
+    canManageProduction,
+    canViewWarehouse,
+    canViewFinance,
+    canManageDirectories,
+  ]);
 
   async function loadCurrentEmployee() {
     try {
@@ -317,7 +343,34 @@ function App() {
         return;
       }
 
-      setCurrentEmployee((data as Employee | null) || null);
+      const employee = (data as Employee | null) || null;
+
+      if (!employee) {
+        setCurrentEmployee(null);
+        return;
+      }
+
+      const { data: profileData, error: profileError } = await supabase
+        .from("user_profiles")
+        .select("role_code, role")
+        .eq("id", userId)
+        .maybeSingle();
+
+      if (profileError) {
+        console.error("Ошибка получения роли пользователя", profileError);
+      }
+
+      const profileRole =
+        (profileData as { role_code?: string | null; role?: string | null } | null)
+          ?.role_code ||
+        (profileData as { role_code?: string | null; role?: string | null } | null)
+          ?.role ||
+        null;
+
+      setCurrentEmployee({
+        ...employee,
+        app_role: profileRole || employee.app_role || employee.role || "employee",
+      });
     } catch (error) {
       console.error("Ошибка получения текущего сотрудника", error);
       setCurrentEmployee(null);
@@ -420,7 +473,7 @@ function App() {
   }
 
   function getDefaultScreen(): Screen {
-    if (isAdmin) return "dashboard";
+    if (isAdmin || isManager) return "dashboard";
     return "employee-home";
   }
 
@@ -639,10 +692,14 @@ function App() {
     }
 
     if (currentScreen === "warehouse") {
+      if (!canViewWarehouse) return renderAccessDenied();
+
       return <WarehousePage />;
     }
 
     if (currentScreen === "finance") {
+      if (!canViewFinance) return renderAccessDenied();
+
       return <FinancePage />;
     }
 
@@ -847,6 +904,8 @@ function App() {
                   >
                     {currentEmployee.app_role === "admin"
                       ? "Администратор"
+                      : currentEmployee.app_role === "manager"
+                      ? "Менеджер"
                       : "Сотрудник"}
                   </div>
                 )}
@@ -973,19 +1032,19 @@ function App() {
 
       <main
         style={{
-          padding: isAdmin ? 16 : 0,
+          padding: hasFullLayout ? 16 : 0,
         }}
       >
         <div
           style={{
-            maxWidth: isAdmin ? 1200 : "none",
+            maxWidth: hasFullLayout ? 1200 : "none",
             margin: "0 auto",
             display: "flex",
             flexDirection: "column",
-            gap: isAdmin ? 16 : 0,
+            gap: hasFullLayout ? 16 : 0,
           }}
         >
-          {isAdmin && (
+          {hasFullLayout && (
             <div
               style={{
                 background: "#ffffff",
@@ -1195,6 +1254,8 @@ function App() {
                           {currentEmployee.full_name || "Без имени"} ·{" "}
                           {currentEmployee.app_role === "admin"
                             ? "Администратор"
+                            : currentEmployee.app_role === "manager"
+                            ? "Менеджер"
                             : "Сотрудник"}
                         </div>
                       )}
@@ -1223,7 +1284,7 @@ function App() {
             </div>
           )}
 
-          {!isAdmin && currentEmployee && (
+          {!hasFullLayout && currentEmployee && (
             <div
               style={{
                 background: "#ffffff",
