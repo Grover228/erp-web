@@ -222,26 +222,30 @@ export default function RelatedDocumentModal({
   }
 
   async function createSupplierPaymentDocument() {
-    const amount = Number(paymentAmount.replace(",", "."));
+    const rawAmount = Number(paymentAmount.replace(",", "."));
+    const paymentAmountKopecks = Math.round(rawAmount * 100);
+    const paymentDebtKopecks = Math.round(Number(paymentDebt || 0) * 100);
+    const amount = paymentAmountKopecks / 100;
     const account = financeAccounts.find((item) => item.id === paymentAccountId);
 
     if (!account) {
       throw new Error("Выбери счёт оплаты");
     }
 
-    if (!paymentAmount || Number.isNaN(amount) || amount <= 0) {
+    if (!paymentAmount || Number.isNaN(rawAmount) || paymentAmountKopecks <= 0) {
       throw new Error("Сумма оплаты должна быть больше 0");
     }
 
-    if (amount > paymentDebt) {
+    if (paymentAmountKopecks > paymentDebtKopecks) {
       throw new Error(
-        `Сумма оплаты больше долга. Осталось оплатить ${formatMoney(paymentDebt)}.`,
+        `Сумма оплаты больше долга. Осталось оплатить ${formatMoney(paymentDebtKopecks / 100)}.`,
       );
     }
 
     const currentBalance = Number(account.current_balance || 0);
+    const currentBalanceKopecks = Math.round(currentBalance * 100);
 
-    if (amount > currentBalance) {
+    if (paymentAmountKopecks > currentBalanceKopecks) {
       throw new Error("Недостаточно средств на выбранном счёте");
     }
 
