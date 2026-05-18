@@ -5,7 +5,7 @@ import LinkedDocumentsModal from "./LinkedDocumentsModal";
 import ReceiptModal, { type SupplierReceipt } from "../warehouse/ReceiptModal";
 import SupplierPaymentModal from "./SupplierPaymentModal";
 
-export type PurchaseItemType = "material" | "consumable";
+export type PurchaseItemType = "material" | "consumable" | "product";
 
 export type SupplierOrder = {
   id: string;
@@ -24,6 +24,7 @@ export type SupplierOrderItem = {
   item_type: PurchaseItemType;
   material_id: string | null;
   consumable_id: string | null;
+  product_id: string | null;
   quantity: number;
   price: number;
   amount: number;
@@ -33,6 +34,10 @@ export type SupplierOrderItem = {
     color_id: string | null;
   } | null;
   consumables?: {
+    name: string | null;
+    article: string | null;
+  } | null;
+  products?: {
     name: string | null;
     article: string | null;
   } | null;
@@ -51,6 +56,14 @@ export type Consumable = {
   name: string;
   article: string | null;
   default_price: number | null;
+};
+
+export type Product = {
+  id: string;
+  name: string;
+  article: string | null;
+  default_price: number | null;
+  is_active?: boolean | null;
 };
 
 export type Color = {
@@ -108,6 +121,7 @@ type OrderItemDraft = {
   item_type: PurchaseItemType;
   material_id: string;
   consumable_id: string;
+  product_id: string;
   quantity: string;
   price: string;
 };
@@ -131,6 +145,7 @@ const emptyItem = (): OrderItemDraft => ({
   item_type: "material",
   material_id: "",
   consumable_id: "",
+  product_id: "",
   quantity: "1",
   price: "",
 });
@@ -141,6 +156,7 @@ function orderItemToDraft(item: SupplierOrderItem): OrderItemDraft {
     item_type: item.item_type,
     material_id: item.material_id || "",
     consumable_id: item.consumable_id || "",
+    product_id: item.product_id || "",
     quantity: String(item.quantity ?? 0),
     price: String(item.price ?? 0),
   };
@@ -204,6 +220,7 @@ export default function SupplierOrderModal({
   const [productPickerType, setProductPickerType] =
     useState<PurchaseItemType>("material");
   const [productPickerSearch, setProductPickerSearch] = useState("");
+  const [products, setProducts] = useState<Product[]>([]);
 
   const [comment, setComment] = useState(order?.comment || "");
   const [items, setItems] = useState<OrderItemDraft[]>([emptyItem()]);
@@ -225,6 +242,10 @@ export default function SupplierOrderModal({
     loadFinanceData();
   }, [order?.id]);
 
+  useEffect(() => {
+    loadProductsForPicker();
+  }, []);
+
 
   function getTodayDate() {
     return new Date().toISOString().slice(0, 10);
@@ -236,6 +257,23 @@ export default function SupplierOrderModal({
       currency,
       minimumFractionDigits: 2,
     }).format(Number(value || 0));
+  }
+
+
+  async function loadProductsForPicker() {
+    try {
+      const { data, error } = await supabase
+        .from("products")
+        .select("id, name, article, default_price, is_active")
+        .eq("is_active", true)
+        .order("name", { ascending: true });
+
+      if (error) throw error;
+
+      setProducts((data as Product[]) || []);
+    } catch (error) {
+      console.error("Ошибка загрузки товаров", error);
+    }
   }
 
   async function loadFinanceData() {
@@ -714,6 +752,7 @@ export default function SupplierOrderModal({
       item_type: itemType,
       material_id: "",
       consumable_id: "",
+      product_id: "",
       price: "",
     });
   }
@@ -772,7 +811,11 @@ export default function SupplierOrderModal({
     return items
       .filter((item) => {
         const itemId =
-          item.item_type === "material" ? item.material_id : item.consumable_id;
+          item.item_type === "material"
+            ? item.material_id
+            : item.item_type === "consumable"
+              ? item.consumable_id
+              : item.product_id;
 
         return itemId && Number(item.quantity) > 0;
       })
@@ -781,6 +824,7 @@ export default function SupplierOrderModal({
         material_id: item.item_type === "material" ? item.material_id : null,
         consumable_id:
           item.item_type === "consumable" ? item.consumable_id : null,
+        product_id: item.item_type === "product" ? item.product_id : null,
         quantity: Number(item.quantity),
         price: Number(item.price) || 0,
       }));
@@ -1152,7 +1196,11 @@ export default function SupplierOrderModal({
       return item.materials?.name || "Материал";
     }
 
-    return item.consumables?.name || "Расходник";
+    if (item.item_type === "consumable") {
+      return item.consumables?.name || "Расходник";
+    }
+
+    return item.products?.name || "Товар";
   }
 
   function getItemArticle(item: SupplierOrderItem) {
@@ -1160,7 +1208,11 @@ export default function SupplierOrderModal({
       return item.materials?.article || "";
     }
 
-    return item.consumables?.article || "";
+    if (item.item_type === "consumable") {
+      return item.consumables?.article || "";
+    }
+
+    return item.products?.article || "";
   }
 
   function getSelectedDraftItemName(item: OrderItemDraft) {
@@ -1171,10 +1223,14 @@ export default function SupplierOrderModal({
       );
     }
 
-    return (
-      consumables.find((consumable) => consumable.id === item.consumable_id)
-        ?.name || ""
-    );
+    if (item.item_type === "consumable") {
+      return (
+        consumables.find((consumable) => consumable.id === item.consumable_id)
+          ?.name || ""
+      );
+    }
+
+    return products.find((product) => product.id === item.product_id)?.name || "";
   }
 
   function getSelectedDraftItemArticle(item: OrderItemDraft) {
@@ -1185,10 +1241,14 @@ export default function SupplierOrderModal({
       );
     }
 
-    return (
-      consumables.find((consumable) => consumable.id === item.consumable_id)
-        ?.article || ""
-    );
+    if (item.item_type === "consumable") {
+      return (
+        consumables.find((consumable) => consumable.id === item.consumable_id)
+          ?.article || ""
+      );
+    }
+
+    return products.find((product) => product.id === item.product_id)?.article || "";
   }
 
   function openProductPicker(itemId: string) {
@@ -1216,11 +1276,21 @@ export default function SupplierOrderModal({
       });
     }
 
-    return consumables.filter((consumable) => {
+    if (productPickerType === "consumable") {
+      return consumables.filter((consumable) => {
+        return (
+          !query ||
+          consumable.name.toLowerCase().includes(query) ||
+          (consumable.article || "").toLowerCase().includes(query)
+        );
+      });
+    }
+
+    return products.filter((product) => {
       return (
         !query ||
-        consumable.name.toLowerCase().includes(query) ||
-        (consumable.article || "").toLowerCase().includes(query)
+        product.name.toLowerCase().includes(query) ||
+        (product.article || "").toLowerCase().includes(query)
       );
     });
   }
@@ -1235,23 +1305,39 @@ export default function SupplierOrderModal({
         item_type: "material",
         material_id: productId,
         consumable_id: "",
+        product_id: "",
         price:
           material?.default_price !== null &&
           material?.default_price !== undefined
             ? String(material.default_price)
             : "",
       });
-    } else {
+    } else if (productPickerType === "consumable") {
       const consumable = consumables.find((item) => item.id === productId);
 
       updateItem(productPickerItemId, {
         item_type: "consumable",
         material_id: "",
         consumable_id: productId,
+        product_id: "",
         price:
           consumable?.default_price !== null &&
           consumable?.default_price !== undefined
             ? String(consumable.default_price)
+            : "",
+      });
+    } else {
+      const product = products.find((item) => item.id === productId);
+
+      updateItem(productPickerItemId, {
+        item_type: "product",
+        material_id: "",
+        consumable_id: "",
+        product_id: productId,
+        price:
+          product?.default_price !== null &&
+          product?.default_price !== undefined
+            ? String(product.default_price)
             : "",
       });
     }
@@ -1275,7 +1361,7 @@ export default function SupplierOrderModal({
               Позиции заказа
             </div>
             <div style={{ color: "#64748b", marginTop: 4 }}>
-              Добавь товары через карточку выбора.
+              Добавь материалы, расходники или товары через карточку выбора.
             </div>
           </div>
 
@@ -1310,7 +1396,7 @@ export default function SupplierOrderModal({
                   onClick={() => openProductPicker(item.id)}
                   style={chooseProductButtonStyle}
                 >
-                  + Товар
+                  + Позиция
                 </button>
 
                 <div style={selectedProductBoxStyle}>
@@ -1337,14 +1423,16 @@ export default function SupplierOrderModal({
                         <div style={selectedProductMetaStyle}>
                           {item.item_type === "material"
                             ? "Материал"
-                            : "Расходник"}
+                            : item.item_type === "consumable"
+                              ? "Расходник"
+                              : "Товар"}
                           {selectedArticle ? ` · ${selectedArticle}` : ""}
                         </div>
                       </div>
                     </>
                   ) : (
                     <div style={selectedProductEmptyStyle}>
-                      Товар не выбран
+                      Позиция не выбрана
                     </div>
                   )}
                 </div>
@@ -1676,7 +1764,9 @@ export default function SupplierOrderModal({
                           <td style={tdStyle}>
                             {item.item_type === "material"
                               ? "Материал"
-                              : "Расходник"}
+                              : item.item_type === "consumable"
+                                ? "Расходник"
+                                : "Товар"}
                           </td>
                           <td style={tdStyle}>{getItemName(item)}</td>
                           <td style={tdStyle}>{getItemArticle(item) || "—"}</td>
@@ -1791,9 +1881,9 @@ export default function SupplierOrderModal({
             >
               <div style={supplierPickerHeaderStyle}>
                 <div>
-                  <div style={supplierPickerTitleStyle}>Выбор товара</div>
+                  <div style={supplierPickerTitleStyle}>Выбор позиции</div>
                   <div style={{ color: "#64748b", marginTop: 4 }}>
-                    Сначала выбери тип, затем товар из списка.
+                    Сначала выбери тип, затем позицию из списка.
                   </div>
                 </div>
 
@@ -1831,6 +1921,16 @@ export default function SupplierOrderModal({
                       >
                         Расходники
                       </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setProductPickerType("product")}
+                        style={productTypeTabStyle(
+                          productPickerType === "product",
+                        )}
+                      >
+                        Товары
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1853,10 +1953,11 @@ export default function SupplierOrderModal({
 
               <div style={productPickerListStyle}>
                 {getFilteredProducts().length === 0 ? (
-                  <div style={emptyStyle}>Товары не найдены.</div>
+                  <div style={emptyStyle}>Позиции не найдены.</div>
                 ) : (
                   getFilteredProducts().map((product) => {
                     const isMaterial = productPickerType === "material";
+                    const isConsumable = productPickerType === "consumable";
                     const material = isMaterial
                       ? (product as Material)
                       : null;
@@ -1883,7 +1984,11 @@ export default function SupplierOrderModal({
                           </div>
 
                           <span style={productTypeBadgeStyle(isMaterial)}>
-                            {isMaterial ? "Материал" : "Расходник"}
+                            {isMaterial
+                              ? "Материал"
+                              : isConsumable
+                                ? "Расходник"
+                                : "Товар"}
                           </span>
                         </div>
 

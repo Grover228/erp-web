@@ -41,7 +41,7 @@ const documentTypes: {
   {
     type: "receipt",
     title: "Приёмка на склад",
-    subtitle: "Зафиксировать приход и увеличить остатки материалов",
+    subtitle: "Зафиксировать приход и увеличить остатки материалов, расходников и товаров",
     icon: "📦",
   },
   {
@@ -171,7 +171,7 @@ export default function RelatedDocumentModal({
 
   function getDocumentDescription() {
     if (selectedType === "receipt") {
-      return "Приёмка создаст складской документ на основании позиций заказа. После проведения документа остатки материалов увеличатся.";
+      return "Приёмка создаст складской документ на основании позиций заказа. После проведения документа остатки материалов, расходников и товаров увеличатся.";
     }
 
     if (selectedType === "payment") {
@@ -211,6 +211,8 @@ export default function RelatedDocumentModal({
           material_id: item.item_type === "material" ? item.material_id : null,
           consumable_id:
             item.item_type === "consumable" ? item.consumable_id : null,
+          product_id:
+            item.item_type === "product" ? item.product_id : null,
           quantity: item.quantity,
           price: item.price || 0,
         })),
@@ -432,7 +434,9 @@ export default function RelatedDocumentModal({
                         <span>
                           {item.item_type === "material"
                             ? item.materials?.name || "Материал"
-                            : item.consumables?.name || "Расходник"}
+                            : item.item_type === "consumable"
+                              ? item.consumables?.name || "Расходник"
+                              : item.products?.name || "Товар"}
                         </span>
                         <strong>{item.quantity}</strong>
                       </div>
