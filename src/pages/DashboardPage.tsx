@@ -8,8 +8,11 @@ type Employee = {
   phone: string | null;
   telegram: string | null;
   payment_type: string | null;
+<<<<<<< HEAD
   bank_name?: string | null;
   weekly_salary_amount?: number | null;
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
   is_active: boolean | null;
   notes: string | null;
   created_at: string | null;
@@ -132,6 +135,7 @@ type EmployeePaymentRow = {
   lastClosedAt: string | null;
 };
 
+<<<<<<< HEAD
 type EmployeeOnShiftCard = {
   userId: string;
   name: string;
@@ -144,6 +148,8 @@ type EmployeeOnShiftCard = {
 };
 
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 type RecentAction = {
   id: string;
   text: string;
@@ -154,6 +160,7 @@ function formatMoney(value: number | null | undefined) {
   return `${Number(value || 0).toFixed(2)} ₽`;
 }
 
+<<<<<<< HEAD
 
 function getNextThursdayLabel() {
   const today = new Date();
@@ -205,6 +212,8 @@ function formatWeeklySalary(value: number | null | undefined) {
   return `${amount.toFixed(2)} ₽`;
 }
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 function formatTimer(seconds: number) {
   const safeSeconds = Math.max(0, seconds || 0);
   const hours = Math.floor(safeSeconds / 3600);
@@ -268,7 +277,10 @@ export default function DashboardPage({
   const [localAlertsOpen, setLocalAlertsOpen] = useState(false);
   const [localEmployeesOpen, setLocalEmployeesOpen] = useState(false);
   const [productionOpen, setProductionOpen] = useState(true);
+<<<<<<< HEAD
   const [recentActionsOpen, setRecentActionsOpen] = useState(true);
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 
   const alertsOpen = externalAlertsOpen ?? localAlertsOpen;
   const setAlertsOpen = externalSetAlertsOpen ?? setLocalAlertsOpen;
@@ -279,14 +291,20 @@ export default function DashboardPage({
   const [operations, setOperations] = useState<ProductionOperation[]>([]);
   const [logs, setLogs] = useState<ProductionLog[]>([]);
   const [shifts, setShifts] = useState<EmployeeShift[]>([]);
+<<<<<<< HEAD
   const [openShifts, setOpenShifts] = useState<EmployeeShift[]>([]);
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 
   const [loading, setLoading] = useState(false);
   const [payingUserId, setPayingUserId] = useState<string | null>(null);
   const [selectedPayoutEmployee, setSelectedPayoutEmployee] =
     useState<PayableEmployeeStats | null>(null);
+<<<<<<< HEAD
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [selectedShiftEmployee, setSelectedShiftEmployee] = useState<EmployeeOnShiftCard | null>(null);
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
   const [selectedFinanceAccountId, setSelectedFinanceAccountId] = useState("");
   const [dashboardError, setDashboardError] = useState("");
@@ -309,7 +327,10 @@ export default function DashboardPage({
         operationsResult,
         logsResult,
         shiftsResult,
+<<<<<<< HEAD
         openShiftsResult,
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
         financeAccountsResult,
       ] = await Promise.all([
           supabase
@@ -349,6 +370,7 @@ export default function DashboardPage({
             .order("closed_at", { ascending: false }),
 
           supabase
+<<<<<<< HEAD
             .from("employee_shifts")
             .select(
               "id, user_id, opened_at, closed_at, status, total_quantity, total_earned, is_paid, paid_at, paid_by"
@@ -357,6 +379,8 @@ export default function DashboardPage({
             .order("opened_at", { ascending: true }),
 
           supabase
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
             .from("finance_accounts")
             .select("id, name, type, currency, current_balance")
             .eq("is_active", true)
@@ -368,7 +392,10 @@ export default function DashboardPage({
       if (operationsResult.error) throw operationsResult.error;
       if (logsResult.error) throw logsResult.error;
       if (shiftsResult.error) throw shiftsResult.error;
+<<<<<<< HEAD
       if (openShiftsResult.error) throw openShiftsResult.error;
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
       if (financeAccountsResult.error) throw financeAccountsResult.error;
 
       setFinanceAccounts((financeAccountsResult.data as FinanceAccount[]) || []);
@@ -378,7 +405,10 @@ export default function DashboardPage({
       setOperations((operationsResult.data as ProductionOperation[]) || []);
       setLogs((logsResult.data as ProductionLog[]) || []);
       setShifts((shiftsResult.data as EmployeeShift[]) || []);
+<<<<<<< HEAD
       setOpenShifts((openShiftsResult.data as EmployeeShift[]) || []);
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
     } catch (error) {
       setDashboardError(
         error instanceof Error ? error.message : "Ошибка загрузки дашборда"
@@ -395,6 +425,7 @@ export default function DashboardPage({
     setSelectedFinanceAccountId(financeAccounts[0]?.id || "");
   }
 
+<<<<<<< HEAD
   function openEmployeeCard(userId: string) {
     const employee = employees.find((item) => item.id === userId);
     if (!employee) return;
@@ -402,6 +433,8 @@ export default function DashboardPage({
     setSelectedEmployee(employee);
   }
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
   async function handlePayEmployeeShifts(
     item: PayableEmployeeStats,
     financeAccountId: string,
@@ -699,6 +732,7 @@ export default function DashboardPage({
     });
   }, [employeeStats, payableEmployees]);
 
+<<<<<<< HEAD
 
   const salaryEmployees = useMemo(() => {
     return employees
@@ -714,6 +748,8 @@ export default function DashboardPage({
       });
   }, [employees]);
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
   const problemBatches = useMemo(() => {
     return batches
       .filter((batch) => {
@@ -734,6 +770,7 @@ export default function DashboardPage({
       .slice(0, 8);
   }, [batches]);
 
+<<<<<<< HEAD
 
   const employeesOnShift: EmployeeOnShiftCard[] = useMemo(() => {
     return openShifts.map((shift) => {
@@ -754,6 +791,8 @@ export default function DashboardPage({
     });
   }, [openShifts, employees, employeeStats]);
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
   const recentActions: RecentAction[] = useMemo(() => {
     return logs.slice(0, 8).map((log) => ({
       id: log.id,
@@ -764,8 +803,81 @@ export default function DashboardPage({
     }));
   }, [logs]);
 
+<<<<<<< HEAD
   return (
     <>
+=======
+  const dynamicAlerts = [
+    ...alerts,
+    ...problemBatches.map(
+      (batch) =>
+        `Пачка ${batch.batch_number} требует внимания: ${getStatusLabel(
+          batch.status
+        )}`
+    ),
+  ];
+
+  return (
+    <>
+      <div
+        style={{
+          background: "#eff6ff",
+          border: "1px solid #93c5fd",
+          borderRadius: 16,
+          overflow: "hidden",
+        }}
+      >
+        <button
+          onClick={() => setAlertsOpen((prev) => !prev)}
+          style={sectionButtonStyle("#1d4ed8", 16)}
+        >
+          <span>Требует внимания: {dynamicAlerts.length}</span>
+          <span>{alertsOpen ? "▲" : "▼"}</span>
+        </button>
+
+        {alertsOpen && (
+          <div
+            style={{
+              padding: "0 16px 16px 16px",
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            {dynamicAlerts.length === 0 && (
+              <div
+                style={{
+                  background: "#ffffff",
+                  borderRadius: 12,
+                  padding: 12,
+                  border: "1px solid #bfdbfe",
+                  color: "#64748b",
+                  fontWeight: 700,
+                }}
+              >
+                Сейчас нет уведомлений.
+              </div>
+            )}
+
+            {dynamicAlerts.map((item) => (
+              <div
+                key={item}
+                style={{
+                  background: "#ffffff",
+                  borderRadius: 12,
+                  padding: 12,
+                  border: "1px solid #bfdbfe",
+                  color: "#1e3a8a",
+                  fontWeight: 700,
+                }}
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
       {dashboardError && (
         <div
           style={{
@@ -781,6 +893,7 @@ export default function DashboardPage({
         </div>
       )}
 
+<<<<<<< HEAD
 
       <Panel title="Сегодня на смене">
         {employeesOnShift.length === 0 && (
@@ -817,6 +930,8 @@ export default function DashboardPage({
         )}
       </Panel>
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
       <Panel title="Сотрудники сегодня и к выплате">        {employeesLoading && <EmptyText text="Загрузка сотрудников..." />}
 
         {employeesError && (
@@ -877,10 +992,14 @@ export default function DashboardPage({
 
                   return (
                     <tr key={item.userId}>
+<<<<<<< HEAD
                       <EmployeeNameCell
                         name={item.name}
                         onClick={() => openEmployeeCard(item.userId)}
                       />
+=======
+                      <TableCell text={item.name} strong />
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
                       <TableCell text={`${item.operationsCount}`} />
                       <TableCell text={`${item.todayQuantity} шт`} />
                       <TableCell text={formatMoney(item.todayEarned)} strong />
@@ -920,6 +1039,7 @@ export default function DashboardPage({
         )}
       </Panel>
 
+<<<<<<< HEAD
 
       {salaryEmployees.length > 0 && (
         <Panel title="Предстоящие выплаты по окладу">
@@ -982,6 +1102,8 @@ export default function DashboardPage({
         </Panel>
       )}
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
       <div
         style={{
           background: "#fff",
@@ -1030,10 +1152,16 @@ export default function DashboardPage({
               <StatCard label="Пачек ждёт" value={`${waitingBatches.length}`} />
               <StatCard label="Пачек в работе" value={`${inProgressBatches.length}`} />
               <StatCard label="Пачек на паузе" value={`${partialBatches.length}`} />
+<<<<<<< HEAD
+=======
+              <StatCard label="Готово сегодня" value={`${doneTodayQuantity} шт`} />
+              <StatCard label="Заработано сегодня" value={formatMoney(earnedToday)} />
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
             </div>
           </div>
         )}
       </div>
+<<<<<<< HEAD
       <div
         style={{
           background: "#fff",
@@ -1075,6 +1203,8 @@ export default function DashboardPage({
           </div>
         )}
       </div>
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 
       <Panel title="Очередь по операциям">
         {operationQueue.length === 0 && (
@@ -1107,6 +1237,7 @@ export default function DashboardPage({
         )}
       </Panel>
 
+<<<<<<< HEAD
 
 
 
@@ -1228,6 +1359,138 @@ export default function DashboardPage({
         </div>
       )}
 
+=======
+      <Panel title="Последние действия">
+        {recentActions.length === 0 && (
+          <EmptyText text="Сегодня пока нет действий" />
+        )}
+
+        {recentActions.length > 0 && (
+          <div style={{ display: "grid", gap: 10 }}>
+            {recentActions.map((item) => (
+              <div key={item.id} style={recentRowStyle}>
+                <div style={{ color: "#64748b", fontSize: 13 }}>
+                  {item.time}
+                </div>
+                <div style={{ fontWeight: 700, color: "#111827" }}>
+                  {item.text}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 16,
+          overflow: "hidden",
+        }}
+      >
+        <button
+          onClick={() => setEmployeesOpen((prev) => !prev)}
+          style={sectionButtonStyle("#111827", 22)}
+        >
+          <span>Сотрудники</span>
+          <span style={{ fontSize: 16 }}>{employeesOpen ? "▲" : "▼"}</span>
+        </button>
+
+        {employeesOpen && (
+          <div
+            style={{
+              padding: "0 16px 16px 16px",
+            }}
+          >
+            {employeesLoading && (
+              <div style={{ color: "#6b7280" }}>Загрузка сотрудников...</div>
+            )}
+
+            {employeesError && (
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#991b1b",
+                }}
+              >
+                Ошибка: {employeesError}
+              </div>
+            )}
+
+            {!employeesLoading && !employeesError && employees.length === 0 && (
+              <div style={{ color: "#6b7280" }}>Сотрудников пока нет</div>
+            )}
+
+            {!employeesLoading && !employeesError && employees.length > 0 && (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                {employees.map((emp) => (
+                  <div
+                    key={emp.id}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "#fff",
+                      minHeight: 120,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 16,
+                        fontWeight: 700,
+                        color: "#111827",
+                        marginBottom: 6,
+                      }}
+                    >
+                      {emp.full_name || "Без имени"}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: "#6b7280",
+                        marginBottom: 4,
+                      }}
+                    >
+                      {emp.role || "Без роли"}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: "#6b7280",
+                        marginBottom: 4,
+                      }}
+                    >
+                      Оплата: {emp.payment_type || "—"}
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: emp.is_active ? "#166534" : "#991b1b",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {emp.is_active ? "Активен" : "Неактивен"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
       {selectedPayoutEmployee && (
         <div
           onClick={() => setSelectedPayoutEmployee(null)}
@@ -1338,6 +1601,7 @@ export default function DashboardPage({
   );
 }
 
+<<<<<<< HEAD
 
 const shiftEmployeeCardStyle: React.CSSProperties = {
   textAlign: "left",
@@ -1448,6 +1712,8 @@ const employeeInfoValueStyle: React.CSSProperties = {
   whiteSpace: "pre-wrap",
 };
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 const payoutModalOverlayStyle: React.CSSProperties = {
   position: "fixed",
   inset: 0,
@@ -1681,6 +1947,7 @@ function EmptyText({ text }: { text: string }) {
   );
 }
 
+<<<<<<< HEAD
 function EmployeeNameCell({
   name,
   onClick,
@@ -1719,6 +1986,8 @@ function EmployeeInfoRow({
   );
 }
 
+=======
+>>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
 function TableHead({ text }: { text: string }) {
   return (
     <th
