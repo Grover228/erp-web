@@ -1,0 +1,954 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Html5Qrcode, Html5QrcodeScannerState } from "html5-qrcode";
+import { supabase } from "./supabase";
+
+type QrPayload = {
+  batch_number?: string;
+  order_number?: string;
+  product_name?: string;
+  product_article?: string | null;
+  color_name?: string | null;
+  quantity?: number;
+};
+
+type BatchInfo = {
+  id: string;
+  production_order_id: string;
+  source_operation_id: string | null;
+  batch_number: string;
+  quantity: number;
+  completed_quantity: number | null;
+  current_operation_order: number | null;
+  status: string | null;
+  qr_code: string | null;
+  product_name: string | null;
+  product_article: string | null;
+  color_name: string | null;
+  qr_payload: QrPayload | null;
+  comment: string | null;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string | null;
+};
+
+type ProductionOrderInfo = {
+  id: string;
+  order_number: string | null;
+  quantity: number;
+  status: string;
+  product?: {
+    name: string;
+    article: string | null;
+  } | null;
+};
+
+type OperationInfo = {
+  id: string;
+  production_order_id: string;
+  operation_name: string;
+  sort_order: number;
+  status: string;
+  assigned_user_id: string | null;
+  assigned_at: string | null;
+  started_at: string | null;
+  completed_quantity: number;
+  price_per_unit: number | null;
+};
+
+type ScannedBatchData = {
+  batch: BatchInfo;
+  order: ProductionOrderInfo | null;
+  operation: OperationInfo | null;
+};
+
+function parseQrText(text: string): QrPayload {
+  try {
+    return JSON.parse(text) as QrPayload;
+  } catch {
+    return {
+      batch_number: text.trim(),
+    };
+  }
+}
+
+function getStatusLabel(status: string | null | undefined) {
+  switch (status) {
+    case "draft":
+      return "Черновик";
+    case "pending":
+      return "Ожидает";
+    case "waiting":
+      return "Ожидает";
+    case "partial":
+      return "Частично выполнено";
+    case "in_progress":
+      return "В работе";
+    case "done":
+      return "Готово";
+    case "cancelled":
+      return "Отменён";
+    default:
+      return status || "—";
+  }
+}
+
+function canResumeBatch(status: string | null | undefined) {
+  return (
+    status === null ||
+    status === undefined ||
+    status === "waiting" ||
+    status === "partial" ||
+    status === "pending"
+  );
+}
+
+function getTakeBatchButtonText(status: string | null | undefined) {
+  if (status === "partial") {
+    return "Продолжить работу над пачкой";
+  }
+
+  return "Взять пачку в работу";
+}
+
+export default function QRScanner({
+  onTakenToWork,
+}: {
+  onTakenToWork?: () => void;
+}) {
+  const scannerRegionId = useMemo(
+    () => `qr-reader-${Math.random().toString(36).slice(2, 9)}`,
+    []
+  );
+
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const lastScannedRef = useRef("");
+  const isStartingRef = useRef(false);
+
+  const [isStarting, setIsStarting] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+
+  const [loadingBatch, setLoadingBatch] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [scannedBatchData, setScannedBatchData] =
+    useState<ScannedBatchData | null>(null);
+
+  async function ensureScannerInstance() {
+    if (!scannerRef.current) {
+      scannerRef.current = new Html5Qrcode(scannerRegionId);
+    }
+
+    return scannerRef.current;
+  }
+
+  async function stopAndClearScanner() {
+    if (!scannerRef.current) return;
+
+    try {
+      const state = scannerRef.current.getState();
+
+      if (
+        state === Html5QrcodeScannerState.SCANNING ||
+        state === Html5QrcodeScannerState.PAUSED
+      ) {
+        await scannerRef.current.stop();
+      }
+    } catch {
+      // игнорируем
+    }
+
+    try {
+      await scannerRef.current.clear();
+    } catch {
+      // игнорируем
+    }
+
+    scannerRef.current = null;
+    setIsScanning(false);
+  }
+
+  async function pauseScannerAfterScan() {
+    try {
+      if (!scannerRef.current) return;
+
+      const state = scannerRef.current.getState();
+
+      if (state === Html5QrcodeScannerState.SCANNING) {
+        scannerRef.current.pause(true);
+      }
+
+      setIsScanning(false);
+    } catch {
+      await stopAndClearScanner();
+    }
+  }
+
+  async function resumeScanner() {
+    try {
+      if (!scannerRef.current) {
+        await startScanner();
+        return;
+      }
+
+      const state = scannerRef.current.getState();
+
+      if (state === Html5QrcodeScannerState.PAUSED) {
+        scannerRef.current.resume();
+        setIsScanning(true);
+        lastScannedRef.current = "";
+      }
+    } catch {
+      await startScanner();
+    }
+  }
+
+  async function findBatchByQr(decodedText: string) {
+    try {
+      setLoadingBatch(true);
+      setActionLoading(false);
+      setErrorMessage("");
+      setSuccessMessage("");
+      setScannedBatchData(null);
+
+      const payload = parseQrText(decodedText);
+      const batchNumber = payload.batch_number?.trim();
+
+      if (!batchNumber) {
+        throw new Error("В QR-коде не найден номер пачки batch_number");
+      }
+
+      const { data: batchData, error: batchError } = await supabase
+        .from("production_batches")
+        .select("*")
+        .eq("batch_number", batchNumber)
+        .maybeSingle();
+
+      if (batchError) throw batchError;
+
+      if (!batchData) {
+        throw new Error(`Пачка ${batchNumber} не найдена в базе`);
+      }
+
+      const batch = batchData as BatchInfo;
+
+      const [orderResult, operationsResult] = await Promise.all([
+        supabase
+          .from("production_orders")
+          .select(
+            `
+            id,
+            order_number,
+            quantity,
+            status,
+            product:products (
+              name,
+              article
+            )
+          `
+          )
+          .eq("id", batch.production_order_id)
+          .maybeSingle(),
+
+        supabase
+          .from("production_order_operations")
+          .select("*")
+          .eq("production_order_id", batch.production_order_id)
+          .order("sort_order", { ascending: true }),
+      ]);
+
+      if (orderResult.error) throw orderResult.error;
+      if (operationsResult.error) throw operationsResult.error;
+
+      const order = (orderResult.data as ProductionOrderInfo | null) || null;
+      const operations = (operationsResult.data as OperationInfo[]) || [];
+
+      const currentOperationOrder = Number(batch.current_operation_order || 0);
+
+      const operation =
+        operations.find((item) => item.sort_order === currentOperationOrder) ||
+        null;
+
+      setScannedBatchData({
+        batch,
+        order,
+        operation,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Не удалось обработать QR-код";
+
+      setErrorMessage(message);
+    } finally {
+      setLoadingBatch(false);
+    }
+  }
+
+  async function handleDecodedText(decodedText: string) {
+    if (!decodedText.trim()) return;
+
+    if (lastScannedRef.current === decodedText) return;
+    lastScannedRef.current = decodedText;
+
+    await pauseScannerAfterScan();
+    await findBatchByQr(decodedText);
+  }
+
+  async function startScanner() {
+    if (isStartingRef.current) return;
+
+    try {
+      isStartingRef.current = true;
+      setErrorMessage("");
+      setSuccessMessage("");
+      setScannedBatchData(null);
+      setIsStarting(true);
+      lastScannedRef.current = "";
+
+      await stopAndClearScanner();
+
+      const scanner = await ensureScannerInstance();
+
+      await scanner.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 },
+          aspectRatio: 1,
+        },
+        (decodedText) => {
+          handleDecodedText(decodedText);
+        },
+        () => {
+          // промежуточные ошибки чтения игнорируем
+        }
+      );
+
+      setIsScanning(true);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Не удалось запустить камеру";
+
+      setErrorMessage(`Ошибка камеры: ${message}`);
+      setIsScanning(false);
+    } finally {
+      isStartingRef.current = false;
+      setIsStarting(false);
+    }
+  }
+
+  async function handleCloseModal() {
+    setScannedBatchData(null);
+    setErrorMessage("");
+    setSuccessMessage("");
+    await resumeScanner();
+  }
+
+  function handleContinueWork() {
+    onTakenToWork?.();
+  }
+
+  async function handleTakeBatchToWork() {
+    if (!scannedBatchData) return;
+
+    const { batch, order, operation } = scannedBatchData;
+
+    if (!operation) {
+      setErrorMessage(
+        "Не найдена операция для этой пачки. Проверь current_operation_order в production_batches."
+      );
+      return;
+    }
+
+    if (batch.status === "in_progress") {
+      onTakenToWork?.();
+      return;
+    }
+
+    if (batch.status === "done") {
+      setErrorMessage("Эта пачка уже завершена на текущей операции.");
+      return;
+    }
+
+    if (batch.status === "cancelled") {
+      setErrorMessage("Эта пачка отменена. Продолжить работу нельзя.");
+      return;
+    }
+
+    const totalQuantity = Number(batch.quantity || 0);
+    const completedQuantity = Number(batch.completed_quantity || 0);
+    const leftQuantity = Math.max(0, totalQuantity - completedQuantity);
+
+    if (leftQuantity <= 0) {
+      setErrorMessage("В этой пачке не осталось изделий для выполнения.");
+      return;
+    }
+
+    if (!canResumeBatch(batch.status)) {
+      setErrorMessage(
+        `Пачку со статусом "${getStatusLabel(batch.status)}" нельзя взять в работу.`
+      );
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      setErrorMessage("");
+      setSuccessMessage("");
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      const now = new Date().toISOString();
+
+      const { error: batchError } = await supabase
+        .from("production_batches")
+        .update({
+          status: "in_progress",
+          assigned_user_id: user?.id || null,
+          assigned_at: now,
+          started_at: now,
+        })
+        .eq("id", batch.id);
+
+      if (batchError) throw batchError;
+
+      if (operation.status !== "in_progress") {
+        const { error: operationError } = await supabase
+          .from("production_order_operations")
+          .update({
+            status: "in_progress",
+            assigned_user_id: user?.id || null,
+            assigned_at: now,
+            started_at: now,
+          })
+          .eq("id", operation.id);
+
+        if (operationError) throw operationError;
+      }
+
+      if (order?.status === "draft") {
+        const { error: orderError } = await supabase
+          .from("production_orders")
+          .update({
+            status: "in_progress",
+          })
+          .eq("id", order.id);
+
+        if (orderError) throw orderError;
+      }
+
+      setSuccessMessage(
+        batch.status === "partial"
+          ? `Работа по пачке ${batch.batch_number} продолжена. Осталось: ${leftQuantity} шт.`
+          : `Пачка ${batch.batch_number} взята в работу: ${operation.operation_name}`
+      );
+
+      window.setTimeout(() => {
+        onTakenToWork?.();
+      }, 500);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Не удалось взять пачку в работу";
+
+      setErrorMessage(message);
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  const modalBatch = scannedBatchData?.batch || null;
+  const modalOperation = scannedBatchData?.operation || null;
+
+  const batchQuantity = Number(modalBatch?.quantity || 0);
+  const batchCompleted = Number(modalBatch?.completed_quantity || 0);
+  const batchLeft = Math.max(0, batchQuantity - batchCompleted);
+
+  const canTakeModalBatch =
+    !!modalOperation &&
+    !!modalBatch &&
+    canResumeBatch(modalBatch.status) &&
+    batchLeft > 0;
+
+  const canContinueModalBatch =
+    !!modalOperation && !!modalBatch && modalBatch.status === "in_progress";
+
+  useEffect(() => {
+    startScanner();
+
+    return () => {
+      stopAndClearScanner().catch(() => {});
+    };
+  }, []);
+
+  return (
+    <div
+      style={{
+        background: "#ffffff",
+        borderRadius: 16,
+        padding: 20,
+        border: "1px solid #e5e7eb",
+      }}
+    >
+      <h2
+        style={{
+          marginTop: 0,
+          marginBottom: 8,
+          fontSize: 28,
+          color: "#111827",
+        }}
+      >
+        Сканер QR
+      </h2>
+
+      <p
+        style={{
+          marginTop: 0,
+          marginBottom: 16,
+          color: "#6b7280",
+          lineHeight: 1.5,
+        }}
+      >
+        Наведи камеру на QR-код пачки. Камера запускается автоматически.
+      </p>
+
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 520,
+          marginBottom: 16,
+        }}
+      >
+        <div
+          id={scannerRegionId}
+          style={{
+            width: "100%",
+            minHeight: 360,
+            borderRadius: 18,
+            border: "2px solid #cbd5e1",
+            background: "#0f172a",
+            overflow: "hidden",
+            position: "relative",
+          }}
+        />
+
+        <div
+          style={{
+            marginTop: 10,
+            color: isScanning ? "#166534" : "#64748b",
+            fontSize: 14,
+            fontWeight: 700,
+          }}
+        >
+          {isStarting
+            ? "Запускаю камеру..."
+            : isScanning
+            ? "Камера активна. Наведи на QR-код."
+            : "Камера временно остановлена."}
+        </div>
+      </div>
+
+      {loadingBatch && (
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 14,
+            background: "#eff6ff",
+            border: "1px solid #bfdbfe",
+            color: "#1d4ed8",
+            fontWeight: 700,
+            marginBottom: 12,
+          }}
+        >
+          Ищу пачку в базе...
+        </div>
+      )}
+
+      {successMessage && (
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 14,
+            background: "#dcfce7",
+            border: "1px solid #86efac",
+            color: "#166534",
+            fontWeight: 700,
+            wordBreak: "break-word",
+            marginBottom: 12,
+          }}
+        >
+          {successMessage}
+        </div>
+      )}
+
+      {errorMessage && (
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 14,
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#991b1b",
+            wordBreak: "break-word",
+            lineHeight: 1.5,
+          }}
+        >
+          {errorMessage}
+        </div>
+      )}
+
+      {scannedBatchData && modalBatch && (
+        <div
+          onClick={handleCloseModal}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            background: "rgba(15, 23, 42, 0.45)",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "center",
+            padding: 0,
+            animation: "fadeIn 0.18s ease-out",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              maxWidth: 620,
+              maxHeight: "88vh",
+              background: "#ffffff",
+              borderTopLeftRadius: 24,
+              borderTopRightRadius: 24,
+              padding: 18,
+              border: "1px solid #bfdbfe",
+              boxShadow: "0 -16px 40px rgba(15, 23, 42, 0.25)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              animation: "slideUp 0.22s ease-out",
+            }}
+          >
+            <style>
+              {`
+                @keyframes fadeIn {
+                  from { opacity: 0; }
+                  to { opacity: 1; }
+                }
+
+                @keyframes slideUp {
+                  from {
+                    transform: translateY(40px);
+                    opacity: 0.7;
+                  }
+                  to {
+                    transform: translateY(0);
+                    opacity: 1;
+                  }
+                }
+              `}
+            </style>
+
+            <div
+              style={{
+                width: 52,
+                height: 5,
+                borderRadius: 999,
+                background: "#cbd5e1",
+                alignSelf: "center",
+                marginBottom: 4,
+              }}
+            />
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "flex-start",
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: 22,
+                    fontWeight: 900,
+                    color: "#111827",
+                  }}
+                >
+                  Пачка {modalBatch.batch_number}
+                </div>
+
+                <div style={{ marginTop: 4, color: "#64748b", fontSize: 14 }}>
+                  QR успешно прочитан
+                </div>
+              </div>
+
+              <button
+                onClick={handleCloseModal}
+                style={{
+                  width: 42,
+                  height: 42,
+                  borderRadius: 12,
+                  border: "1px solid #cbd5e1",
+                  background: "#ffffff",
+                  cursor: "pointer",
+                  fontSize: 20,
+                  color: "#0f172a",
+                  flexShrink: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                overflowY: "auto",
+                display: "grid",
+                gap: 10,
+                paddingRight: 2,
+              }}
+            >
+              <CompactRow
+                label="Заказ"
+                value={scannedBatchData.order?.order_number || "—"}
+              />
+
+              <CompactRow
+                label="Изделие"
+                value={
+                  modalBatch.product_name ||
+                  scannedBatchData.order?.product?.name ||
+                  "—"
+                }
+              />
+
+              <CompactRow
+                label="Артикул"
+                value={
+                  modalBatch.product_article ||
+                  scannedBatchData.order?.product?.article ||
+                  "—"
+                }
+              />
+
+              <CompactRow label="Цвет" value={modalBatch.color_name || "—"} />
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: 8,
+                }}
+              >
+                <MiniBox label="Всего" value={`${batchQuantity} шт`} />
+                <MiniBox label="Сделано" value={`${batchCompleted} шт`} />
+                <MiniBox label="Осталось" value={`${batchLeft} шт`} />
+              </div>
+
+              <CompactRow
+                label="Статус пачки"
+                value={getStatusLabel(modalBatch.status)}
+              />
+
+              <CompactRow
+                label="Операция"
+                value={
+                  modalOperation
+                    ? `${modalOperation.sort_order}. ${modalOperation.operation_name}`
+                    : "операция не найдена"
+                }
+              />
+
+              {!modalOperation && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#991b1b",
+                    fontWeight: 700,
+                  }}
+                >
+                  Не найдена операция для этой пачки.
+                </div>
+              )}
+
+              {modalBatch.status === "in_progress" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#eff6ff",
+                    border: "1px solid #bfdbfe",
+                    color: "#1d4ed8",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка уже находится в работе. Можно перейти к продолжению
+                  работы.
+                </div>
+              )}
+
+              {modalBatch.status === "partial" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#fffbeb",
+                    border: "1px solid #fde68a",
+                    color: "#92400e",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка выполнена частично. Можно продолжить работу:
+                  осталось {batchLeft} шт.
+                </div>
+              )}
+
+              {modalBatch.status === "done" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#f0fdf4",
+                    border: "1px solid #86efac",
+                    color: "#166534",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка уже завершена на текущей операции.
+                </div>
+              )}
+
+              {modalBatch.status === "cancelled" && (
+                <div
+                  style={{
+                    padding: 14,
+                    borderRadius: 14,
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    color: "#991b1b",
+                    fontWeight: 700,
+                  }}
+                >
+                  Эта пачка отменена. Продолжить работу нельзя.
+                </div>
+              )}
+            </div>
+
+            {canContinueModalBatch && (
+              <button
+                onClick={handleContinueWork}
+                style={{
+                  border: "none",
+                  borderRadius: 16,
+                  padding: "17px 18px",
+                  background: "#16a34a",
+                  color: "#ffffff",
+                  fontWeight: 900,
+                  cursor: "pointer",
+                  width: "100%",
+                  fontSize: 17,
+                  flexShrink: 0,
+                  boxShadow: "0 10px 22px rgba(22, 163, 74, 0.25)",
+                }}
+              >
+                Продолжить работу
+              </button>
+            )}
+
+            {canTakeModalBatch && (
+              <button
+                onClick={handleTakeBatchToWork}
+                disabled={actionLoading}
+                style={{
+                  border: "none",
+                  borderRadius: 16,
+                  padding: "17px 18px",
+                  background: actionLoading ? "#93c5fd" : "#2563eb",
+                  color: "#ffffff",
+                  fontWeight: 900,
+                  cursor: actionLoading ? "default" : "pointer",
+                  width: "100%",
+                  fontSize: 17,
+                  flexShrink: 0,
+                  boxShadow: "0 10px 22px rgba(37, 99, 235, 0.25)",
+                }}
+              >
+                {actionLoading
+                  ? "Сохраняю..."
+                  : getTakeBatchButtonText(modalBatch.status)}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CompactRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: 12,
+        alignItems: "center",
+        background: "#f8fbff",
+        border: "1px solid #e0edff",
+        borderRadius: 14,
+        padding: "12px 14px",
+      }}
+    >
+      <div style={{ color: "#64748b", fontSize: 14 }}>{label}</div>
+      <div
+        style={{
+          color: "#111827",
+          fontWeight: 800,
+          textAlign: "right",
+          wordBreak: "break-word",
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function MiniBox({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        background: "#eff6ff",
+        borderRadius: 14,
+        padding: 12,
+        textAlign: "center",
+      }}
+    >
+      <div style={{ fontSize: 12, color: "#64748b" }}>{label}</div>
+      <div
+        style={{
+          marginTop: 4,
+          fontWeight: 900,
+          color: "#111827",
+          fontSize: 16,
+        }}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
