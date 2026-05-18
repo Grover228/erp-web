@@ -9,10 +9,7 @@ type Employee = {
   telegram: string | null;
   payment_type: string | null;
   bank_name?: string | null;
-<<<<<<< HEAD
-  weekly_salary_amount?: number | null;
-=======
->>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
+weekly_salary_amount?: number | null;
   is_active: boolean | null;
   notes: string | null;
   created_at: string | null;
@@ -461,10 +458,7 @@ export default function EmployeesDirectory() {
       payment_type: editingEmployee.payment_type?.trim() || null,
       bank_name: editingEmployee.bank_name?.trim() || null,
       notes: editingEmployee.notes?.trim() || null,
-<<<<<<< HEAD
-      weekly_salary_amount: editingEmployee.weekly_salary_amount || 0,
-=======
->>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
+weekly_salary_amount: editingEmployee.weekly_salary_amount || 0,
       is_active: editingEmployee.is_active,
     };
 
@@ -768,10 +762,7 @@ export default function EmployeesDirectory() {
                   <Info label="Telegram" value={viewEmployee.telegram || "—"} />
                   <Info label="Тип оплаты" value={formatPaymentType(viewEmployee.payment_type)} />
                   <Info label="Банк" value={getBankLabel(viewEmployee.bank_name)} />
-<<<<<<< HEAD
-                  <Info label="Оклад в неделю" value={viewEmployee.weekly_salary_amount ? `${viewEmployee.weekly_salary_amount} ₽` : "—"} />
-=======
->>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
+<Info label="Оклад в неделю" value={viewEmployee.weekly_salary_amount ? `${viewEmployee.weekly_salary_amount} ₽` : "—"} />
                   <Info label="Активность" value={viewEmployee.is_active ? "Активен" : "Неактивен"} />
                 </div>
 
@@ -886,8 +877,7 @@ export default function EmployeesDirectory() {
                     </select>
                   </Field>
 
-<<<<<<< HEAD
-                  {parseMultiValue(editingEmployee.payment_type).includes("salary") && (
+{parseMultiValue(editingEmployee.payment_type).includes("salary") && (
                     <Field label="Оклад в неделю">
                       <input
                         type="number"
@@ -902,9 +892,6 @@ export default function EmployeesDirectory() {
                       />
                     </Field>
                   )}
-
-=======
->>>>>>> 1e104071b1a47b574d078017426f52b5701ddeaa
                   <Field label="Активность">
                     <select
                       style={inputStyle}
