@@ -565,75 +565,8 @@ export default function Production({
       if (operationsResult.error) throw operationsResult.error;
       if (batchesResult.error) throw batchesResult.error;
 
-      const safeOperations =
-        (operationsResult.data as ProductionOrderOperation[]) || [];
-      const safeBatches = (batchesResult.data as ProductionBatch[]) || [];
-
-      const finalizedAny = await finalizeFinishedOrdersFromLoadedData(
-        safeOrders,
-        safeOperations,
-      );
-
-      if (finalizedAny) {
-        const { data: refreshedOrdersData, error: refreshedOrdersError } =
-          await supabase
-            .from("production_orders")
-            .select(
-              `
-              *,
-              product:products (
-                name,
-                article
-              )
-            `,
-            )
-            .order("created_at", { ascending: false });
-
-        if (refreshedOrdersError) throw refreshedOrdersError;
-
-        const refreshedOrders =
-          (refreshedOrdersData as ProductionOrder[]) || [];
-        setOrders(refreshedOrders);
-
-        const refreshedOrderIds = refreshedOrders.map((item) => item.id);
-
-        if (refreshedOrderIds.length === 0) {
-          setOperations([]);
-          setBatches([]);
-          return;
-        }
-
-        const [refreshedOperationsResult, refreshedBatchesResult] =
-          await Promise.all([
-            supabase
-              .from("production_order_operations")
-              .select("*")
-              .in("production_order_id", refreshedOrderIds)
-              .order("sort_order", { ascending: true }),
-
-            supabase
-              .from("production_batches")
-              .select("*")
-              .in("production_order_id", refreshedOrderIds)
-              .order("created_at", { ascending: false }),
-          ]);
-
-        if (refreshedOperationsResult.error) {
-          throw refreshedOperationsResult.error;
-        }
-
-        if (refreshedBatchesResult.error) {
-          throw refreshedBatchesResult.error;
-        }
-
-        setOperations(
-          (refreshedOperationsResult.data as ProductionOrderOperation[]) || [],
-        );
-        setBatches((refreshedBatchesResult.data as ProductionBatch[]) || []);
-      } else {
-        setOperations(safeOperations);
-        setBatches(safeBatches);
-      }
+      setOperations((operationsResult.data as ProductionOrderOperation[]) || []);
+      setBatches((batchesResult.data as ProductionBatch[]) || []);
 
       setOpenJobs((prev) => {
         const next = { ...prev };
@@ -1331,16 +1264,168 @@ export default function Production({
 
   async function finalizeProductionOrderStock(orderId: string) {
     /*
-      Финализация производства вынесена в БД, чтобы исключить двойное проведение.
-      Это важно для телефона/планшета: браузер может повторить запрос или быстро
-      обновить экран, но SQL-функция держит lock по заказу и не создаёт второй
-      комплект складских движений.
+      Финализация вынесена в SQL-функцию с блокировкой.
+      Это защищает от повторного проведения при работе с телефона,
+      двойного клика, обновления страницы или повторного запроса.
     */
     const { error } = await supabase.rpc("finalize_production_order_stock_safe", {
       p_order_id: orderId,
     });
 
     if (error) throw error;
+
+    return;
+
+    const now = new Date().toISOString();
+
+    const { data: freshOrder, error: freshOrderError } = await supabase
+      .from("production_orders")
+      .select(
+        "id, product_id, quantity, status, materials_written_off_at, finished_goods_received_at",
+      )
+      .eq("id", orderId)
+      .single();
+
+    if (freshOrderError) throw freshOrderError;
+
+    if (
+      freshOrder.materials_written_off_at &&
+      freshOrder.finished_goods_received_at
+    ) {
+      const { error: doneOrderError } = await supabase
+        .from("production_orders")
+        .update({ status: "done" })
+        .eq("id", orderId);
+
+      if (doneOrderError) throw doneOrderError;
+      return;
+    }
+
+    const [orderMaterialsResult, orderConsumablesResult] = await Promise.all([
+      supabase
+        .from("production_order_materials")
+        .select(
+          `
+          material_id,
+          total_quantity,
+          materials (
+            id,
+            name,
+            production_units_per_purchase_unit
+          )
+        `,
+        )
+        .eq("production_order_id", orderId),
+
+      supabase
+        .from("production_order_consumables")
+        .select("consumable_id, total_quantity")
+        .eq("production_order_id", orderId),
+    ]);
+
+    if (orderMaterialsResult.error) throw orderMaterialsResult.error;
+    if (orderConsumablesResult.error) throw orderConsumablesResult.error;
+
+    const materialMovementRows = ((orderMaterialsResult.data || []) as any[])
+      .map((row) => {
+        const material = Array.isArray(row.materials)
+          ? row.materials[0]
+          : row.materials;
+
+        const quantity = convertProductionUnitsToStockUnits(
+          Number(row.total_quantity || 0),
+          material?.production_units_per_purchase_unit,
+        );
+
+        return {
+          movement_type: "production_write_off",
+          source_document_type: "production_order",
+          source_document_id: orderId,
+          production_order_id: orderId,
+          item_type: "material",
+          product_id: null,
+          material_id: row.material_id,
+          consumable_id: null,
+          quantity: -Math.abs(quantity),
+          created_at: now,
+        };
+      })
+      .filter((item) => Number(item.quantity || 0) !== 0);
+
+    const consumableMovementRows = ((orderConsumablesResult.data || []) as any[])
+      .map((row) => ({
+        movement_type: "production_write_off",
+        source_document_type: "production_order",
+        source_document_id: orderId,
+        production_order_id: orderId,
+        item_type: "consumable",
+        product_id: null,
+        material_id: null,
+        consumable_id: row.consumable_id,
+        quantity: -Math.abs(Number(row.total_quantity || 0)),
+        created_at: now,
+      }))
+      .filter((item) => Number(item.quantity || 0) !== 0);
+
+    const finishedProductMovementRow = {
+      movement_type: "production_receipt",
+      source_document_type: "production_order",
+      source_document_id: orderId,
+      production_order_id: orderId,
+      item_type: "product",
+      product_id: freshOrder.product_id,
+      material_id: null,
+      consumable_id: null,
+      quantity: Number(freshOrder.quantity || 0),
+      created_at: now,
+    };
+
+    const stockMovementRows = [
+      ...materialMovementRows,
+      ...consumableMovementRows,
+      finishedProductMovementRow,
+    ];
+
+    if (stockMovementRows.length > 0) {
+      const { error: movementsError } = await supabase
+        .from("stock_movements")
+        .insert(stockMovementRows);
+
+      if (movementsError) throw movementsError;
+    }
+
+    const { error: releaseReservationsError } = await supabase
+      .from("stock_reservations")
+      .update({
+        status: "released",
+        updated_at: now,
+      })
+      .eq("production_order_id", orderId)
+      .eq("status", "active");
+
+    if (releaseReservationsError) throw releaseReservationsError;
+
+    const { error: batchesError } = await supabase
+      .from("production_batches")
+      .update({
+        status: "done",
+        completed_at: now,
+      })
+      .eq("production_order_id", orderId)
+      .neq("status", "done");
+
+    if (batchesError) throw batchesError;
+
+    const { error: orderError } = await supabase
+      .from("production_orders")
+      .update({
+        status: "done",
+        materials_written_off_at: freshOrder.materials_written_off_at || now,
+        finished_goods_received_at: freshOrder.finished_goods_received_at || now,
+      })
+      .eq("id", orderId);
+
+    if (orderError) throw orderError;
   }
 
   async function isProductionOrderFullyDone(orderId: string, orderQuantity: number) {
@@ -1360,35 +1445,6 @@ export default function Production({
             Number(item.completed_quantity || 0) >= Number(orderQuantity || 0),
         )
     );
-  }
-
-  async function finalizeFinishedOrdersFromLoadedData(
-    loadedOrders: ProductionOrder[],
-    loadedOperations: ProductionOrderOperation[],
-  ) {
-    const ordersToFinalize = loadedOrders.filter((order) => {
-      if (["done", "cancelled", "archived"].includes(order.status)) return false;
-
-      const orderOperations = loadedOperations.filter(
-        (operation) => operation.production_order_id === order.id,
-      );
-
-      return (
-        orderOperations.length > 0 &&
-        orderOperations.every(
-          (operation) =>
-            Number(operation.completed_quantity || 0) >= Number(order.quantity || 0),
-        )
-      );
-    });
-
-    if (ordersToFinalize.length === 0) return false;
-
-    for (const order of ordersToFinalize) {
-      await finalizeProductionOrderStock(order.id);
-    }
-
-    return true;
   }
 
   async function handleFinishOperation(e: React.FormEvent) {
