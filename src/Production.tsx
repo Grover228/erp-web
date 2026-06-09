@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
+import ProductionOrderModal from "./pages/production/ProductionOrderModal";
+import ProductionCreateOrderModal from "./pages/production/ProductionCreateOrderModal";
 
 export type ProductionTab = "jobs" | "active" | "history" | "techcards";
 
-type ProductionOrder = {
+export type ProductionOrder = {
   id: string;
   product_id: string;
   tech_card_id: string | null;
@@ -24,7 +26,7 @@ type ProductionOrder = {
   } | null;
 };
 
-type ProductionOrderOperation = {
+export type ProductionOrderOperation = {
   id: string;
   production_order_id: string;
   operation_name: string;
@@ -40,7 +42,23 @@ type ProductionOrderOperation = {
   completed_at: string | null;
 };
 
-type ProductionBatch = {
+export type ProductionOperationLog = {
+  id: string;
+  production_order_id: string;
+  production_order_operation_id: string | null;
+  user_id: string | null;
+  user_name?: string | null;
+  operation_name: string | null;
+  quantity: number | null;
+  price_per_unit: number | null;
+  earned_amount: number | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_seconds: number | null;
+  comment: string | null;
+};
+
+export type ProductionBatch = {
   id: string;
   production_order_id: string;
   source_operation_id: string | null;
@@ -62,13 +80,13 @@ type ProductionBatch = {
   created_at: string | null;
 };
 
-type ProductItem = {
+export type ProductItem = {
   id: string;
   name: string;
   article: string | null;
 };
 
-type TechCardItem = {
+export type TechCardItem = {
   id: string;
   product_id: string;
   name: string;
@@ -146,7 +164,7 @@ type ProductionConsumableRequirement = {
   name: string;
 };
 
-type Job = {
+export type Job = {
   id: string;
   realId: string;
   product: string;
@@ -347,6 +365,7 @@ export default function Production({
 
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [operations, setOperations] = useState<ProductionOrderOperation[]>([]);
+  const [operationLogs, setOperationLogs] = useState<ProductionOperationLog[]>([]);
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
@@ -368,6 +387,7 @@ export default function Production({
   const [message, setMessage] = useState("");
 
   const [openJobs, setOpenJobs] = useState<Record<string, boolean>>({});
+  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState("");
@@ -517,6 +537,83 @@ export default function Production({
     }
   }
 
+  async function loadOperationLogsForOrders(orderIds: string[]) {
+    if (orderIds.length === 0) {
+      setOperationLogs([]);
+      return;
+    }
+
+    const { data: logsData, error: logsError } = await supabase
+      .from("production_operation_logs")
+      .select("*")
+      .in("production_order_id", orderIds)
+      .order("finished_at", { ascending: false });
+
+    if (logsError) {
+      console.error("Ошибка загрузки логов операций", logsError);
+      setOperationLogs([]);
+      return;
+    }
+
+    const safeLogs = ((logsData as ProductionOperationLog[]) || []).map((log) => ({
+      ...log,
+      user_name: null,
+    }));
+
+    const userIds = Array.from(
+      new Set(
+        safeLogs
+          .map((log) => log.user_id)
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
+
+    if (userIds.length === 0) {
+      setOperationLogs(safeLogs);
+      return;
+    }
+
+    try {
+      const { data: usersData, error: usersError } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .in("id", userIds);
+
+      if (usersError) throw usersError;
+
+      const userNameById = new Map<string, string>();
+
+      ((usersData as any[]) || []).forEach((user) => {
+        const name =
+          user.full_name ||
+          user.name ||
+          user.display_name ||
+          user.email ||
+          user.id;
+
+        if (user.id) {
+          userNameById.set(user.id, String(name));
+        }
+      });
+
+      setOperationLogs(
+        safeLogs.map((log) => ({
+          ...log,
+          user_name: log.user_id ? userNameById.get(log.user_id) || log.user_id : null,
+        })),
+      );
+    } catch (error) {
+      console.error("Не удалось подтянуть имена сотрудников", error);
+
+      setOperationLogs(
+        safeLogs.map((log) => ({
+          ...log,
+          user_name: log.user_id || null,
+        })),
+      );
+    }
+  }
+
   async function loadProductionOrders() {
     try {
       setLoading(true);
@@ -544,9 +641,12 @@ export default function Production({
 
       if (orderIds.length === 0) {
         setOperations([]);
+        setOperationLogs([]);
         setBatches([]);
         return;
       }
+
+      await loadOperationLogsForOrders(orderIds);
 
       const [operationsResult, batchesResult] = await Promise.all([
         supabase
@@ -565,8 +665,78 @@ export default function Production({
       if (operationsResult.error) throw operationsResult.error;
       if (batchesResult.error) throw batchesResult.error;
 
-      setOperations((operationsResult.data as ProductionOrderOperation[]) || []);
-      setBatches((batchesResult.data as ProductionBatch[]) || []);
+      const safeOperations =
+        (operationsResult.data as ProductionOrderOperation[]) || [];
+      const safeBatches = (batchesResult.data as ProductionBatch[]) || [];
+
+      const finalizedAny = await finalizeFinishedOrdersFromLoadedData(
+        safeOrders,
+        safeOperations,
+      );
+
+      if (finalizedAny) {
+        const { data: refreshedOrdersData, error: refreshedOrdersError } =
+          await supabase
+            .from("production_orders")
+            .select(
+              `
+              *,
+              product:products (
+                name,
+                article
+              )
+            `,
+            )
+            .order("created_at", { ascending: false });
+
+        if (refreshedOrdersError) throw refreshedOrdersError;
+
+        const refreshedOrders =
+          (refreshedOrdersData as ProductionOrder[]) || [];
+        setOrders(refreshedOrders);
+
+        const refreshedOrderIds = refreshedOrders.map((item) => item.id);
+
+        if (refreshedOrderIds.length === 0) {
+          setOperations([]);
+          setOperationLogs([]);
+          setBatches([]);
+          return;
+        }
+
+        await loadOperationLogsForOrders(refreshedOrderIds);
+
+        const [refreshedOperationsResult, refreshedBatchesResult] =
+          await Promise.all([
+            supabase
+              .from("production_order_operations")
+              .select("*")
+              .in("production_order_id", refreshedOrderIds)
+              .order("sort_order", { ascending: true }),
+
+            supabase
+              .from("production_batches")
+              .select("*")
+              .in("production_order_id", refreshedOrderIds)
+              .order("created_at", { ascending: false }),
+          ]);
+
+        if (refreshedOperationsResult.error) {
+          throw refreshedOperationsResult.error;
+        }
+
+        if (refreshedBatchesResult.error) {
+          throw refreshedBatchesResult.error;
+        }
+
+        setOperations(
+          (refreshedOperationsResult.data as ProductionOrderOperation[]) || [],
+        );
+        setBatches((refreshedBatchesResult.data as ProductionBatch[]) || []);
+      } else {
+        setOperations(safeOperations);
+        setBatches(safeBatches);
+      }
 
       setOpenJobs((prev) => {
         const next = { ...prev };
@@ -1264,42 +1434,50 @@ export default function Production({
 
   async function finalizeProductionOrderStock(orderId: string) {
     /*
-      Финализация вынесена в SQL-функцию с блокировкой.
-      Это защищает от повторного проведения при работе с телефона,
-      двойного клика, обновления страницы или повторного запроса.
+      Финализация производства вынесена в БД, чтобы исключить двойное проведение.
+      Это важно для телефона/планшета: браузер может повторить запрос или быстро
+      обновить экран, но SQL-функция держит lock по заказу и не создаёт второй
+      комплект складских движений.
     */
     const { error } = await supabase.rpc("finalize_production_order_stock_safe", {
       p_order_id: orderId,
     });
 
     if (error) throw error;
+  }
 
-    return;
-
+  async function finalizeProductionBatchStock(
+    order: ProductionOrder,
+    batch: ProductionBatch,
+    finishedQuantity: number,
+  ) {
     const now = new Date().toISOString();
+    const batchQuantity = Number(finishedQuantity || 0);
+    const orderQuantity = Number(order.quantity || 0);
 
-    const { data: freshOrder, error: freshOrderError } = await supabase
-      .from("production_orders")
-      .select(
-        "id, product_id, quantity, status, materials_written_off_at, finished_goods_received_at",
-      )
-      .eq("id", orderId)
-      .single();
+    if (batchQuantity <= 0) {
+      throw new Error("Количество готовой пачки должно быть больше 0");
+    }
 
-    if (freshOrderError) throw freshOrderError;
+    if (orderQuantity <= 0) {
+      throw new Error("Количество производственного заказа должно быть больше 0");
+    }
 
-    if (
-      freshOrder.materials_written_off_at &&
-      freshOrder.finished_goods_received_at
-    ) {
-      const { error: doneOrderError } = await supabase
-        .from("production_orders")
-        .update({ status: "done" })
-        .eq("id", orderId);
+    const { data: existingMovements, error: existingMovementsError } =
+      await supabase
+        .from("stock_movements")
+        .select("id")
+        .eq("source_document_type", "production_batch")
+        .eq("source_document_id", batch.id)
+        .limit(1);
 
-      if (doneOrderError) throw doneOrderError;
+    if (existingMovementsError) throw existingMovementsError;
+
+    if ((existingMovements || []).length > 0) {
       return;
     }
+
+    const ratio = batchQuantity / orderQuantity;
 
     const [orderMaterialsResult, orderConsumablesResult] = await Promise.all([
       supabase
@@ -1315,12 +1493,12 @@ export default function Production({
           )
         `,
         )
-        .eq("production_order_id", orderId),
+        .eq("production_order_id", order.id),
 
       supabase
         .from("production_order_consumables")
         .select("consumable_id, total_quantity")
-        .eq("production_order_id", orderId),
+        .eq("production_order_id", order.id),
     ]);
 
     if (orderMaterialsResult.error) throw orderMaterialsResult.error;
@@ -1333,15 +1511,15 @@ export default function Production({
           : row.materials;
 
         const quantity = convertProductionUnitsToStockUnits(
-          Number(row.total_quantity || 0),
+          Number(row.total_quantity || 0) * ratio,
           material?.production_units_per_purchase_unit,
         );
 
         return {
           movement_type: "production_write_off",
-          source_document_type: "production_order",
-          source_document_id: orderId,
-          production_order_id: orderId,
+          source_document_type: "production_batch",
+          source_document_id: batch.id,
+          production_order_id: order.id,
           item_type: "material",
           product_id: null,
           material_id: row.material_id,
@@ -1355,77 +1533,40 @@ export default function Production({
     const consumableMovementRows = ((orderConsumablesResult.data || []) as any[])
       .map((row) => ({
         movement_type: "production_write_off",
-        source_document_type: "production_order",
-        source_document_id: orderId,
-        production_order_id: orderId,
+        source_document_type: "production_batch",
+        source_document_id: batch.id,
+        production_order_id: order.id,
         item_type: "consumable",
         product_id: null,
         material_id: null,
         consumable_id: row.consumable_id,
-        quantity: -Math.abs(Number(row.total_quantity || 0)),
+        quantity: -Math.abs(Number(row.total_quantity || 0) * ratio),
         created_at: now,
       }))
       .filter((item) => Number(item.quantity || 0) !== 0);
 
     const finishedProductMovementRow = {
       movement_type: "production_receipt",
-      source_document_type: "production_order",
-      source_document_id: orderId,
-      production_order_id: orderId,
+      source_document_type: "production_batch",
+      source_document_id: batch.id,
+      production_order_id: order.id,
       item_type: "product",
-      product_id: freshOrder.product_id,
+      product_id: order.product_id,
       material_id: null,
       consumable_id: null,
-      quantity: Number(freshOrder.quantity || 0),
+      quantity: batchQuantity,
       created_at: now,
     };
 
-    const stockMovementRows = [
-      ...materialMovementRows,
-      ...consumableMovementRows,
-      finishedProductMovementRow,
-    ];
+    const { error: movementsError } = await supabase
+      .from("stock_movements")
+      .insert([
+        ...materialMovementRows,
+        ...consumableMovementRows,
+        finishedProductMovementRow,
+      ]);
 
-    if (stockMovementRows.length > 0) {
-      const { error: movementsError } = await supabase
-        .from("stock_movements")
-        .insert(stockMovementRows);
-
-      if (movementsError) throw movementsError;
-    }
-
-    const { error: releaseReservationsError } = await supabase
-      .from("stock_reservations")
-      .update({
-        status: "released",
-        updated_at: now,
-      })
-      .eq("production_order_id", orderId)
-      .eq("status", "active");
-
-    if (releaseReservationsError) throw releaseReservationsError;
-
-    const { error: batchesError } = await supabase
-      .from("production_batches")
-      .update({
-        status: "done",
-        completed_at: now,
-      })
-      .eq("production_order_id", orderId)
-      .neq("status", "done");
-
-    if (batchesError) throw batchesError;
-
-    const { error: orderError } = await supabase
-      .from("production_orders")
-      .update({
-        status: "done",
-        materials_written_off_at: freshOrder.materials_written_off_at || now,
-        finished_goods_received_at: freshOrder.finished_goods_received_at || now,
-      })
-      .eq("id", orderId);
-
-    if (orderError) throw orderError;
+    if (movementsError) throw movementsError;
   }
 
   async function isProductionOrderFullyDone(orderId: string, orderQuantity: number) {
@@ -1445,6 +1586,35 @@ export default function Production({
             Number(item.completed_quantity || 0) >= Number(orderQuantity || 0),
         )
     );
+  }
+
+  async function finalizeFinishedOrdersFromLoadedData(
+    loadedOrders: ProductionOrder[],
+    loadedOperations: ProductionOrderOperation[],
+  ) {
+    const ordersToFinalize = loadedOrders.filter((order) => {
+      if (["done", "cancelled", "archived"].includes(order.status)) return false;
+
+      const orderOperations = loadedOperations.filter(
+        (operation) => operation.production_order_id === order.id,
+      );
+
+      return (
+        orderOperations.length > 0 &&
+        orderOperations.every(
+          (operation) =>
+            Number(operation.completed_quantity || 0) >= Number(order.quantity || 0),
+        )
+      );
+    });
+
+    if (ordersToFinalize.length === 0) return false;
+
+    for (const order of ordersToFinalize) {
+      await finalizeProductionOrderStock(order.id);
+    }
+
+    return true;
   }
 
   async function handleFinishOperation(e: React.FormEvent) {
@@ -1900,15 +2070,20 @@ export default function Production({
         refreshedBatches.length > 0 &&
         refreshedBatches.every((item) => item.status === "done");
 
-      if (allOperationsDone) {
-        const fullyDone = await isProductionOrderFullyDone(
-          order.id,
-          Number(order.quantity || 0),
-        );
+      if (isBatchOperationDone && !nextOperation) {
+        await finalizeProductionBatchStock(order, batch, batchQuantity);
+      }
 
-        if (fullyDone) {
-          await finalizeProductionOrderStock(order.id);
-        }
+      if (allBatchesDone) {
+        const { error: doneOrderError } = await supabase
+          .from("production_orders")
+          .update({
+            status: "done",
+            finished_goods_received_at: new Date().toISOString(),
+          })
+          .eq("id", order.id);
+
+        if (doneOrderError) throw doneOrderError;
       }
 
       setMessage(
@@ -2041,11 +2216,6 @@ export default function Production({
     setOpenJobs(next);
   }
 
-  const selectedProduct = products.find((item) => item.id === selectedProductId);
-  const selectedTechCard = techCards.find(
-    (item) => item.product_id === selectedProductId
-  );
-
   const finishOrder = finishOperation
     ? orders.find((item) => item.id === finishOperation.production_order_id)
     : null;
@@ -2068,7 +2238,79 @@ export default function Production({
     Number(finishBatchQuantity || 0) *
     Number(finishBatchItem?.operation?.price_per_unit || 0);
 
+  function getJobOperationProgress(job: Job) {
+    if (job.operations.length === 0 || job.qty <= 0) {
+      return getProgress(job.completed, job.qty);
+    }
+
+    const totalProgress = job.operations.reduce((sum, operation) => {
+      const completed = Math.min(
+        Number(operation.completed_quantity || 0),
+        Number(job.qty || 0),
+      );
+
+      return sum + completed / Number(job.qty || 1);
+    }, 0);
+
+    return Math.round((totalProgress / job.operations.length) * 100);
+  }
+
+  function getJobCurrentOperation(job: Job) {
+    const sortedOperations = [...job.operations].sort(
+      (a, b) => a.sort_order - b.sort_order,
+    );
+
+    return (
+      sortedOperations.find((operation) => operation.status === "in_progress") ||
+      sortedOperations.find(
+        (operation) =>
+          !["done", "cancelled", "archived"].includes(operation.status),
+      ) ||
+      sortedOperations[sortedOperations.length - 1] ||
+      null
+    );
+  }
+
+  function getJobFactStats(job: Job) {
+    const logs = operationLogs.filter((log) => log.production_order_id === job.realId);
+
+    const totalDurationSeconds = logs.reduce(
+      (sum, log) => sum + Number(log.duration_seconds || 0),
+      0,
+    );
+
+    const totalQuantity = logs.reduce(
+      (sum, log) => sum + Number(log.quantity || 0),
+      0,
+    );
+
+    const averageSeconds =
+      totalQuantity > 0 ? totalDurationSeconds / totalQuantity : 0;
+
+    return {
+      totalDurationSeconds,
+      totalQuantity,
+      averageSeconds,
+    };
+  }
+
+  function getJobBatchesStats(job: Job) {
+    const jobBatches = batches.filter(
+      (batch) => batch.production_order_id === job.realId,
+    );
+
+    return {
+      total: jobBatches.length,
+      inProgress: jobBatches.filter((batch) => batch.status === "in_progress").length,
+      done: jobBatches.filter((batch) => batch.status === "done").length,
+    };
+  }
+
   function renderJobsList(items: Job[], variant: "active" | "history") {
+    const selectedJob = selectedJobId
+      ? items.find((job) => job.realId === selectedJobId) || null
+      : null;
+
     return (
       <div style={{ display: "grid", gap: 14 }}>
         <div
@@ -2094,14 +2336,6 @@ export default function Production({
           </div>
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={expandAllJobs} style={secondaryBlueButtonStyle()}>
-              Развернуть все
-            </button>
-
-            <button onClick={collapseAllJobs} style={secondaryBlueButtonStyle()}>
-              Свернуть все
-            </button>
-
             <button onClick={loadAll} style={secondaryBlueButtonStyle()}>
               Обновить
             </button>
@@ -2112,6 +2346,9 @@ export default function Production({
                   onClick={() => {
                     setError("");
                     setMessage("");
+                    setSelectedProductId("");
+                    setQuantity("");
+                    setComment("");
                     setIsCreateOpen(true);
                   }}
                   style={primaryBlueButtonStyle}
@@ -2119,12 +2356,6 @@ export default function Production({
                   + Создать задание
                 </button>
 
-                <button
-                  onClick={handleTestPrint}
-                  style={secondaryBlueButtonStyle()}
-                >
-                  Тест печати
-                </button>
               </>
             )}
           </div>
@@ -2142,374 +2373,165 @@ export default function Production({
           </div>
         )}
 
-        {!loading &&
-          items.map((job) => {
-            const progress = getProgress(job.completed, job.qty);
-            const isOpen = !!openJobs[job.realId];
-            const sourceOrder = orders.find((order) => order.id === job.realId);
-            const jobBatches = batches.filter(
-              (batch) => batch.production_order_id === job.realId
-            );
+        {!loading && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+              gap: 12,
+            }}
+          >
+            {items.map((job) => {
+              const progress = getJobOperationProgress(job);
+              const currentOperation = getJobCurrentOperation(job);
+              const factStats = getJobFactStats(job);
+              const batchStats = getJobBatchesStats(job);
 
-            return (
-              <div
-                key={job.realId}
-                style={{
-                  border: "1px solid #dbeafe",
-                  borderRadius: 16,
-                  background: "#ffffff",
-                  overflow: "hidden",
-                }}
-              >
+              return (
                 <button
-                  onClick={() => toggleJob(job.realId)}
+                  key={job.realId}
+                  type="button"
+                  onClick={() => setSelectedJobId(job.realId)}
                   style={{
-                    width: "100%",
-                    background: "transparent",
-                    border: "none",
-                    padding: 16,
+                    border: "1px solid #dbeafe",
+                    borderRadius: 16,
+                    background: "#ffffff",
+                    padding: 14,
                     cursor: "pointer",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    gap: 12,
                     textAlign: "left",
+                    display: "grid",
+                    gap: 10,
+                    boxShadow: "0 8px 18px rgba(15, 23, 42, 0.04)",
                   }}
                 >
-                  <div style={{ minWidth: 0 }}>
-                    <div
-                      style={{
-                        fontSize: 18,
-                        fontWeight: 700,
-                        color: "#111827",
-                      }}
-                    >
-                      {job.product}
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div
+                        style={{
+                          fontSize: 16,
+                          fontWeight: 800,
+                          color: "#111827",
+                          lineHeight: 1.25,
+                        }}
+                      >
+                        {job.product}
+                      </div>
+
+                      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
+                        {job.id} · {job.status}
+                      </div>
                     </div>
 
                     <div
                       style={{
-                        fontSize: 13,
-                        color: "#6b7280",
-                        marginTop: 4,
+                        fontSize: 18,
+                        color: "#2563eb",
+                        fontWeight: 800,
+                        flexShrink: 0,
                       }}
                     >
-                      {job.id} · {job.status} · {progress}%
+                      →
                     </div>
                   </div>
 
                   <div
                     style={{
-                      flexShrink: 0,
-                      fontSize: 18,
-                      color: "#2563eb",
-                      fontWeight: 700,
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: 8,
+                      fontSize: 13,
+                      color: "#334155",
                     }}
                   >
-                    {isOpen ? "▲" : "▼"}
+                    <div>
+                      <div style={{ color: "#64748b" }}>Кол-во</div>
+                      <strong>{job.qty} шт</strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>Выполнено</div>
+                      <strong>{job.completed} шт</strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>Прогресс</div>
+                      <strong>{progress}%</strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>План</div>
+                      <strong>{formatTime(job.timeMin)}</strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>Операция</div>
+                      <strong>
+                        {currentOperation
+                          ? `${currentOperation.sort_order}. ${currentOperation.operation_name}`
+                          : "—"}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>Пачки</div>
+                      <strong>
+                        {batchStats.done}/{batchStats.total}
+                        {batchStats.inProgress > 0
+                          ? ` · в работе ${batchStats.inProgress}`
+                          : ""}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>Факт времени</div>
+                      <strong>
+                        {factStats.totalDurationSeconds > 0
+                          ? formatTimer(factStats.totalDurationSeconds)
+                          : "—"}
+                      </strong>
+                    </div>
+
+                    <div>
+                      <div style={{ color: "#64748b" }}>Среднее</div>
+                      <strong>
+                        {factStats.averageSeconds > 0
+                          ? `${factStats.averageSeconds.toFixed(1)} сек`
+                          : "—"}
+                      </strong>
+                    </div>
                   </div>
+
+                  <ProgressBar value={progress} />
                 </button>
+              );
+            })}          </div>
+        )}
 
-                {isOpen && sourceOrder && (
-                  <div style={{ padding: "0 16px 16px 16px" }}>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns:
-                          "repeat(auto-fit, minmax(180px, 1fr))",
-                        gap: 10,
-                      }}
-                    >
-                      <InfoBox label="Создано" value={job.issuedAt} />
-                      <InfoBox
-                        label="Плановое время"
-                        value={formatTime(job.timeMin)}
-                      />
-                      <InfoBox label="Количество" value={`${job.qty} шт`} />
-                      <InfoBox
-                        label="Себестоимость"
-                        value={formatMoney(job.cost)}
-                      />
-                    </div>
-
-                    <div style={{ marginTop: 14 }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          marginBottom: 8,
-                          fontSize: 14,
-                          color: "#374151",
-                        }}
-                      >
-                        <span>Общий прогресс задания</span>
-                        <span>{progress}%</span>
-                      </div>
-
-                      <ProgressBar value={progress} />
-                    </div>
-
-                    <div
-                      style={{
-                        marginTop: 16,
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 10,
-                        alignItems: "center",
-                        flexWrap: "wrap",
-                      }}
-                    >
-                      <div>
-                        <div
-                          style={{
-                            fontSize: 15,
-                            fontWeight: 700,
-                            color: "#111827",
-                          }}
-                        >
-                          Пачки после раскроя
-                        </div>
-                        <div
-                          style={{
-                            fontSize: 13,
-                            color: "#64748b",
-                            marginTop: 4,
-                          }}
-                        >
-                          Распечатано QR: {jobBatches.length} шт.
-                        </div>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 8,
-                          flexWrap: "wrap",
-                        }}
-                      >
-                        <button
-                          onClick={() => openQrHistory(sourceOrder)}
-                          style={secondaryBlueButtonStyle()}
-                        >
-                          История QR / пачки
-                        </button>
-
-                        {variant === "active" && (
-                          <button
-                            onClick={() => handleDeleteOrder(sourceOrder)}
-                            disabled={deletingOrderId === sourceOrder.id}
-                            style={{
-                              ...dangerButtonStyle,
-                              opacity:
-                                deletingOrderId === sourceOrder.id ? 0.7 : 1,
-                            }}
-                          >
-                            {deletingOrderId === sourceOrder.id
-                              ? "Удаление..."
-                              : "Удалить"}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: 16 }}>
-                      <div
-                        style={{
-                          fontSize: 15,
-                          fontWeight: 700,
-                          color: "#111827",
-                          marginBottom: 10,
-                        }}
-                      >
-                        Операции
-                      </div>
-
-                      {job.operations.length === 0 ? (
-                        <div style={emptySmallStyle}>
-                          Операции пока не добавлены
-                        </div>
-                      ) : (
-                        <div style={{ display: "grid", gap: 8 }}>
-                          {job.operations.map((operation) => {
-                            const operationProgress = getProgress(
-                              Number(operation.completed_quantity || 0),
-                              job.qty
-                            );
-
-                            const availableQuantity = getOperationLimit(
-                              sourceOrder,
-                              job.operations,
-                              operation
-                            );
-
-                            const canStart = canStartOperation(
-                              sourceOrder,
-                              job.operations,
-                              operation
-                            );
-
-                            const isInProgress =
-                              operation.status === "in_progress";
-                            const isDone = operation.status === "done";
-                            const earned =
-                              Number(operation.completed_quantity || 0) *
-                              Number(operation.price_per_unit || 0);
-
-                            return (
-                              <div
-                                key={operation.id}
-                                style={{
-                                  border: "1px solid #e5e7eb",
-                                  borderRadius: 12,
-                                  padding: 12,
-                                }}
-                              >
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    justifyContent: "space-between",
-                                    gap: 12,
-                                    marginBottom: 8,
-                                    fontSize: 14,
-                                    flexWrap: "wrap",
-                                  }}
-                                >
-                                  <div>
-                                    <div
-                                      style={{
-                                        fontWeight: 700,
-                                        color: "#111827",
-                                      }}
-                                    >
-                                      {operation.sort_order}.{" "}
-                                      {operation.operation_name}
-                                    </div>
-
-                                    <div
-                                      style={{
-                                        color: "#6b7280",
-                                        marginTop: 4,
-                                      }}
-                                    >
-                                      Статус: {getStatusLabel(operation.status)}
-                                    </div>
-
-                                    {!isDone && (
-                                      <div
-                                        style={{
-                                          color: "#64748b",
-                                          marginTop: 4,
-                                        }}
-                                      >
-                                        Доступно к выполнению сейчас:{" "}
-                                        {availableQuantity} шт
-                                      </div>
-                                    )}
-
-                                    {isInProgress && (
-                                      <div
-                                        style={{
-                                          color: "#2563eb",
-                                          marginTop: 4,
-                                          fontWeight: 700,
-                                        }}
-                                      >
-                                        В работе:{" "}
-                                        {formatTimer(
-                                          getElapsedSeconds(
-                                            operation.started_at,
-                                            nowTick
-                                          )
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {isDone && (
-                                      <div
-                                        style={{
-                                          color: "#166534",
-                                          marginTop: 4,
-                                        }}
-                                      >
-                                        Выполнено:{" "}
-                                        {operation.completed_quantity} шт ·
-                                        Заработано: {formatMoney(earned)}
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  <span style={{ color: "#4b5563" }}>
-                                    {operation.completed_quantity || 0} /{" "}
-                                    {job.qty}
-                                  </span>
-                                </div>
-
-                                <ProgressBar value={operationProgress} />
-
-                                {variant === "active" && (
-                                  <div
-                                    style={{
-                                      display: "flex",
-                                      gap: 8,
-                                      marginTop: 12,
-                                      flexWrap: "wrap",
-                                    }}
-                                  >
-                                    {canStart && (
-                                      <button
-                                        onClick={() =>
-                                          handleStartOperation(
-                                            sourceOrder,
-                                            operation
-                                          )
-                                        }
-                                        disabled={actionLoading}
-                                        style={primaryBlueButtonStyle}
-                                      >
-                                        Взять в работу
-                                      </button>
-                                    )}
-
-                                    {isInProgress && (
-                                      <button
-                                        onClick={() =>
-                                          openFinishOperation(operation)
-                                        }
-                                        disabled={actionLoading}
-                                        style={primaryGreenButtonStyle}
-                                      >
-                                        Закончить работу
-                                      </button>
-                                    )}
-
-                                    {!canStart && !isInProgress && !isDone && (
-                                      <div
-                                        style={{
-                                          padding: "10px 12px",
-                                          borderRadius: 10,
-                                          background: "#f8fafc",
-                                          border: "1px solid #e5e7eb",
-                                          color: "#64748b",
-                                          fontWeight: 600,
-                                        }}
-                                      >
-                                        Ждёт доступное количество с предыдущей
-                                        операции
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
+        {selectedJob && (
+          <ProductionOrderModal
+            job={selectedJob}
+            variant={variant}
+            sourceOrder={
+              orders.find((order) => order.id === selectedJob.realId) || null
+            }
+            jobBatches={batches.filter(
+              (batch) => batch.production_order_id === selectedJob.realId
+            )}
+            operationLogs={operationLogs.filter(
+              (log) => log.production_order_id === selectedJob.realId
+            )}
+            nowTick={nowTick}
+            actionLoading={actionLoading}
+            deletingOrderId={deletingOrderId}
+            onClose={() => setSelectedJobId(null)}
+            onOpenQrHistory={openQrHistory}
+            onDeleteOrder={handleDeleteOrder}
+            onStartOperation={handleStartOperation}
+            onOpenFinishOperation={openFinishOperation}
+            getOperationLimit={getOperationLimit}
+            canStartOperation={canStartOperation}
+          />
+        )}
       </div>
     );
   }
@@ -2790,114 +2812,23 @@ export default function Production({
       )}
 
       {isCreateOpen && (
-        <div onClick={() => setIsCreateOpen(false)} style={modalOverlayStyle}>
-          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
-            <div style={modalHeaderStyle}>
-              <div>
-                <div style={modalTitleStyle}>
-                  Создать производственное задание
-                </div>
-                <div style={{ marginTop: 4, color: "#64748b" }}>
-                  Выбери изделие, количество и система подтянет активную
-                  техкарту.
-                </div>
-              </div>
-
-              <button
-                onClick={() => setIsCreateOpen(false)}
-                style={closeButtonStyle}
-              >
-                ×
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleCreateProductionOrder}
-              style={{ display: "grid", gap: 12 }}
-            >
-              <Field label="Изделие">
-                <select
-                  value={selectedProductId}
-                  onChange={(e) => setSelectedProductId(e.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="">Выбери изделие</option>
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.article
-                        ? `${product.name} · ${product.article}`
-                        : product.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <div
-                style={{
-                  padding: 12,
-                  borderRadius: 12,
-                  border: "1px solid #dbeafe",
-                  background: selectedTechCard ? "#f0fdf4" : "#fef2f2",
-                  color: selectedTechCard ? "#166534" : "#991b1b",
-                  fontWeight: 700,
-                }}
-              >
-                {selectedProduct
-                  ? selectedTechCard
-                    ? `Активная техкарта найдена: ${selectedTechCard.name}`
-                    : "У этого изделия нет активной техкарты"
-                  : "Сначала выбери изделие"}
-              </div>
-
-              <Field label="Количество изделий">
-                <input
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value)}
-                  type="number"
-                  step="1"
-                  placeholder="Например: 50"
-                  style={inputStyle}
-                />
-              </Field>
-
-              <Field label="Комментарий">
-                <input
-                  value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  placeholder="Необязательно"
-                  style={inputStyle}
-                />
-              </Field>
-
-              <div
-                style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setIsCreateOpen(false)}
-                  style={secondaryBlueButtonStyle()}
-                >
-                  Отмена
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={creating}
-                  style={{
-                    ...primaryBlueButtonStyle,
-                    opacity: creating ? 0.7 : 1,
-                  }}
-                >
-                  {creating ? "Создание..." : "Создать задание"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <ProductionCreateOrderModal
+          products={products}
+          techCards={techCards}
+          selectedProductId={selectedProductId}
+          quantity={quantity}
+          comment={comment}
+          creating={creating}
+          onClose={() => setIsCreateOpen(false)}
+          onSubmit={handleCreateProductionOrder}
+          onProductChange={setSelectedProductId}
+          onQuantityChange={setQuantity}
+          onCommentChange={setComment}
+        />
       )}
 
       {finishOperation && (
-        <div onClick={() => setFinishOperation(null)} style={modalOverlayStyle}>
+        <div onClick={() => setFinishOperation(null)} style={stackedModalOverlayStyle}>
           <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
             <div style={modalHeaderStyle}>
               <div>
@@ -3019,7 +2950,7 @@ export default function Production({
       )}
 
       {finishBatchItem && (
-        <div onClick={() => setFinishBatchItem(null)} style={modalOverlayStyle}>
+        <div onClick={() => setFinishBatchItem(null)} style={stackedModalOverlayStyle}>
           <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
             <div style={modalHeaderStyle}>
               <div>
@@ -3142,7 +3073,7 @@ export default function Production({
       )}
 
       {qrHistoryOrder && (
-        <div onClick={() => setQrHistoryOrder(null)} style={modalOverlayStyle}>
+        <div onClick={() => setQrHistoryOrder(null)} style={stackedModalOverlayStyle}>
           <div
             onClick={(e) => e.stopPropagation()}
             style={{ ...modalBoxStyle, maxWidth: 760 }}
@@ -3408,6 +3339,12 @@ const modalOverlayStyle: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   padding: 20,
+};
+
+const stackedModalOverlayStyle: React.CSSProperties = {
+  ...modalOverlayStyle,
+  zIndex: 12000,
+  background: "rgba(15, 23, 42, 0.58)",
 };
 
 const modalBoxStyle: React.CSSProperties = {
