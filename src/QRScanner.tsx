@@ -55,6 +55,9 @@ type OperationInfo = {
   started_at: string | null;
   completed_quantity: number;
   price_per_unit: number | null;
+  planned_time_min_per_unit?: number | null;
+  planned_total_time_min?: number | null;
+  planned_total_price?: number | null;
 };
 
 type ScannedBatchData = {
@@ -110,6 +113,47 @@ function getTakeBatchButtonText(status: string | null | undefined) {
   }
 
   return "Взять пачку в работу";
+}
+
+function formatMoney(value: number) {
+  return `${Number(value || 0).toFixed(2)} ₽`;
+}
+
+function formatPlannedTime(minutes: number) {
+  const safeMinutes = Math.max(0, Math.round(Number(minutes || 0)));
+
+  if (safeMinutes <= 0) return "не указано";
+
+  const hours = Math.floor(safeMinutes / 60);
+  const restMinutes = safeMinutes % 60;
+
+  if (hours <= 0) return `${restMinutes} мин`;
+  if (restMinutes <= 0) return `${hours} ч`;
+
+  return `${hours} ч ${restMinutes} мин`;
+}
+
+function getPlannedTimeForQuantity(
+  operation: OperationInfo | null,
+  quantity: number,
+  orderQuantity?: number | null
+) {
+  if (!operation) return 0;
+
+  const plannedTimePerUnit = Number(operation.planned_time_min_per_unit || 0);
+
+  if (plannedTimePerUnit > 0) {
+    return plannedTimePerUnit * quantity;
+  }
+
+  const plannedTotalTime = Number(operation.planned_total_time_min || 0);
+  const totalQuantity = Number(orderQuantity || 0);
+
+  if (plannedTotalTime > 0 && totalQuantity > 0) {
+    return (plannedTotalTime / totalQuantity) * quantity;
+  }
+
+  return 0;
 }
 
 export default function QRScanner({
@@ -472,6 +516,14 @@ export default function QRScanner({
   const batchCompleted = Number(modalBatch?.completed_quantity || 0);
   const batchLeft = Math.max(0, batchQuantity - batchCompleted);
 
+  const operationPricePerUnit = Number(modalOperation?.price_per_unit || 0);
+  const plannedEarnedAmount = batchLeft * operationPricePerUnit;
+  const plannedTimeMinutes = getPlannedTimeForQuantity(
+    modalOperation,
+    batchLeft,
+    scannedBatchData?.order?.quantity
+  );
+
   const canTakeModalBatch =
     !!modalOperation &&
     !!modalBatch &&
@@ -769,6 +821,25 @@ export default function QRScanner({
                     : "операция не найдена"
                 }
               />
+
+              {modalOperation && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, 1fr)",
+                    gap: 8,
+                  }}
+                >
+                  <MiniBox
+                    label="Заработок"
+                    value={formatMoney(plannedEarnedAmount)}
+                  />
+                  <MiniBox
+                    label="Плановое время"
+                    value={formatPlannedTime(plannedTimeMinutes)}
+                  />
+                </div>
+              )}
 
               {!modalOperation && (
                 <div
