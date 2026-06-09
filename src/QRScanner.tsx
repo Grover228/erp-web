@@ -732,16 +732,16 @@ export default function QRScanner({
               <div>
                 <div
                   style={{
-                    fontSize: 22,
+                    fontSize: 20,
                     fontWeight: 900,
                     color: "#111827",
                   }}
                 >
-                  Пачка {modalBatch.batch_number}
+                  QR успешно прочитан
                 </div>
 
                 <div style={{ marginTop: 4, color: "#64748b", fontSize: 14 }}>
-                  QR успешно прочитан
+                  Пачка {modalBatch.batch_number}
                 </div>
               </div>
 
@@ -762,6 +762,114 @@ export default function QRScanner({
                 ×
               </button>
             </div>
+
+            {modalOperation && (
+              <div
+                style={{
+                  background: "linear-gradient(135deg, #dcfce7 0%, #f0fdf4 100%)",
+                  border: "1px solid #86efac",
+                  borderRadius: 20,
+                  padding: 16,
+                  display: "grid",
+                  gap: 12,
+                  boxShadow: "0 12px 26px rgba(22, 163, 74, 0.12)",
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: "#166534",
+                      fontWeight: 900,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.4,
+                    }}
+                  >
+                    Заработок за операцию
+                  </div>
+
+                  <div
+                    style={{
+                      marginTop: 4,
+                      fontSize: 42,
+                      lineHeight: 1,
+                      color: "#15803d",
+                      fontWeight: 950,
+                    }}
+                  >
+                    {formatMoney(plannedEarnedAmount)}
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 8,
+                  }}
+                >
+                  <div
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #bbf7d0",
+                      borderRadius: 14,
+                      padding: 12,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                      Плановое время
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        fontSize: 18,
+                        color: "#111827",
+                        fontWeight: 900,
+                      }}
+                    >
+                      {formatPlannedTime(plannedTimeMinutes)}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #bbf7d0",
+                      borderRadius: 14,
+                      padding: 12,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+                      Осталось сделать
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 4,
+                        fontSize: 18,
+                        color: "#111827",
+                        fontWeight: 900,
+                      }}
+                    >
+                      {batchLeft} шт
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 14,
+                    background: "#ffffff",
+                    border: "1px solid #bbf7d0",
+                    color: "#0f172a",
+                    fontWeight: 900,
+                    lineHeight: 1.35,
+                  }}
+                >
+                  {modalOperation.sort_order}. {modalOperation.operation_name}
+                </div>
+              </div>
+            )}
 
             <div
               style={{
@@ -821,25 +929,6 @@ export default function QRScanner({
                     : "операция не найдена"
                 }
               />
-
-              {modalOperation && (
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(2, 1fr)",
-                    gap: 8,
-                  }}
-                >
-                  <MiniBox
-                    label="Заработок"
-                    value={formatMoney(plannedEarnedAmount)}
-                  />
-                  <MiniBox
-                    label="Плановое время"
-                    value={formatPlannedTime(plannedTimeMinutes)}
-                  />
-                </div>
-              )}
 
               {!modalOperation && (
                 <div
