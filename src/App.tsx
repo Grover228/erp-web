@@ -16,6 +16,8 @@ import UnitsDirectory from "./directories/UnitsDirectory";
 import MaterialsDirectory from "./directories/MaterialsDirectory";
 import ConsumablesDirectory from "./directories/ConsumablesDirectory";
 import ProductsDirectory from "./directories/ProductsDirectory";
+import ResaleProductsDirectory from "./directories/ResaleProductsDirectory";
+import AssetsDirectory from "./directories/AssetsDirectory";
 import { supabase } from "./supabase";
 import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
 
@@ -31,6 +33,8 @@ type Screen =
   | "directory-suppliers"
   | "directory-counterparties"
   | "directory-products"
+  | "directory-resale-products"
+  | "directory-assets"
   | "directory-materials"
   | "directory-consumables"
   | "directory-operations"
@@ -142,6 +146,10 @@ function App() {
       ? "Контрагенты"
       : currentScreen === "directory-products"
       ? "Изделия"
+      : currentScreen === "directory-resale-products"
+      ? "Товары на перепродажу"
+      : currentScreen === "directory-assets"
+      ? "Имущество и оборудование"
       : currentScreen === "directory-materials"
       ? "Материалы"
       : currentScreen === "directory-consumables"
@@ -181,6 +189,10 @@ function App() {
       ? "Справочник контрагентов"
       : currentScreen === "directory-products"
       ? "Справочник изделий"
+      : currentScreen === "directory-resale-products"
+      ? "Справочник товаров на перепродажу"
+      : currentScreen === "directory-assets"
+      ? "Справочник имущества и оборудования"
       : currentScreen === "directory-materials"
       ? "Справочник материалов"
       : currentScreen === "directory-consumables"
@@ -295,6 +307,8 @@ function App() {
         currentScreen === "directory-suppliers" ||
         currentScreen === "directory-counterparties" ||
         currentScreen === "directory-products" ||
+        currentScreen === "directory-resale-products" ||
+        currentScreen === "directory-assets" ||
         currentScreen === "directory-materials" ||
         currentScreen === "directory-consumables" ||
         currentScreen === "directory-operations" ||
@@ -448,6 +462,12 @@ function App() {
       case "products":
         setCurrentScreen("directory-products");
         break;
+      case "resale-products":
+        setCurrentScreen("directory-resale-products");
+        break;
+      case "assets":
+        setCurrentScreen("directory-assets");
+        break;
       case "materials":
         setCurrentScreen("directory-materials");
         break;
@@ -504,6 +524,8 @@ function App() {
       currentScreen === "directory-suppliers" ||
       currentScreen === "directory-counterparties" ||
       currentScreen === "directory-products" ||
+      currentScreen === "directory-resale-products" ||
+      currentScreen === "directory-assets" ||
       currentScreen === "directory-materials" ||
       currentScreen === "directory-consumables" ||
       currentScreen === "directory-operations" ||
@@ -751,6 +773,18 @@ function App() {
       return <ProductsDirectory />;
     }
 
+    if (currentScreen === "directory-resale-products") {
+      if (!canManageDirectories) return renderAccessDenied();
+
+      return <ResaleProductsDirectory />;
+    }
+
+    if (currentScreen === "directory-assets") {
+      if (!canManageDirectories) return renderAccessDenied();
+
+      return <AssetsDirectory />;
+    }
+
     if (currentScreen === "directory-operations") {
       if (!canManageDirectories) return renderAccessDenied();
 
@@ -957,6 +991,8 @@ function App() {
                       currentScreen === "directory-suppliers" ||
                       currentScreen === "directory-counterparties" ||
                       currentScreen === "directory-products" ||
+        currentScreen === "directory-resale-products" ||
+                      currentScreen === "directory-assets" ||
                       currentScreen === "directory-materials" ||
                       currentScreen === "directory-consumables" ||
                       currentScreen === "directory-operations" ||

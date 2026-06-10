@@ -60,6 +60,11 @@ export default function DirectoriesPage({
           subtitle: "Готовая продукция, которую производим и продаём",
         },
         {
+          key: "resale-products",
+          title: "Товары на перепродажу",
+          subtitle: "Покупные товары, которые продаются без производства",
+        },
+        {
           key: "materials",
           title: "Материалы",
           subtitle: "Ткани, полотна, сырьё и основные материалы",
@@ -78,6 +83,11 @@ export default function DirectoriesPage({
           key: "variants",
           title: "Цвета и размеры",
           subtitle: "Цветовые варианты, размеры и размерные сетки",
+        },
+        {
+          key: "assets",
+          title: "Имущество и оборудование",
+          subtitle: "Станки, принтеры, инструменты, мебель и прочее имущество",
         },
       ],
     },
