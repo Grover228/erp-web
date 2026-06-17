@@ -35,6 +35,25 @@ type UnitItem = {
   short_name: string;
 };
 
+type ColumnFilterKey =
+  | "name"
+  | "article"
+  | "category"
+  | "color"
+  | "unit"
+  | "activity";
+
+type ColumnFilters = Record<ColumnFilterKey, string[]>;
+
+const emptyColumnFilters: ColumnFilters = {
+  name: [],
+  article: [],
+  category: [],
+  color: [],
+  unit: [],
+  activity: [],
+};
+
 export default function ConsumablesDirectory() {
   const [items, setItems] = useState<ConsumableItem[]>([]);
   const [categories, setCategories] = useState<CategoryItem[]>([]);
@@ -45,10 +64,20 @@ export default function ConsumablesDirectory() {
   const [saving, setSaving] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
   const [search, setSearch] = useState("");
+  const [showOnlyActive, setShowOnlyActive] = useState(true);
+  const [openColumnFilter, setOpenColumnFilter] =
+    useState<ColumnFilterKey | null>(null);
+  const [columnFilters, setColumnFilters] =
+    useState<ColumnFilters>(emptyColumnFilters);
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const [transferItems, setTransferItems] = useState<ConsumableItem[]>([]);
+  const [transferMode, setTransferMode] = useState<"resale" | "asset">("resale");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [viewItemId, setViewItemId] = useState<string | null>(null);
@@ -359,11 +388,365 @@ export default function ConsumablesDirectory() {
     return `${unit.name} (${unit.short_name})`;
   }
 
+  function getItemColumnValue(item: ConsumableItem, key: ColumnFilterKey) {
+    if (key === "name") return item.name || "—";
+    if (key === "article") return item.article || "—";
+    if (key === "category") return getCategoryName(item.category_id);
+    if (key === "color") return getColorName(item.color_id);
+    if (key === "unit") return getUnitLabel(item.unit_id);
+    if (key === "activity") return item.is_active ? "Активен" : "Неактивен";
+
+    return "—";
+  }
+
+  function getColumnFilterOptions(key: ColumnFilterKey) {
+    const values = items.map((item) => getItemColumnValue(item, key));
+    return Array.from(new Set(values)).sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    );
+  }
+
+  function toggleColumnFilterValue(key: ColumnFilterKey, value: string) {
+    setColumnFilters((prev) => {
+      const currentValues = prev[key];
+      const nextValues = currentValues.includes(value)
+        ? currentValues.filter((item) => item !== value)
+        : [...currentValues, value];
+
+      return {
+        ...prev,
+        [key]: nextValues,
+      };
+    });
+  }
+
+  function clearColumnFilter(key: ColumnFilterKey) {
+    setColumnFilters((prev) => ({
+      ...prev,
+      [key]: [],
+    }));
+  }
+
+  function clearAllColumnFilters() {
+    setColumnFilters(emptyColumnFilters);
+    setOpenColumnFilter(null);
+  }
+
+  function isColumnFilterActive(key: ColumnFilterKey) {
+    return columnFilters[key].length > 0;
+  }
+
+  function openTransferModal(itemsToTransfer: ConsumableItem[], mode: "resale" | "asset" = "resale") {
+    const safeItems = itemsToTransfer.filter(Boolean);
+
+    if (safeItems.length === 0) {
+      setError("Выбери хотя бы один расходник");
+      return;
+    }
+
+    setTransferItems(safeItems);
+    setTransferMode(mode);
+    setIsTransferOpen(true);
+    setError("");
+    setMessage("");
+  }
+
+  function closeTransferModal() {
+    if (movingId) return;
+
+    setIsTransferOpen(false);
+    setTransferItems([]);
+  }
+
+  async function transferOneItemToResale(item: ConsumableItem) {
+    const itemPayload = {
+      item_type: "resale_product",
+      name: item.name.trim(),
+      article: item.article || null,
+      unit_id: item.unit_id,
+      default_price: item.default_price,
+      min_stock: item.min_stock,
+      is_active: true,
+      source_table: "consumables",
+      source_id: item.id,
+    };
+
+    const { data: sourceItems, error: sourceError } = await supabase
+      .from("items")
+      .select("id, item_type, is_active, name, article")
+      .eq("source_table", "consumables")
+      .eq("source_id", item.id)
+      .limit(1);
+
+    if (sourceError) throw sourceError;
+
+    let targetItem = sourceItems?.[0] || null;
+
+    if (!targetItem && item.article) {
+      const { data: articleItems, error: articleError } = await supabase
+        .from("items")
+        .select("id, item_type, is_active, name, article")
+        .eq("item_type", "resale_product")
+        .eq("article", item.article)
+        .limit(1);
+
+      if (articleError) throw articleError;
+
+      targetItem = articleItems?.[0] || null;
+    }
+
+    if (targetItem?.id) {
+      const { error: itemUpdateError } = await supabase
+        .from("items")
+        .update(itemPayload)
+        .eq("id", targetItem.id);
+
+      if (itemUpdateError) throw itemUpdateError;
+    } else {
+      const { error: itemInsertError } = await supabase
+        .from("items")
+        .insert(itemPayload);
+
+      if (itemInsertError) throw itemInsertError;
+    }
+
+    const { data: updatedItem, error: itemError } = await supabase
+      .from("consumables")
+      .update({ is_active: false })
+      .eq("id", item.id)
+      .select()
+      .single();
+
+    if (itemError) throw itemError;
+
+    return updatedItem as ConsumableItem;
+  }
+
+  async function transferOneItemToAsset(item: ConsumableItem) {
+    const itemPayload = {
+      item_type: "asset",
+      name: item.name.trim(),
+      article: item.article || null,
+      unit_id: item.unit_id,
+      default_price: item.default_price,
+      min_stock: item.min_stock,
+      is_active: true,
+      source_table: "consumables",
+      source_id: item.id,
+    };
+
+    const { data: sourceItems, error: sourceError } = await supabase
+      .from("items")
+      .select("id, item_type, is_active, name, article")
+      .eq("source_table", "consumables")
+      .eq("source_id", item.id)
+      .limit(1);
+
+    if (sourceError) throw sourceError;
+
+    let targetItem = sourceItems?.[0] || null;
+
+    if (!targetItem && item.article) {
+      const { data: articleItems, error: articleError } = await supabase
+        .from("items")
+        .select("id, item_type, is_active, name, article")
+        .eq("item_type", "asset")
+        .eq("article", item.article)
+        .limit(1);
+
+      if (articleError) throw articleError;
+
+      targetItem = articleItems?.[0] || null;
+    }
+
+    let itemId = targetItem?.id || "";
+
+    if (itemId) {
+      const { error: itemUpdateError } = await supabase
+        .from("items")
+        .update(itemPayload)
+        .eq("id", itemId);
+
+      if (itemUpdateError) throw itemUpdateError;
+    } else {
+      const { data: insertedItem, error: itemInsertError } = await supabase
+        .from("items")
+        .insert(itemPayload)
+        .select("id")
+        .single();
+
+      if (itemInsertError) throw itemInsertError;
+
+      itemId = insertedItem.id;
+    }
+
+    const { data: existingAssets, error: existingAssetError } = await supabase
+      .from("assets")
+      .select("id")
+      .eq("item_id", itemId)
+      .limit(1);
+
+    if (existingAssetError) throw existingAssetError;
+
+    if (!existingAssets || existingAssets.length === 0) {
+      const inventoryBase = item.article || item.id.slice(0, 8);
+      const inventoryNumber = `INV-${inventoryBase}`.replace(/\s+/g, "-");
+
+      const { error: assetInsertError } = await supabase.from("assets").insert({
+        item_id: itemId,
+        inventory_number: inventoryNumber,
+        serial_number: null,
+        asset_type: "equipment",
+        status: "active",
+        location: null,
+        responsible_user_id: null,
+        purchase_price: item.default_price,
+        purchase_date: null,
+        comment: item.comment || null,
+        is_active: true,
+      });
+
+      if (assetInsertError) throw assetInsertError;
+    }
+
+    const { data: updatedItem, error: itemError } = await supabase
+      .from("consumables")
+      .update({ is_active: false })
+      .eq("id", item.id)
+      .select()
+      .single();
+
+    if (itemError) throw itemError;
+
+    return updatedItem as ConsumableItem;
+  }
+
+  async function handleTransferItems() {
+    const count = transferItems.length;
+    const targetText =
+      transferMode === "resale" ? "товары на перепродажу" : "имущество";
+
+    const confirmed = window.confirm(
+      [
+        `Перенести ${count} поз. в ${targetText}?`,
+        "",
+        "Дубли по артикулу создаваться не будут.",
+        "Старые расходники останутся в базе, но станут неактивными.",
+      ].join("\n"),
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setMovingId("bulk-transfer");
+      setError("");
+      setMessage("");
+
+      const updatedItems: ConsumableItem[] = [];
+
+      for (const item of transferItems) {
+        const updatedItem =
+          transferMode === "resale"
+            ? await transferOneItemToResale(item)
+            : await transferOneItemToAsset(item);
+
+        updatedItems.push(updatedItem);
+      }
+
+      setItems((prev) =>
+        prev.map((item) => {
+          const updatedItem = updatedItems.find((row) => row.id === item.id);
+          return updatedItem || item;
+        }),
+      );
+
+      if (viewItem && updatedItems.some((item) => item.id === viewItem.id)) {
+        const updatedViewItem = updatedItems.find((item) => item.id === viewItem.id);
+        if (updatedViewItem) {
+          fillEditForm(updatedViewItem);
+        }
+      }
+
+      setSelectedItemIds((prev) =>
+        prev.filter((id) => !updatedItems.some((item) => item.id === id)),
+      );
+      setIsTransferOpen(false);
+      setTransferItems([]);
+
+      setMessage(
+        transferMode === "resale"
+          ? `Перенесено в товары на перепродажу: ${updatedItems.length}.`
+          : `Перенесено в имущество: ${updatedItems.length}.`,
+      );
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось выполнить перенос",
+      );
+    } finally {
+      setMovingId(null);
+    }
+  }
+
+  function handleMoveToResaleProduct(item: ConsumableItem) {
+    openTransferModal([item], "resale");
+  }
+
+  function handleMoveToAsset(item: ConsumableItem) {
+    openTransferModal([item], "asset");
+  }
+
+  function toggleSelectedItem(itemId: string) {
+    setSelectedItemIds((prev) =>
+      prev.includes(itemId)
+        ? prev.filter((id) => id !== itemId)
+        : [...prev, itemId],
+    );
+  }
+
+  function toggleAllFilteredItems() {
+    const filteredIds = filteredItems.map((item) => item.id);
+    const allSelected = filteredIds.every((id) => selectedItemIds.includes(id));
+
+    if (allSelected) {
+      setSelectedItemIds((prev) =>
+        prev.filter((id) => !filteredIds.includes(id)),
+      );
+      return;
+    }
+
+    setSelectedItemIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+  }
+
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return items;
 
     return items.filter((item) => {
+      if (showOnlyActive && !item.is_active) {
+        return false;
+      }
+
+      const matchesColumnFilters = (
+        Object.keys(columnFilters) as ColumnFilterKey[]
+      ).every((key) => {
+        const selectedValues = columnFilters[key];
+
+        if (selectedValues.length === 0) {
+          return true;
+        }
+
+        return selectedValues.includes(getItemColumnValue(item, key));
+      });
+
+      if (!matchesColumnFilters) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
       const categoryName = getCategoryName(item.category_id);
       const colorName = getColorName(item.color_id);
       const unitName = getUnitLabel(item.unit_id);
@@ -380,7 +763,7 @@ export default function ConsumablesDirectory() {
         (item.comment || "").toLowerCase().includes(query)
       );
     });
-  }, [items, search, categories, colors, units]);
+  }, [items, search, categories, colors, units, showOnlyActive, columnFilters]);
 
   const viewItem = items.find((item) => item.id === viewItemId) || null;
 
@@ -435,11 +818,107 @@ export default function ConsumablesDirectory() {
                 maxWidth: "100%",
               }}
             />
+
+            {selectedItemIds.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedItems = items.filter((item) =>
+                      selectedItemIds.includes(item.id),
+                    );
+                    openTransferModal(selectedItems, "resale");
+                  }}
+                  style={secondaryButtonStyle}
+                >
+                  Перенести выбранные в товары
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedItems = items.filter((item) =>
+                      selectedItemIds.includes(item.id),
+                    );
+                    openTransferModal(selectedItems, "asset");
+                  }}
+                  style={secondaryButtonStyle}
+                >
+                  Перенести выбранные в имущество
+                </button>
+              </>
+            )}
+
+            {(Object.keys(columnFilters) as ColumnFilterKey[]).some(
+              (key) => columnFilters[key].length > 0,
+            ) && (
+              <button
+                type="button"
+                onClick={clearAllColumnFilters}
+                style={secondaryButtonStyle}
+              >
+                Сбросить фильтры
+              </button>
+            )}
           </div>
 
-          <button onClick={loadAll} style={secondaryButtonStyle}>
-            Обновить
-          </button>
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              alignItems: "center",
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                color: "#0f172a",
+                fontWeight: 700,
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <span>Только активные</span>
+              <button
+                type="button"
+                onClick={() => setShowOnlyActive((prev) => !prev)}
+                aria-pressed={showOnlyActive}
+                style={{
+                  width: 50,
+                  height: 28,
+                  border: "none",
+                  borderRadius: 999,
+                  background: showOnlyActive ? "#22c55e" : "#cbd5e1",
+                  padding: 3,
+                  cursor: "pointer",
+                  transition: "background 0.2s ease",
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    width: 22,
+                    height: 22,
+                    borderRadius: 999,
+                    background: "#ffffff",
+                    transform: showOnlyActive
+                      ? "translateX(22px)"
+                      : "translateX(0)",
+                    transition: "transform 0.2s ease",
+                    boxShadow: "0 2px 5px rgba(15, 23, 42, 0.25)",
+                  }}
+                />
+              </button>
+            </label>
+
+            <button onClick={loadAll} style={secondaryButtonStyle}>
+              Обновить
+            </button>
+          </div>
         </div>
       </div>
 
@@ -497,30 +976,141 @@ export default function ConsumablesDirectory() {
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
-                minWidth: 920,
+                minWidth: 980,
               }}
             >
               <thead>
                 <tr style={{ background: "#f8fbff" }}>
-                  {[
-                    "Название",
-                    "Артикул",
-                    "Категория",
-                    "Цвет",
-                    "Ед. изм.",
-                    "Активность",
-                    "Действия",
-                  ].map((title) => (
-                    <th key={title} style={headCellStyle}>
-                      {title}
-                    </th>
-                  ))}
+                  <th style={headCellStyle}>
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredItems.length > 0 &&
+                        filteredItems.every((item) =>
+                          selectedItemIds.includes(item.id),
+                        )
+                      }
+                      onChange={toggleAllFilteredItems}
+                      title="Выбрать все отфильтрованные"
+                    />
+                  </th>
+
+                  <FilterableHeadCell
+                    title="Название"
+                    filterKey="name"
+                    options={getColumnFilterOptions("name")}
+                    selectedValues={columnFilters.name}
+                    isOpen={openColumnFilter === "name"}
+                    isActive={isColumnFilterActive("name")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "name" ? null : "name",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("name", value)
+                    }
+                    onClear={() => clearColumnFilter("name")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Артикул"
+                    filterKey="article"
+                    options={getColumnFilterOptions("article")}
+                    selectedValues={columnFilters.article}
+                    isOpen={openColumnFilter === "article"}
+                    isActive={isColumnFilterActive("article")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "article" ? null : "article",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("article", value)
+                    }
+                    onClear={() => clearColumnFilter("article")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Категория"
+                    filterKey="category"
+                    options={getColumnFilterOptions("category")}
+                    selectedValues={columnFilters.category}
+                    isOpen={openColumnFilter === "category"}
+                    isActive={isColumnFilterActive("category")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "category" ? null : "category",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("category", value)
+                    }
+                    onClear={() => clearColumnFilter("category")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Цвет"
+                    filterKey="color"
+                    options={getColumnFilterOptions("color")}
+                    selectedValues={columnFilters.color}
+                    isOpen={openColumnFilter === "color"}
+                    isActive={isColumnFilterActive("color")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "color" ? null : "color",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("color", value)
+                    }
+                    onClear={() => clearColumnFilter("color")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Ед. изм."
+                    filterKey="unit"
+                    options={getColumnFilterOptions("unit")}
+                    selectedValues={columnFilters.unit}
+                    isOpen={openColumnFilter === "unit"}
+                    isActive={isColumnFilterActive("unit")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "unit" ? null : "unit",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("unit", value)
+                    }
+                    onClear={() => clearColumnFilter("unit")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Активность"
+                    filterKey="activity"
+                    options={getColumnFilterOptions("activity")}
+                    selectedValues={columnFilters.activity}
+                    isOpen={openColumnFilter === "activity"}
+                    isActive={isColumnFilterActive("activity")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "activity" ? null : "activity",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("activity", value)
+                    }
+                    onClear={() => clearColumnFilter("activity")}
+                  />
+
+                  <th style={headCellStyle}>Действия</th>
                 </tr>
               </thead>
 
               <tbody>
                 {filteredItems.map((item) => {
                   const isSelected = selectedItemId === item.id;
+                  const isChecked = selectedItemIds.includes(item.id);
                   const isDeleting = deletingId === item.id;
 
                   return (
@@ -530,6 +1120,14 @@ export default function ConsumablesDirectory() {
                         background: isSelected ? "#eef4ff" : "#ffffff",
                       }}
                     >
+                      <td style={cellStyle}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleSelectedItem(item.id)}
+                        />
+                      </td>
+
                       <td
                         style={{
                           padding: "14px 16px",
@@ -664,6 +1262,36 @@ export default function ConsumablesDirectory() {
                     flexWrap: "wrap",
                   }}
                 >
+                  <button
+                    onClick={() => handleMoveToResaleProduct(viewItem)}
+                    disabled={Boolean(movingId)}
+                    style={{
+                      ...secondaryButtonStyle,
+                      borderColor: "#f59e0b",
+                      color: "#92400e",
+                      background: movingId ? "#fef3c7" : "#fff",
+                      cursor: movingId ? "default" : "pointer",
+                    }}
+                  >
+                    {movingId
+                      ? "Перенос..."
+                      : "Перенести в товары на перепродажу"}
+                  </button>
+
+                  <button
+                    onClick={() => handleMoveToAsset(viewItem)}
+                    disabled={Boolean(movingId)}
+                    style={{
+                      ...secondaryButtonStyle,
+                      borderColor: "#0ea5e9",
+                      color: "#0369a1",
+                      background: movingId ? "#e0f2fe" : "#fff",
+                      cursor: movingId ? "default" : "pointer",
+                    }}
+                  >
+                    {movingId ? "Перенос..." : "Перенести в имущество"}
+                  </button>
+
                   <button
                     onClick={() => {
                       fillEditForm(viewItem);
@@ -871,6 +1499,128 @@ export default function ConsumablesDirectory() {
         </div>
       )}
 
+
+      {isTransferOpen && (
+        <div onClick={closeTransferModal} style={modalOverlayStyle}>
+          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>Перенос расходников</div>
+                <div style={{ color: "#64748b", marginTop: 4 }}>
+                  Выбрано позиций: {transferItems.length}
+                </div>
+              </div>
+
+              <button onClick={closeTransferModal} style={closeButtonStyle}>
+                ×
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 12,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setTransferMode("resale")}
+                  style={{
+                    ...secondaryButtonStyle,
+                    borderColor: transferMode === "resale" ? "#f59e0b" : "#cbd5e1",
+                    background: transferMode === "resale" ? "#fffbeb" : "#ffffff",
+                    color: transferMode === "resale" ? "#92400e" : "#0f172a",
+                  }}
+                >
+                  Товары на перепродажу
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTransferMode("asset")}
+                  style={{
+                    ...secondaryButtonStyle,
+                    borderColor: transferMode === "asset" ? "#0ea5e9" : "#cbd5e1",
+                    background: transferMode === "asset" ? "#e0f2fe" : "#ffffff",
+                    color: transferMode === "asset" ? "#0369a1" : "#0f172a",
+                  }}
+                >
+                  Имущество
+                </button>
+              </div>
+
+              <div
+                style={{
+                  border: "1px solid #dbe4f0",
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "#f8fbff",
+                  maxHeight: 260,
+                  overflowY: "auto",
+                }}
+              >
+                {transferItems.map((item) => (
+                  <div
+                    key={item.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      padding: "8px 0",
+                      borderBottom: "1px solid #e5edf7",
+                    }}
+                  >
+                    <div style={{ color: "#0f172a", fontWeight: 700 }}>
+                      {item.name}
+                    </div>
+                    <div style={{ color: "#64748b" }}>
+                      {item.article || "Без артикула"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ color: "#64748b", lineHeight: 1.6 }}>
+                Дубли по артикулу создаваться не будут. После переноса старые
+                расходники останутся в базе, но станут неактивными.
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closeTransferModal}
+                  style={secondaryButtonStyle}
+                >
+                  Отмена
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTransferItems}
+                  disabled={Boolean(movingId)}
+                  style={{
+                    ...primaryButtonStyle,
+                    minWidth: 180,
+                    background: movingId ? "#a5b4fc" : "#4f46e5",
+                  }}
+                >
+                  {movingId ? "Перенос..." : "Перенести"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCreateOpen && (
         <div onClick={() => setIsCreateOpen(false)} style={modalOverlayStyle}>
           <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
@@ -1050,6 +1800,196 @@ export default function ConsumablesDirectory() {
     </div>
   );
 }
+
+function FilterableHeadCell({
+  title,
+  options,
+  selectedValues,
+  isOpen,
+  isActive,
+  onToggleOpen,
+  onToggleValue,
+  onClear,
+}: {
+  title: string;
+  filterKey: ColumnFilterKey;
+  options: string[];
+  selectedValues: string[];
+  isOpen: boolean;
+  isActive: boolean;
+  onToggleOpen: () => void;
+  onToggleValue: (value: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <th style={{ ...headCellStyle, position: "relative", overflow: "visible" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span>{title}</span>
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleOpen();
+          }}
+          title="Фильтр"
+          style={{
+            width: 24,
+            height: 24,
+            border: isActive ? "1px solid #4f46e5" : "1px solid transparent",
+            borderRadius: 8,
+            background: isActive ? "#eef2ff" : "transparent",
+            color: isActive ? "#4f46e5" : "#64748b",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 900,
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          ▼
+        </button>
+      </div>
+
+      {isOpen && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            zIndex: 100,
+            width: 520,
+            minWidth: 420,
+            maxWidth: "90vw",
+            minHeight: 220,
+            maxHeight: 420,
+            overflow: "auto",
+            resize: "both",
+            background: "#ffffff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 14,
+            boxShadow: "0 18px 40px rgba(15, 23, 42, 0.18)",
+            padding: 12,
+            boxSizing: "border-box",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ color: "#0f172a", fontWeight: 800 }}>
+              {title}
+            </div>
+
+            <button
+              type="button"
+              onClick={onClear}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "#2563eb",
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              Сбросить
+            </button>
+          </div>
+
+          <div
+            style={{
+              color: "#64748b",
+              fontSize: 12,
+              fontWeight: 500,
+              marginBottom: 8,
+              lineHeight: 1.4,
+            }}
+          >
+            Можно потянуть за правый нижний угол, чтобы расширить окно.
+          </div>
+
+          {options.length === 0 ? (
+            <div style={{ color: "#64748b", padding: 8 }}>
+              Нет значений
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 4 }}>
+              {options.map((option) => {
+                const checked = selectedValues.includes(option);
+
+                return (
+                  <label
+                    key={option}
+                    title={option}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "22px minmax(0, 1fr)",
+                      alignItems: "start",
+                      columnGap: 10,
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      background: checked ? "#eef2ff" : "#ffffff",
+                      color: "#0f172a",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      width: "100%",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleValue(option)}
+                      style={{
+                        margin: 0,
+                        marginTop: 2,
+                        justifySelf: "start",
+                        width: 16,
+                        height: 16,
+                      }}
+                    />
+
+                    <span
+                      style={{
+                        display: "block",
+                        minWidth: 0,
+                        color: "#0f172a",
+                        whiteSpace: "normal",
+                        overflowWrap: "anywhere",
+                        wordBreak: "break-word",
+                        lineHeight: 1.35,
+                        textAlign: "left",
+                      }}
+                    >
+                      {option}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </th>
+  );
+}
+
 
 function Field({
   label,

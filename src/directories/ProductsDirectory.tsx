@@ -56,6 +56,10 @@ export default function ProductsDirectory() {
     useState<ColumnFilterKey | null>(null);
   const [columnFilters, setColumnFilters] =
     useState<ColumnFilters>(emptyColumnFilters);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [isTransferOpen, setIsTransferOpen] = useState(false);
+  const [transferProducts, setTransferProducts] = useState<ProductItem[]>([]);
+  const [transferMode, setTransferMode] = useState<"resale" | "asset">("resale");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [viewProductId, setViewProductId] = useState<string | null>(null);
@@ -344,132 +348,289 @@ export default function ProductsDirectory() {
     }
   }
 
-  async function handleMoveToResaleProduct(product: ProductItem) {
+  function openTransferModal(productsToTransfer: ProductItem[], mode: "resale" | "asset" = "resale") {
+    const safeProducts = productsToTransfer.filter(Boolean);
+
+    if (safeProducts.length === 0) {
+      setError("Выбери хотя бы одно изделие");
+      return;
+    }
+
+    setTransferProducts(safeProducts);
+    setTransferMode(mode);
+    setIsTransferOpen(true);
+    setError("");
+    setMessage("");
+  }
+
+  function closeTransferModal() {
+    if (movingId) return;
+
+    setIsTransferOpen(false);
+    setTransferProducts([]);
+  }
+
+  async function transferOneProductToResale(product: ProductItem) {
+    const itemPayload = {
+      item_type: "resale_product",
+      name: product.name.trim(),
+      article: product.article || null,
+      unit_id: product.unit_id,
+      default_price: product.default_price,
+      min_stock: product.min_stock,
+      is_active: true,
+      source_table: "products",
+      source_id: product.id,
+    };
+
+    const { data: sourceItems, error: sourceError } = await supabase
+      .from("items")
+      .select("id, item_type, is_active, name, article")
+      .eq("source_table", "products")
+      .eq("source_id", product.id)
+      .limit(1);
+
+    if (sourceError) throw sourceError;
+
+    let targetItem = sourceItems?.[0] || null;
+
+    if (!targetItem && product.article) {
+      const { data: articleItems, error: articleError } = await supabase
+        .from("items")
+        .select("id, item_type, is_active, name, article")
+        .eq("item_type", "resale_product")
+        .eq("article", product.article)
+        .limit(1);
+
+      if (articleError) throw articleError;
+
+      targetItem = articleItems?.[0] || null;
+    }
+
+    if (targetItem?.id) {
+      const { error: itemUpdateError } = await supabase
+        .from("items")
+        .update(itemPayload)
+        .eq("id", targetItem.id);
+
+      if (itemUpdateError) throw itemUpdateError;
+    } else {
+      const { error: itemInsertError } = await supabase
+        .from("items")
+        .insert(itemPayload);
+
+      if (itemInsertError) throw itemInsertError;
+    }
+
+    const { data: updatedProduct, error: productError } = await supabase
+      .from("products")
+      .update({ is_active: false })
+      .eq("id", product.id)
+      .select()
+      .single();
+
+    if (productError) throw productError;
+
+    return updatedProduct as ProductItem;
+  }
+
+  async function transferOneProductToAsset(product: ProductItem) {
+    const itemPayload = {
+      item_type: "asset",
+      name: product.name.trim(),
+      article: product.article || null,
+      unit_id: product.unit_id,
+      default_price: product.default_price,
+      min_stock: product.min_stock,
+      is_active: true,
+      source_table: "products",
+      source_id: product.id,
+    };
+
+    const { data: sourceItems, error: sourceError } = await supabase
+      .from("items")
+      .select("id, item_type, is_active, name, article")
+      .eq("source_table", "products")
+      .eq("source_id", product.id)
+      .limit(1);
+
+    if (sourceError) throw sourceError;
+
+    let targetItem = sourceItems?.[0] || null;
+
+    if (!targetItem && product.article) {
+      const { data: articleItems, error: articleError } = await supabase
+        .from("items")
+        .select("id, item_type, is_active, name, article")
+        .eq("item_type", "asset")
+        .eq("article", product.article)
+        .limit(1);
+
+      if (articleError) throw articleError;
+
+      targetItem = articleItems?.[0] || null;
+    }
+
+    let itemId = targetItem?.id || "";
+
+    if (itemId) {
+      const { error: itemUpdateError } = await supabase
+        .from("items")
+        .update(itemPayload)
+        .eq("id", itemId);
+
+      if (itemUpdateError) throw itemUpdateError;
+    } else {
+      const { data: insertedItem, error: itemInsertError } = await supabase
+        .from("items")
+        .insert(itemPayload)
+        .select("id")
+        .single();
+
+      if (itemInsertError) throw itemInsertError;
+
+      itemId = insertedItem.id;
+    }
+
+    const { data: existingAssets, error: existingAssetError } = await supabase
+      .from("assets")
+      .select("id")
+      .eq("item_id", itemId)
+      .limit(1);
+
+    if (existingAssetError) throw existingAssetError;
+
+    if (!existingAssets || existingAssets.length === 0) {
+      const inventoryBase = product.article || product.id.slice(0, 8);
+      const inventoryNumber = `INV-${inventoryBase}`.replace(/\s+/g, "-");
+
+      const { error: assetInsertError } = await supabase.from("assets").insert({
+        item_id: itemId,
+        inventory_number: inventoryNumber,
+        serial_number: null,
+        asset_type: "equipment",
+        status: "active",
+        location: null,
+        responsible_user_id: null,
+        purchase_price: product.default_price,
+        purchase_date: null,
+        comment: product.comment || product.description || null,
+        is_active: true,
+      });
+
+      if (assetInsertError) throw assetInsertError;
+    }
+
+    const { data: updatedProduct, error: productError } = await supabase
+      .from("products")
+      .update({ is_active: false })
+      .eq("id", product.id)
+      .select()
+      .single();
+
+    if (productError) throw productError;
+
+    return updatedProduct as ProductItem;
+  }
+
+  async function handleTransferProducts() {
+    const count = transferProducts.length;
+    const targetText =
+      transferMode === "resale" ? "товары на перепродажу" : "имущество";
+
     const confirmed = window.confirm(
       [
-        `Перенести изделие "${product.name}" в товары на перепродажу?`,
-        "",
-        "Будет создана или обновлена карточка товара на перепродажу.",
-        "Старое изделие останется в базе, но станет неактивным.",
+        `Перенести ${count} поз. в ${targetText}?`,
         "",
         "Дубли по артикулу создаваться не будут.",
+        "Старые изделия останутся в базе, но станут неактивными.",
       ].join("\n"),
     );
 
     if (!confirmed) return;
 
     try {
-      setMovingId(product.id);
+      setMovingId("bulk-transfer");
       setError("");
       setMessage("");
 
-      const itemPayload = {
-        item_type: "resale_product",
-        name: product.name.trim(),
-        article: product.article || null,
-        unit_id: product.unit_id,
-        default_price: product.default_price,
-        min_stock: product.min_stock,
-        is_active: true,
-        source_table: "products",
-        source_id: product.id,
-      };
+      const updatedProducts: ProductItem[] = [];
 
-      const { data: sourceItems, error: sourceError } = await supabase
-        .from("items")
-        .select("id, item_type, is_active, name, article")
-        .eq("source_table", "products")
-        .eq("source_id", product.id)
-        .limit(1);
+      for (const product of transferProducts) {
+        const updatedProduct =
+          transferMode === "resale"
+            ? await transferOneProductToResale(product)
+            : await transferOneProductToAsset(product);
 
-      if (sourceError) throw sourceError;
-
-      let targetItem = sourceItems?.[0] || null;
-      let targetWasFoundByArticle = false;
-
-      if (!targetItem && product.article) {
-        const { data: articleItems, error: articleError } = await supabase
-          .from("items")
-          .select("id, item_type, is_active, name, article")
-          .eq("item_type", "resale_product")
-          .eq("article", product.article)
-          .limit(1);
-
-        if (articleError) throw articleError;
-
-        targetItem = articleItems?.[0] || null;
-        targetWasFoundByArticle = Boolean(targetItem);
+        updatedProducts.push(updatedProduct);
       }
-
-      if (targetItem?.id) {
-        const confirmUpdateText = targetWasFoundByArticle
-          ? [
-              `В товарах на перепродажу уже есть товар с артикулом "${product.article}".`,
-              "",
-              `Существующий товар: "${targetItem.name}"`,
-              `Изделие: "${product.name}"`,
-              "",
-              "Дубль создан не будет.",
-              "Обновить существующий товар и отключить изделие?",
-            ].join("\n")
-          : [
-              `Товар на перепродажу для "${product.name}" уже существует.`,
-              "",
-              "Обновить существующую карточку и отключить изделие?",
-            ].join("\n");
-
-        const shouldUpdateExisting = window.confirm(confirmUpdateText);
-
-        if (!shouldUpdateExisting) {
-          setMessage("Перенос отменён. Дубль не создан.");
-          return;
-        }
-
-        const { error: itemUpdateError } = await supabase
-          .from("items")
-          .update(itemPayload)
-          .eq("id", targetItem.id);
-
-        if (itemUpdateError) throw itemUpdateError;
-      } else {
-        const { error: itemInsertError } = await supabase
-          .from("items")
-          .insert(itemPayload);
-
-        if (itemInsertError) throw itemInsertError;
-      }
-
-      const { data: updatedProduct, error: productError } = await supabase
-        .from("products")
-        .update({ is_active: false })
-        .eq("id", product.id)
-        .select()
-        .single();
-
-      if (productError) throw productError;
-
-      const safeUpdatedProduct = updatedProduct as ProductItem;
 
       setProducts((prev) =>
-        prev.map((item) => (item.id === product.id ? safeUpdatedProduct : item)),
+        prev.map((item) => {
+          const updatedItem = updatedProducts.find((product) => product.id === item.id);
+          return updatedItem || item;
+        }),
       );
 
-      fillEditForm(safeUpdatedProduct);
-      setSelectedProductId(product.id);
+      if (viewProduct && updatedProducts.some((product) => product.id === viewProduct.id)) {
+        const updatedViewProduct = updatedProducts.find(
+          (product) => product.id === viewProduct.id,
+        );
+        if (updatedViewProduct) {
+          fillEditForm(updatedViewProduct);
+        }
+      }
+
+      setSelectedProductIds((prev) =>
+        prev.filter((id) => !updatedProducts.some((product) => product.id === id)),
+      );
+      setIsTransferOpen(false);
+      setTransferProducts([]);
+
       setMessage(
-        targetItem?.id
-          ? `Существующая карточка товара на перепродажу для "${product.name}" обновлена. Дубль не создан. Изделие отключено.`
-          : `Изделие "${product.name}" перенесено в товары на перепродажу.`,
+        transferMode === "resale"
+          ? `Перенесено в товары на перепродажу: ${updatedProducts.length}.`
+          : `Перенесено в имущество: ${updatedProducts.length}.`,
       );
     } catch (error) {
       setError(
         error instanceof Error
           ? error.message
-          : "Не удалось перенести изделие в товары на перепродажу",
+          : "Не удалось выполнить перенос",
       );
     } finally {
       setMovingId(null);
     }
+  }
+
+  function handleMoveToResaleProduct(product: ProductItem) {
+    openTransferModal([product], "resale");
+  }
+
+  function handleMoveToAsset(product: ProductItem) {
+    openTransferModal([product], "asset");
+  }
+
+  function toggleSelectedProduct(productId: string) {
+    setSelectedProductIds((prev) =>
+      prev.includes(productId)
+        ? prev.filter((id) => id !== productId)
+        : [...prev, productId],
+    );
+  }
+
+  function toggleAllFilteredProducts() {
+    const filteredIds = filteredProducts.map((product) => product.id);
+    const allSelected = filteredIds.every((id) => selectedProductIds.includes(id));
+
+    if (allSelected) {
+      setSelectedProductIds((prev) =>
+        prev.filter((id) => !filteredIds.includes(id)),
+      );
+      return;
+    }
+
+    setSelectedProductIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
   }
 
   function getProductColumnValue(
@@ -618,6 +779,36 @@ export default function ProductsDirectory() {
               }}
             />
 
+            {selectedProductIds.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedProducts = products.filter((product) =>
+                      selectedProductIds.includes(product.id),
+                    );
+                    openTransferModal(selectedProducts, "resale");
+                  }}
+                  style={secondaryButtonStyle}
+                >
+                  Перенести выбранные в товары
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selectedProducts = products.filter((product) =>
+                      selectedProductIds.includes(product.id),
+                    );
+                    openTransferModal(selectedProducts, "asset");
+                  }}
+                  style={secondaryButtonStyle}
+                >
+                  Перенести выбранные в имущество
+                </button>
+              </>
+            )}
+
             {(Object.keys(columnFilters) as ColumnFilterKey[]).some(
               (key) => columnFilters[key].length > 0,
             ) && (
@@ -750,6 +941,20 @@ export default function ProductsDirectory() {
             >
               <thead>
                 <tr style={{ background: "#f8fbff" }}>
+                  <th style={headCellStyle}>
+                    <input
+                      type="checkbox"
+                      checked={
+                        filteredProducts.length > 0 &&
+                        filteredProducts.every((product) =>
+                          selectedProductIds.includes(product.id),
+                        )
+                      }
+                      onChange={toggleAllFilteredProducts}
+                      title="Выбрать все отфильтрованные"
+                    />
+                  </th>
+
                   <FilterableHeadCell
                     title="Название"
                     filterKey="name"
@@ -865,6 +1070,7 @@ export default function ProductsDirectory() {
               <tbody>
                 {filteredProducts.map((product) => {
                   const isSelected = selectedProductId === product.id;
+                  const isChecked = selectedProductIds.includes(product.id);
                   const isDeleting = deletingId === product.id;
 
                   return (
@@ -874,6 +1080,14 @@ export default function ProductsDirectory() {
                         background: isSelected ? "#eef4ff" : "#ffffff",
                       }}
                     >
+                      <td style={cellStyle}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleSelectedProduct(product.id)}
+                        />
+                      </td>
+
                       <td
                         style={{
                           padding: "14px 16px",
@@ -1013,18 +1227,32 @@ export default function ProductsDirectory() {
 
                   <button
                     onClick={() => handleMoveToResaleProduct(viewProduct)}
-                    disabled={movingId === viewProduct.id}
+                    disabled={Boolean(movingId)}
                     style={{
                       ...secondaryButtonStyle,
                       borderColor: "#f59e0b",
                       color: "#92400e",
-                      background: movingId === viewProduct.id ? "#fef3c7" : "#fff",
-                      cursor: movingId === viewProduct.id ? "default" : "pointer",
+                      background: movingId ? "#fef3c7" : "#fff",
+                      cursor: movingId ? "default" : "pointer",
                     }}
                   >
-                    {movingId === viewProduct.id
+                    {movingId
                       ? "Перенос..."
                       : "Перенести в товары на перепродажу"}
+                  </button>
+
+                  <button
+                    onClick={() => handleMoveToAsset(viewProduct)}
+                    disabled={Boolean(movingId)}
+                    style={{
+                      ...secondaryButtonStyle,
+                      borderColor: "#0ea5e9",
+                      color: "#0369a1",
+                      background: movingId ? "#e0f2fe" : "#fff",
+                      cursor: movingId ? "default" : "pointer",
+                    }}
+                  >
+                    {movingId ? "Перенос..." : "Перенести в имущество"}
                   </button>
 
                   <button
@@ -1369,6 +1597,128 @@ export default function ProductsDirectory() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+
+      {isTransferOpen && (
+        <div onClick={closeTransferModal} style={modalOverlayStyle}>
+          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>Перенос изделий</div>
+                <div style={{ color: "#64748b", marginTop: 4 }}>
+                  Выбрано позиций: {transferProducts.length}
+                </div>
+              </div>
+
+              <button onClick={closeTransferModal} style={closeButtonStyle}>
+                ×
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: 12,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setTransferMode("resale")}
+                  style={{
+                    ...secondaryButtonStyle,
+                    borderColor: transferMode === "resale" ? "#f59e0b" : "#cbd5e1",
+                    background: transferMode === "resale" ? "#fffbeb" : "#ffffff",
+                    color: transferMode === "resale" ? "#92400e" : "#0f172a",
+                  }}
+                >
+                  Товары на перепродажу
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTransferMode("asset")}
+                  style={{
+                    ...secondaryButtonStyle,
+                    borderColor: transferMode === "asset" ? "#0ea5e9" : "#cbd5e1",
+                    background: transferMode === "asset" ? "#e0f2fe" : "#ffffff",
+                    color: transferMode === "asset" ? "#0369a1" : "#0f172a",
+                  }}
+                >
+                  Имущество
+                </button>
+              </div>
+
+              <div
+                style={{
+                  border: "1px solid #dbe4f0",
+                  borderRadius: 14,
+                  padding: 12,
+                  background: "#f8fbff",
+                  maxHeight: 260,
+                  overflowY: "auto",
+                }}
+              >
+                {transferProducts.map((product) => (
+                  <div
+                    key={product.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      padding: "8px 0",
+                      borderBottom: "1px solid #e5edf7",
+                    }}
+                  >
+                    <div style={{ color: "#0f172a", fontWeight: 700 }}>
+                      {product.name}
+                    </div>
+                    <div style={{ color: "#64748b" }}>
+                      {product.article || "Без артикула"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ color: "#64748b", lineHeight: 1.6 }}>
+                Дубли по артикулу создаваться не будут. После переноса старые
+                изделия останутся в базе, но станут неактивными.
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closeTransferModal}
+                  style={secondaryButtonStyle}
+                >
+                  Отмена
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTransferProducts}
+                  disabled={Boolean(movingId)}
+                  style={{
+                    ...primaryButtonStyle,
+                    minWidth: 180,
+                    background: movingId ? "#a5b4fc" : "#4f46e5",
+                  }}
+                >
+                  {movingId ? "Перенос..." : "Перенести"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { supabase } from "../supabase";
 
 type AssetItem = {
@@ -62,6 +63,9 @@ export default function AssetsDirectory() {
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [viewAssetId, setViewAssetId] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [qrAsset, setQrAsset] = useState<AssetItem | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState("");
+  const [qrLoading, setQrLoading] = useState(false);
 
   const [name, setName] = useState("");
   const [article, setArticle] = useState("");
@@ -387,6 +391,154 @@ export default function AssetsDirectory() {
     } finally {
       setDeletingId(null);
     }
+  }
+
+  function getAssetQrPayload(asset: AssetItem) {
+    return JSON.stringify({
+      type: "asset",
+      asset_id: asset.id,
+      item_id: asset.item_id,
+      inventory_number: asset.inventory_number,
+      name: asset.items?.name || "",
+      article: asset.items?.article || "",
+    });
+  }
+
+  async function openAssetQr(asset: AssetItem) {
+    try {
+      setQrLoading(true);
+      setError("");
+      setQrAsset(asset);
+      setQrDataUrl("");
+
+      const dataUrl = await QRCode.toDataURL(getAssetQrPayload(asset), {
+        width: 280,
+        margin: 2,
+        errorCorrectionLevel: "M",
+      });
+
+      setQrDataUrl(dataUrl);
+    } catch (error) {
+      setError(
+        error instanceof Error ? error.message : "Не удалось создать QR-код",
+      );
+      setQrAsset(null);
+      setQrDataUrl("");
+    } finally {
+      setQrLoading(false);
+    }
+  }
+
+  function closeAssetQr() {
+    setQrAsset(null);
+    setQrDataUrl("");
+    setQrLoading(false);
+  }
+
+  function printAssetQr() {
+    if (!qrAsset || !qrDataUrl) return;
+
+    const assetName = qrAsset.items?.name || "Имущество";
+    const inventoryNumber = qrAsset.inventory_number || "Без номера";
+    const article = qrAsset.items?.article || "";
+    const serialNumber = qrAsset.serial_number || "";
+
+    const printWindow = window.open("", "_blank", "width=420,height=620");
+
+    if (!printWindow) {
+      setError("Браузер заблокировал окно печати. Разреши всплывающие окна.");
+      return;
+    }
+
+    printWindow.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>QR имущества ${inventoryNumber}</title>
+          <style>
+            * {
+              box-sizing: border-box;
+            }
+
+            body {
+              margin: 0;
+              padding: 16px;
+              font-family: Arial, sans-serif;
+              color: #111827;
+              background: #ffffff;
+            }
+
+            .label {
+              width: 58mm;
+              min-height: 40mm;
+              border: 1px solid #111827;
+              border-radius: 6px;
+              padding: 8px;
+              display: grid;
+              grid-template-columns: 24mm 1fr;
+              gap: 8px;
+              align-items: center;
+            }
+
+            .qr {
+              width: 24mm;
+              height: 24mm;
+            }
+
+            .title {
+              font-size: 11px;
+              font-weight: 700;
+              line-height: 1.2;
+              margin-bottom: 4px;
+              word-break: break-word;
+            }
+
+            .line {
+              font-size: 9px;
+              line-height: 1.25;
+              margin-top: 2px;
+              word-break: break-word;
+            }
+
+            .number {
+              font-size: 10px;
+              font-weight: 700;
+            }
+
+            @media print {
+              body {
+                padding: 0;
+              }
+
+              .label {
+                page-break-inside: avoid;
+              }
+            }
+          </style>
+        </head>
+        <body>
+          <div class="label">
+            <img class="qr" src="${qrDataUrl}" />
+            <div>
+              <div class="title">${escapeHtml(assetName)}</div>
+              <div class="line number">${escapeHtml(inventoryNumber)}</div>
+              ${article ? `<div class="line">Арт.: ${escapeHtml(article)}</div>` : ""}
+              ${serialNumber ? `<div class="line">S/N: ${escapeHtml(serialNumber)}</div>` : ""}
+            </div>
+          </div>
+
+          <script>
+            window.onload = function () {
+              window.focus();
+              window.print();
+            };
+          </script>
+        </body>
+      </html>
+    `);
+
+    printWindow.document.close();
   }
 
   const filteredAssets = useMemo(() => {
@@ -817,6 +969,18 @@ export default function AssetsDirectory() {
                 <div style={modalFooterStyle}>
                   <button
                     type="button"
+                    onClick={() => openAssetQr(viewAsset)}
+                    style={{
+                      ...secondaryButtonStyle,
+                      borderColor: "#06b6d4",
+                      color: "#0369a1",
+                    }}
+                  >
+                    Показать / печать QR
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => setIsEditMode(true)}
                     style={primaryButtonStyle}
                   >
@@ -965,9 +1129,111 @@ export default function AssetsDirectory() {
           </div>
         </div>
       )}
+
+      {qrAsset && (
+        <div style={modalOverlayStyle} onClick={closeAssetQr}>
+          <div
+            style={{
+              ...modalStyle,
+              width: "min(520px, 100%)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>QR-код имущества</div>
+                <div style={modalSubtitleStyle}>
+                  {qrAsset.items?.name || qrAsset.inventory_number}
+                </div>
+              </div>
+
+              <button type="button" onClick={closeAssetQr} style={closeButtonStyle}>
+                ×
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gap: 14,
+                justifyItems: "center",
+                textAlign: "center",
+              }}
+            >
+              {qrLoading && (
+                <div style={{ color: "#64748b", padding: 20 }}>
+                  Создаю QR-код...
+                </div>
+              )}
+
+              {!qrLoading && qrDataUrl && (
+                <>
+                  <div
+                    style={{
+                      border: "1px solid #dbe4f0",
+                      borderRadius: 18,
+                      padding: 18,
+                      background: "#ffffff",
+                    }}
+                  >
+                    <img
+                      src={qrDataUrl}
+                      alt={`QR ${qrAsset.inventory_number}`}
+                      style={{ width: 280, height: 280 }}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ color: "#0f172a", fontWeight: 900, fontSize: 18 }}>
+                      {qrAsset.inventory_number}
+                    </div>
+                    <div style={{ color: "#64748b", marginTop: 4 }}>
+                      {qrAsset.items?.name || "—"}
+                    </div>
+                    {qrAsset.items?.article && (
+                      <div style={{ color: "#64748b", marginTop: 4 }}>
+                        Артикул: {qrAsset.items.article}
+                      </div>
+                    )}
+                  </div>
+
+                  <div style={modalFooterStyle}>
+                    <button
+                      type="button"
+                      onClick={closeAssetQr}
+                      style={secondaryButtonStyle}
+                    >
+                      Закрыть
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={printAssetQr}
+                      style={primaryButtonStyle}
+                    >
+                      Печать QR
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 
 function InfoCard({ label, value }: { label: string; value: string }) {
   return (
