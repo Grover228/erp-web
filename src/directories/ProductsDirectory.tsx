@@ -32,6 +32,7 @@ export default function ProductsDirectory() {
   const [saving, setSaving] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [movingId, setMovingId] = useState<string | null>(null);
 
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -322,6 +323,81 @@ export default function ProductsDirectory() {
       setError(error instanceof Error ? error.message : "Не удалось удалить изделие");
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function handleMoveToResaleProduct(product: ProductItem) {
+    const confirmed = window.confirm(
+      [
+        `Перенести изделие "${product.name}" в товары на перепродажу?`,
+        "",
+        "Будет создана карточка товара на перепродажу.",
+        "Старое изделие останется в базе, но станет неактивным.",
+      ].join("\n"),
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setMovingId(product.id);
+      setError("");
+      setMessage("");
+
+      const { data: existingItems, error: existingError } = await supabase
+        .from("items")
+        .select("id")
+        .eq("source_table", "products")
+        .eq("source_id", product.id)
+        .limit(1);
+
+      if (existingError) throw existingError;
+
+      if (!existingItems || existingItems.length === 0) {
+        const { error: itemError } = await supabase.from("items").insert({
+          item_type: "resale_product",
+          name: product.name.trim(),
+          article: product.article || null,
+          unit_id: product.unit_id,
+          default_price: product.default_price,
+          min_stock: product.min_stock,
+          is_active: true,
+          source_table: "products",
+          source_id: product.id,
+        });
+
+        if (itemError) throw itemError;
+      }
+
+      const { data: updatedProduct, error: productError } = await supabase
+        .from("products")
+        .update({ is_active: false })
+        .eq("id", product.id)
+        .select()
+        .single();
+
+      if (productError) throw productError;
+
+      const safeUpdatedProduct = updatedProduct as ProductItem;
+
+      setProducts((prev) =>
+        prev.map((item) => (item.id === product.id ? safeUpdatedProduct : item)),
+      );
+
+      fillEditForm(safeUpdatedProduct);
+      setSelectedProductId(product.id);
+      setMessage(
+        existingItems && existingItems.length > 0
+          ? `Товар на перепродажу для "${product.name}" уже был создан. Изделие отключено.`
+          : `Изделие "${product.name}" перенесено в товары на перепродажу.`,
+      );
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось перенести изделие в товары на перепродажу",
+      );
+    } finally {
+      setMovingId(null);
     }
   }
 
@@ -626,6 +702,22 @@ export default function ProductsDirectory() {
                     }}
                   >
                     Техкарта изделия
+                  </button>
+
+                  <button
+                    onClick={() => handleMoveToResaleProduct(viewProduct)}
+                    disabled={movingId === viewProduct.id}
+                    style={{
+                      ...secondaryButtonStyle,
+                      borderColor: "#f59e0b",
+                      color: "#92400e",
+                      background: movingId === viewProduct.id ? "#fef3c7" : "#fff",
+                      cursor: movingId === viewProduct.id ? "default" : "pointer",
+                    }}
+                  >
+                    {movingId === viewProduct.id
+                      ? "Перенос..."
+                      : "Перенести в товары на перепродажу"}
                   </button>
 
                   <button

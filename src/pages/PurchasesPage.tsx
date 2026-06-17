@@ -130,7 +130,8 @@ export default function PurchasesPage() {
           `
           *,
           materials(name, article, color_id),
-          consumables(name, article)
+          consumables(name, article),
+          items(name, article)
         `,
         )
         .eq("supplier_order_id", order.id)
@@ -187,7 +188,8 @@ export default function PurchasesPage() {
           `
           *,
           materials(name, article, color_id),
-          consumables(name, article)
+          consumables(name, article),
+          items(name, article)
         `,
         )
         .eq("supplier_order_id", createdOrderId)
