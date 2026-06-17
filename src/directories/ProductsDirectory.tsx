@@ -24,6 +24,19 @@ type UnitItem = {
   short_name: string;
 };
 
+type ColumnFilterKey = "name" | "article" | "category" | "season" | "unit" | "activity";
+
+type ColumnFilters = Record<ColumnFilterKey, string[]>;
+
+const emptyColumnFilters: ColumnFilters = {
+  name: [],
+  article: [],
+  category: [],
+  season: [],
+  unit: [],
+  activity: [],
+};
+
 export default function ProductsDirectory() {
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [units, setUnits] = useState<UnitItem[]>([]);
@@ -38,6 +51,11 @@ export default function ProductsDirectory() {
   const [message, setMessage] = useState("");
 
   const [search, setSearch] = useState("");
+  const [showOnlyActive, setShowOnlyActive] = useState(true);
+  const [openColumnFilter, setOpenColumnFilter] =
+    useState<ColumnFilterKey | null>(null);
+  const [columnFilters, setColumnFilters] =
+    useState<ColumnFilters>(emptyColumnFilters);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [viewProductId, setViewProductId] = useState<string | null>(null);
@@ -331,8 +349,10 @@ export default function ProductsDirectory() {
       [
         `Перенести изделие "${product.name}" в товары на перепродажу?`,
         "",
-        "Будет создана карточка товара на перепродажу.",
+        "Будет создана или обновлена карточка товара на перепродажу.",
         "Старое изделие останется в базе, но станет неактивным.",
+        "",
+        "Дубли по артикулу создаваться не будут.",
       ].join("\n"),
     );
 
@@ -343,29 +363,80 @@ export default function ProductsDirectory() {
       setError("");
       setMessage("");
 
-      const { data: existingItems, error: existingError } = await supabase
+      const itemPayload = {
+        item_type: "resale_product",
+        name: product.name.trim(),
+        article: product.article || null,
+        unit_id: product.unit_id,
+        default_price: product.default_price,
+        min_stock: product.min_stock,
+        is_active: true,
+        source_table: "products",
+        source_id: product.id,
+      };
+
+      const { data: sourceItems, error: sourceError } = await supabase
         .from("items")
-        .select("id")
+        .select("id, item_type, is_active, name, article")
         .eq("source_table", "products")
         .eq("source_id", product.id)
         .limit(1);
 
-      if (existingError) throw existingError;
+      if (sourceError) throw sourceError;
 
-      if (!existingItems || existingItems.length === 0) {
-        const { error: itemError } = await supabase.from("items").insert({
-          item_type: "resale_product",
-          name: product.name.trim(),
-          article: product.article || null,
-          unit_id: product.unit_id,
-          default_price: product.default_price,
-          min_stock: product.min_stock,
-          is_active: true,
-          source_table: "products",
-          source_id: product.id,
-        });
+      let targetItem = sourceItems?.[0] || null;
+      let targetWasFoundByArticle = false;
 
-        if (itemError) throw itemError;
+      if (!targetItem && product.article) {
+        const { data: articleItems, error: articleError } = await supabase
+          .from("items")
+          .select("id, item_type, is_active, name, article")
+          .eq("item_type", "resale_product")
+          .eq("article", product.article)
+          .limit(1);
+
+        if (articleError) throw articleError;
+
+        targetItem = articleItems?.[0] || null;
+        targetWasFoundByArticle = Boolean(targetItem);
+      }
+
+      if (targetItem?.id) {
+        const confirmUpdateText = targetWasFoundByArticle
+          ? [
+              `В товарах на перепродажу уже есть товар с артикулом "${product.article}".`,
+              "",
+              `Существующий товар: "${targetItem.name}"`,
+              `Изделие: "${product.name}"`,
+              "",
+              "Дубль создан не будет.",
+              "Обновить существующий товар и отключить изделие?",
+            ].join("\n")
+          : [
+              `Товар на перепродажу для "${product.name}" уже существует.`,
+              "",
+              "Обновить существующую карточку и отключить изделие?",
+            ].join("\n");
+
+        const shouldUpdateExisting = window.confirm(confirmUpdateText);
+
+        if (!shouldUpdateExisting) {
+          setMessage("Перенос отменён. Дубль не создан.");
+          return;
+        }
+
+        const { error: itemUpdateError } = await supabase
+          .from("items")
+          .update(itemPayload)
+          .eq("id", targetItem.id);
+
+        if (itemUpdateError) throw itemUpdateError;
+      } else {
+        const { error: itemInsertError } = await supabase
+          .from("items")
+          .insert(itemPayload);
+
+        if (itemInsertError) throw itemInsertError;
       }
 
       const { data: updatedProduct, error: productError } = await supabase
@@ -386,8 +457,8 @@ export default function ProductsDirectory() {
       fillEditForm(safeUpdatedProduct);
       setSelectedProductId(product.id);
       setMessage(
-        existingItems && existingItems.length > 0
-          ? `Товар на перепродажу для "${product.name}" уже был создан. Изделие отключено.`
+        targetItem?.id
+          ? `Существующая карточка товара на перепродажу для "${product.name}" обновлена. Дубль не создан. Изделие отключено.`
           : `Изделие "${product.name}" перенесено в товары на перепродажу.`,
       );
     } catch (error) {
@@ -401,11 +472,85 @@ export default function ProductsDirectory() {
     }
   }
 
+  function getProductColumnValue(
+    product: ProductItem,
+    key: ColumnFilterKey,
+  ) {
+    if (key === "name") return product.name || "—";
+    if (key === "article") return product.article || "—";
+    if (key === "category") return product.category || "—";
+    if (key === "season") return product.season || "—";
+    if (key === "unit") return getUnitLabel(product.unit_id);
+    if (key === "activity") return product.is_active ? "Активен" : "Неактивен";
+
+    return "—";
+  }
+
+  function getColumnFilterOptions(key: ColumnFilterKey) {
+    const values = products.map((product) => getProductColumnValue(product, key));
+    return Array.from(new Set(values)).sort((a, b) =>
+      a.localeCompare(b, "ru"),
+    );
+  }
+
+  function toggleColumnFilterValue(key: ColumnFilterKey, value: string) {
+    setColumnFilters((prev) => {
+      const currentValues = prev[key];
+      const nextValues = currentValues.includes(value)
+        ? currentValues.filter((item) => item !== value)
+        : [...currentValues, value];
+
+      return {
+        ...prev,
+        [key]: nextValues,
+      };
+    });
+  }
+
+  function clearColumnFilter(key: ColumnFilterKey) {
+    setColumnFilters((prev) => ({
+      ...prev,
+      [key]: [],
+    }));
+  }
+
+  function clearAllColumnFilters() {
+    setColumnFilters(emptyColumnFilters);
+    setOpenColumnFilter(null);
+  }
+
+  function isColumnFilterActive(key: ColumnFilterKey) {
+    return columnFilters[key].length > 0;
+  }
+
   const filteredProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return products;
 
     return products.filter((product) => {
+      if (showOnlyActive && !product.is_active) {
+        return false;
+      }
+
+      const matchesColumnFilters = (
+        Object.keys(columnFilters) as ColumnFilterKey[]
+      ).every((key) => {
+        const selectedValues = columnFilters[key];
+
+        if (selectedValues.length === 0) {
+          return true;
+        }
+
+        return selectedValues.includes(getProductColumnValue(product, key));
+      });
+
+      if (!matchesColumnFilters) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
       return (
         product.name.toLowerCase().includes(query) ||
         (product.article || "").toLowerCase().includes(query) ||
@@ -417,7 +562,7 @@ export default function ProductsDirectory() {
         getUnitLabel(product.unit_id).toLowerCase().includes(query)
       );
     });
-  }, [products, search, units]);
+  }, [products, search, units, showOnlyActive, columnFilters]);
 
   const viewProduct =
     products.find((item) => item.id === viewProductId) || null;
@@ -472,11 +617,77 @@ export default function ProductsDirectory() {
                 maxWidth: "100%",
               }}
             />
+
+            {(Object.keys(columnFilters) as ColumnFilterKey[]).some(
+              (key) => columnFilters[key].length > 0,
+            ) && (
+              <button
+                type="button"
+                onClick={clearAllColumnFilters}
+                style={secondaryButtonStyle}
+              >
+                Сбросить фильтры
+              </button>
+            )}
           </div>
 
-          <button onClick={loadAll} style={secondaryButtonStyle}>
-            Обновить
-          </button>
+          <div
+            style={{
+              display: "flex",
+              gap: 14,
+              alignItems: "center",
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
+            }}
+          >
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                color: "#0f172a",
+                fontWeight: 700,
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <span>Только активные</span>
+              <button
+                type="button"
+                onClick={() => setShowOnlyActive((prev) => !prev)}
+                aria-pressed={showOnlyActive}
+                style={{
+                  width: 50,
+                  height: 28,
+                  border: "none",
+                  borderRadius: 999,
+                  background: showOnlyActive ? "#22c55e" : "#cbd5e1",
+                  padding: 3,
+                  cursor: "pointer",
+                  transition: "background 0.2s ease",
+                }}
+              >
+                <span
+                  style={{
+                    display: "block",
+                    width: 22,
+                    height: 22,
+                    borderRadius: 999,
+                    background: "#ffffff",
+                    transform: showOnlyActive
+                      ? "translateX(22px)"
+                      : "translateX(0)",
+                    transition: "transform 0.2s ease",
+                    boxShadow: "0 2px 5px rgba(15, 23, 42, 0.25)",
+                  }}
+                />
+              </button>
+            </label>
+
+            <button onClick={loadAll} style={secondaryButtonStyle}>
+              Обновить
+            </button>
+          </div>
         </div>
       </div>
 
@@ -539,19 +750,115 @@ export default function ProductsDirectory() {
             >
               <thead>
                 <tr style={{ background: "#f8fbff" }}>
-                  {[
-                    "Название",
-                    "Артикул",
-                    "Категория",
-                    "Сезон",
-                    "Ед. изм.",
-                    "Активность",
-                    "Действия",
-                  ].map((title) => (
-                    <th key={title} style={headCellStyle}>
-                      {title}
-                    </th>
-                  ))}
+                  <FilterableHeadCell
+                    title="Название"
+                    filterKey="name"
+                    options={getColumnFilterOptions("name")}
+                    selectedValues={columnFilters.name}
+                    isOpen={openColumnFilter === "name"}
+                    isActive={isColumnFilterActive("name")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "name" ? null : "name",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("name", value)
+                    }
+                    onClear={() => clearColumnFilter("name")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Артикул"
+                    filterKey="article"
+                    options={getColumnFilterOptions("article")}
+                    selectedValues={columnFilters.article}
+                    isOpen={openColumnFilter === "article"}
+                    isActive={isColumnFilterActive("article")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "article" ? null : "article",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("article", value)
+                    }
+                    onClear={() => clearColumnFilter("article")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Категория"
+                    filterKey="category"
+                    options={getColumnFilterOptions("category")}
+                    selectedValues={columnFilters.category}
+                    isOpen={openColumnFilter === "category"}
+                    isActive={isColumnFilterActive("category")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "category" ? null : "category",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("category", value)
+                    }
+                    onClear={() => clearColumnFilter("category")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Сезон"
+                    filterKey="season"
+                    options={getColumnFilterOptions("season")}
+                    selectedValues={columnFilters.season}
+                    isOpen={openColumnFilter === "season"}
+                    isActive={isColumnFilterActive("season")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "season" ? null : "season",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("season", value)
+                    }
+                    onClear={() => clearColumnFilter("season")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Ед. изм."
+                    filterKey="unit"
+                    options={getColumnFilterOptions("unit")}
+                    selectedValues={columnFilters.unit}
+                    isOpen={openColumnFilter === "unit"}
+                    isActive={isColumnFilterActive("unit")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "unit" ? null : "unit",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("unit", value)
+                    }
+                    onClear={() => clearColumnFilter("unit")}
+                  />
+
+                  <FilterableHeadCell
+                    title="Активность"
+                    filterKey="activity"
+                    options={getColumnFilterOptions("activity")}
+                    selectedValues={columnFilters.activity}
+                    isOpen={openColumnFilter === "activity"}
+                    isActive={isColumnFilterActive("activity")}
+                    onToggleOpen={() =>
+                      setOpenColumnFilter((prev) =>
+                        prev === "activity" ? null : "activity",
+                      )
+                    }
+                    onToggleValue={(value) =>
+                      toggleColumnFilterValue("activity", value)
+                    }
+                    onClear={() => clearColumnFilter("activity")}
+                  />
+
+                  <th style={headCellStyle}>Действия</th>
                 </tr>
               </thead>
 
@@ -1079,6 +1386,197 @@ export default function ProductsDirectory() {
     </div>
   );
 }
+
+
+function FilterableHeadCell({
+  title,
+  options,
+  selectedValues,
+  isOpen,
+  isActive,
+  onToggleOpen,
+  onToggleValue,
+  onClear,
+}: {
+  title: string;
+  filterKey: ColumnFilterKey;
+  options: string[];
+  selectedValues: string[];
+  isOpen: boolean;
+  isActive: boolean;
+  onToggleOpen: () => void;
+  onToggleValue: (value: string) => void;
+  onClear: () => void;
+}) {
+  return (
+    <th style={{ ...headCellStyle, position: "relative", overflow: "visible" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span>{title}</span>
+
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleOpen();
+          }}
+          title="Фильтр"
+          style={{
+            width: 24,
+            height: 24,
+            border: isActive ? "1px solid #4f46e5" : "1px solid transparent",
+            borderRadius: 8,
+            background: isActive ? "#eef2ff" : "transparent",
+            color: isActive ? "#4f46e5" : "#64748b",
+            cursor: "pointer",
+            fontSize: 12,
+            fontWeight: 900,
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          ▼
+        </button>
+      </div>
+
+      {isOpen && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 6px)",
+            left: 0,
+            zIndex: 100,
+            width: 520,
+            minWidth: 420,
+            maxWidth: "90vw",
+            minHeight: 220,
+            maxHeight: 420,
+            overflow: "auto",
+            resize: "both",
+            background: "#ffffff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 14,
+            boxShadow: "0 18px 40px rgba(15, 23, 42, 0.18)",
+            padding: 12,
+            boxSizing: "border-box",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: 12,
+              alignItems: "center",
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ color: "#0f172a", fontWeight: 800 }}>
+              {title}
+            </div>
+
+            <button
+              type="button"
+              onClick={onClear}
+              style={{
+                border: "none",
+                background: "transparent",
+                color: "#2563eb",
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              Сбросить
+            </button>
+          </div>
+
+          <div
+            style={{
+              color: "#64748b",
+              fontSize: 12,
+              fontWeight: 500,
+              marginBottom: 8,
+              lineHeight: 1.4,
+            }}
+          >
+            Можно потянуть за правый нижний угол, чтобы расширить окно.
+          </div>
+
+          {options.length === 0 ? (
+            <div style={{ color: "#64748b", padding: 8 }}>
+              Нет значений
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 4 }}>
+              {options.map((option) => {
+                const checked = selectedValues.includes(option);
+
+                return (
+                  <label
+                    key={option}
+                    title={option}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "22px minmax(0, 1fr)",
+                      alignItems: "start",
+                      columnGap: 10,
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      background: checked ? "#eef2ff" : "#ffffff",
+                      color: "#0f172a",
+                      cursor: "pointer",
+                      fontWeight: 600,
+                      width: "100%",
+                      boxSizing: "border-box",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onToggleValue(option)}
+                      style={{
+                        margin: 0,
+                        marginTop: 2,
+                        justifySelf: "start",
+                        width: 16,
+                        height: 16,
+                      }}
+                    />
+
+                    <span
+                      style={{
+                        display: "block",
+                        minWidth: 0,
+                        color: "#0f172a",
+                        whiteSpace: "normal",
+                        overflowWrap: "anywhere",
+                        wordBreak: "break-word",
+                        lineHeight: 1.35,
+                        textAlign: "left",
+                      }}
+                    >
+                      {option}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </th>
+  );
+}
+
 
 function Field({
   label,
