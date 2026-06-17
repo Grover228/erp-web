@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "../supabase";
 
 type FinanceAccount = {
   id: string;
@@ -31,6 +32,8 @@ type FinanceTransaction = {
   description: string | null;
   created_at: string;
   created_by: string | null;
+  source_document_type?: string | null;
+  source_document_id?: string | null;
 };
 
 type TransactionUpdatePayload = {
@@ -40,6 +43,12 @@ type TransactionUpdatePayload = {
   amount: number;
   operationDate: string;
   description: string | null;
+};
+
+type LinkedPaymentDocument = {
+  id: string;
+  payment_number: string | null;
+  supplier_order_id: string | null;
 };
 
 type FinanceTransactionDetailsModalProps = {
@@ -54,6 +63,7 @@ type FinanceTransactionDetailsModalProps = {
     transaction: FinanceTransaction,
     payload: TransactionUpdatePayload
   ) => Promise<void>;
+  onOpenSupplierPayment?: (paymentId: string) => void;
 };
 
 const accountTypes = [
@@ -109,10 +119,13 @@ export default function FinanceTransactionDetailsModal({
   operatorName,
   onClose,
   onSave,
+  onOpenSupplierPayment,
 }: FinanceTransactionDetailsModalProps) {
   const [isEditMode, setIsEditMode] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [linkedPayment, setLinkedPayment] = useState<LinkedPaymentDocument | null>(null);
+  const [linkedPaymentLoading, setLinkedPaymentLoading] = useState(false);
 
   const [editAccountId, setEditAccountId] = useState(transaction.account_id);
   const [editType, setEditType] = useState(transaction.type);
@@ -136,6 +149,7 @@ export default function FinanceTransactionDetailsModal({
       transaction.operation_date || new Date().toISOString().slice(0, 10)
     );
     setEditDescription(transaction.description || "");
+    loadLinkedPaymentDocument();
   }, [transaction]);
 
   const isIncome = transaction.type === "income";
@@ -157,6 +171,33 @@ export default function FinanceTransactionDetailsModal({
       setEditCategoryId("");
     }
   }, [editType, editCategoryId, allCategories]);
+
+  async function loadLinkedPaymentDocument() {
+    try {
+      setLinkedPaymentLoading(true);
+      setLinkedPayment(null);
+
+      const { data, error } = await supabase
+        .from("supplier_payments")
+        .select("id, payment_number, supplier_order_id")
+        .eq("finance_transaction_id", transaction.id)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      setLinkedPayment((data as LinkedPaymentDocument | null) || null);
+    } catch (error) {
+      console.error("Ошибка загрузки связанного платежа", error);
+      setLinkedPayment(null);
+    } finally {
+      setLinkedPaymentLoading(false);
+    }
+  }
+
+  function handleOpenLinkedPayment() {
+    if (!linkedPayment?.id || !onOpenSupplierPayment) return;
+    onOpenSupplierPayment(linkedPayment.id);
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -342,6 +383,44 @@ export default function FinanceTransactionDetailsModal({
                 {transaction.description || "—"}
               </div>
             </div>
+
+            {(linkedPaymentLoading || linkedPayment) && (
+              <div
+                style={{
+                  marginTop: 14,
+                  border: "1px solid #bfdbfe",
+                  background: "#eff6ff",
+                  borderRadius: 16,
+                  padding: 14,
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <div style={{ color: "#1d4ed8", fontWeight: 900 }}>
+                    Связанный документ
+                  </div>
+                  <div style={{ color: "#334155", marginTop: 5, fontWeight: 800 }}>
+                    {linkedPaymentLoading
+                      ? "Ищу документ оплаты..."
+                      : linkedPayment?.payment_number || "Оплата поставщику"}
+                  </div>
+                </div>
+
+                {linkedPayment && onOpenSupplierPayment && (
+                  <button
+                    type="button"
+                    onClick={handleOpenLinkedPayment}
+                    style={linkedDocumentButtonStyle}
+                  >
+                    Открыть документ оплаты
+                  </button>
+                )}
+              </div>
+            )}
 
             <div
               style={{
@@ -601,4 +680,15 @@ const closeButtonStyle: React.CSSProperties = {
   color: "#0f172a",
   fontSize: 22,
   fontWeight: 800,
+};
+
+const linkedDocumentButtonStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  borderRadius: 12,
+  padding: "10px 12px",
+  background: "#ffffff",
+  color: "#1d4ed8",
+  cursor: "pointer",
+  fontSize: 14,
+  fontWeight: 900,
 };

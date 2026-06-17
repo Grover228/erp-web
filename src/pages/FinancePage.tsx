@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import FinanceTransactionDetailsModal from "../components/FinanceTransactionDetailsModal";
+import SupplierPaymentModal from "./purchases/SupplierPaymentModal";
 
 type FinanceAccount = {
   id: string;
@@ -54,6 +55,8 @@ type FinanceTransaction = {
   description: string | null;
   created_at: string;
   created_by: string | null;
+  source_document_type?: string | null;
+  source_document_id?: string | null;
 };
 
 type EmployeeItem = {
@@ -132,6 +135,7 @@ export default function FinancePage() {
   const [activeTab, setActiveTab] = useState<FinanceTab>("operations");
   const [selectedTransaction, setSelectedTransaction] =
     useState<FinanceTransaction | null>(null);
+  const [linkedPaymentId, setLinkedPaymentId] = useState<string | null>(null);
 
   const [accountForm, setAccountForm] = useState<AccountForm>(emptyAccountForm);
   const [operationForm, setOperationForm] =
@@ -897,6 +901,22 @@ export default function FinancePage() {
           operatorName={getTransactionOperatorName(selectedTransaction)}
           onClose={() => setSelectedTransaction(null)}
           onSave={handleUpdateTransaction}
+          onOpenSupplierPayment={(paymentId) => {
+            setSelectedTransaction(null);
+            setLinkedPaymentId(paymentId);
+          }}
+        />
+      )}
+
+      {linkedPaymentId && (
+        <SupplierPaymentModal
+          paymentId={linkedPaymentId}
+          onClose={() => setLinkedPaymentId(null)}
+          onSaved={() => {
+            setLinkedPaymentId(null);
+            loadAccounts();
+            loadTransactions();
+          }}
         />
       )}
 
