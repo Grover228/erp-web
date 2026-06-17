@@ -70,7 +70,28 @@ export type Product = {
   default_price: number | null;
   item_type?: string | null;
   is_active?: boolean | null;
+  inventory_number?: string | null;
 };
+
+type OrderItemLookup = {
+  id: string;
+  name: string | null;
+  article: string | null;
+  item_type: string | null;
+};
+
+type ProductPickerFilterType = "all" | "material" | "consumable" | "product" | "asset";
+type ProductPickerSpecificFilter = Exclude<ProductPickerFilterType, "all">;
+
+const productPickerFilterOptions: {
+  value: ProductPickerSpecificFilter;
+  label: string;
+}[] = [
+  { value: "material", label: "Материалы" },
+  { value: "consumable", label: "Расходники" },
+  { value: "product", label: "Товары на перепродажу" },
+  { value: "asset", label: "Имущество" },
+];
 
 export type Color = {
   id: string;
@@ -114,12 +135,18 @@ type SupplierPayment = {
   amount: number | string;
   comment: string | null;
   created_at: string | null;
+  finance_accounts?: {
+    name: string | null;
+  } | null;
 };
 
 type SupplierReceiptStatus = {
   id: string;
+  receipt_number: string | null;
+  receipt_date: string | null;
   status: string;
   total_amount: number | string;
+  supplier_name?: string | null;
 };
 
 type OrderItemDraft = {
@@ -226,10 +253,12 @@ export default function SupplierOrderModal({
 
   const [isProductPickerOpen, setIsProductPickerOpen] = useState(false);
   const [productPickerItemId, setProductPickerItemId] = useState("");
-  const [productPickerType, setProductPickerType] =
-    useState<PurchaseItemType>("material");
+  const [productPickerFilters, setProductPickerFilters] =
+    useState<ProductPickerFilterType[]>(["all"]);
+  const [isProductTypeDropdownOpen, setIsProductTypeDropdownOpen] = useState(false);
   const [productPickerSearch, setProductPickerSearch] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
+  const [orderItemLookup, setOrderItemLookup] = useState<Record<string, OrderItemLookup>>({});
 
   const [comment, setComment] = useState(order?.comment || "");
   const [items, setItems] = useState<OrderItemDraft[]>([emptyItem()]);
@@ -255,6 +284,10 @@ export default function SupplierOrderModal({
     loadProductsForPicker();
   }, []);
 
+  useEffect(() => {
+    loadOrderItemLookup();
+  }, [orderItems]);
+
 
   function getTodayDate() {
     return new Date().toISOString().slice(0, 10);
@@ -271,18 +304,111 @@ export default function SupplierOrderModal({
 
   async function loadProductsForPicker() {
     try {
-      const { data, error } = await supabase
-        .from("items")
-        .select("id, name, article, default_price, item_type, is_active")
-        .eq("item_type", "resale_product")
-        .eq("is_active", true)
-        .order("name", { ascending: true });
+      const [resaleResult, assetsResult] = await Promise.all([
+        supabase
+          .from("items")
+          .select("id, name, article, default_price, item_type, is_active")
+          .eq("item_type", "resale_product")
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
 
-      if (error) throw error;
+        supabase
+          .from("assets")
+          .select(
+            "id, item_id, inventory_number, purchase_price, is_active, items (id, name, article, item_type, is_active)",
+          )
+          .eq("is_active", true)
+          .order("created_at", { ascending: false }),
+      ]);
 
-      setProducts((data as Product[]) || []);
+      if (resaleResult.error) throw resaleResult.error;
+      if (assetsResult.error) throw assetsResult.error;
+
+      const resaleItems = ((resaleResult.data as Product[]) || []).map((item) => ({
+        ...item,
+        item_type: "resale_product",
+      }));
+
+      const assetItems = ((assetsResult.data as any[]) || [])
+        .filter((asset) => asset.items?.id && asset.items?.is_active !== false)
+        .map((asset) => ({
+          id: asset.item_id,
+          name: asset.items?.name || asset.inventory_number || "Имущество",
+          article: asset.items?.article || null,
+          default_price: asset.purchase_price !== null ? Number(asset.purchase_price) : null,
+          item_type: "asset",
+          is_active: asset.is_active,
+          inventory_number: asset.inventory_number || null,
+        }));
+
+      const mergedItems = [...resaleItems, ...assetItems];
+      const uniqueItems = Array.from(
+        new Map(mergedItems.map((item) => [item.id, item])).values(),
+      ).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+
+      setProducts(uniqueItems);
     } catch (error) {
-      console.error("Ошибка загрузки товаров на перепродажу", error);
+      console.error("Ошибка загрузки товаров и имущества", error);
+    }
+  }
+
+  async function loadOrderItemLookup() {
+    const itemIds = Array.from(
+      new Set(orderItems.map((item) => item.item_id || "").filter(Boolean)),
+    );
+
+    const productIds = Array.from(
+      new Set(orderItems.map((item) => item.product_id || "").filter(Boolean)),
+    );
+
+    const allIds = Array.from(new Set([...itemIds, ...productIds]));
+
+    if (allIds.length === 0) {
+      setOrderItemLookup({});
+      return;
+    }
+
+    try {
+      const [itemsResult, productsResult] = await Promise.all([
+        allIds.length > 0
+          ? supabase
+              .from("items")
+              .select("id, name, article, item_type")
+              .in("id", allIds)
+          : Promise.resolve({ data: [], error: null }),
+
+        productIds.length > 0
+          ? supabase
+              .from("products")
+              .select("id, name, article")
+              .in("id", productIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (itemsResult.error) throw itemsResult.error;
+      if (productsResult.error) throw productsResult.error;
+
+      const lookup: Record<string, OrderItemLookup> = {};
+
+      ((itemsResult.data as OrderItemLookup[]) || []).forEach((item) => {
+        lookup[item.id] = item;
+      });
+
+      ((productsResult.data as { id: string; name: string | null; article: string | null }[]) || []).forEach(
+        (product) => {
+          lookup[product.id] = {
+            id: product.id,
+            name: product.name,
+            article: product.article,
+            item_type: "product",
+          };
+        },
+      );
+
+      setOrderItemLookup(lookup);
+    } catch (error) {
+      console.error("Ошибка загрузки номенклатуры заказа", error);
+      setOrderItemLookup({});
     }
   }
 
@@ -311,7 +437,7 @@ export default function SupplierOrderModal({
         ? supabase
             .from("supplier_payments")
             .select(
-              "id, supplier_order_id, finance_account_id, finance_transaction_id, payment_number, payment_date, amount, comment, created_at",
+              "id, supplier_order_id, finance_account_id, finance_transaction_id, payment_number, payment_date, amount, comment, created_at, finance_accounts(name)",
             )
             .eq("supplier_order_id", order.id)
             .order("created_at", { ascending: false })
@@ -320,8 +446,9 @@ export default function SupplierOrderModal({
       const receiptsQuery = order?.id
         ? supabase
             .from("supplier_receipts")
-            .select("id, status, total_amount")
+            .select("id, receipt_number, receipt_date, supplier_name, status, total_amount")
             .eq("supplier_order_id", order.id)
+            .order("created_at", { ascending: true })
         : Promise.resolve({ data: [], error: null });
 
       const [
@@ -470,6 +597,15 @@ export default function SupplierOrderModal({
   }
 
   function getPaidAmount() {
+    const paymentsAmount = supplierPayments.reduce(
+      (sum, payment) => sum + Number(payment.amount || 0),
+      0,
+    );
+
+    if (paymentsAmount > 0) {
+      return paymentsAmount;
+    }
+
     return financeTransactions
       .filter((item) => item.type === "expense")
       .reduce((sum, item) => sum + Number(item.amount || 0), 0);
@@ -621,7 +757,8 @@ export default function SupplierOrderModal({
     setSupplierPickerType("all");
     setIsProductPickerOpen(false);
     setProductPickerItemId("");
-    setProductPickerType("material");
+    setProductPickerFilters(["all"]);
+    setIsProductTypeDropdownOpen(false);
     setProductPickerSearch("");
     setComment("");
     setItems([emptyItem()]);
@@ -1203,6 +1340,88 @@ export default function SupplierOrderModal({
     return status;
   }
 
+  function getDocumentStatusLabel(status: string | null | undefined) {
+    if (status === "draft") return "Черновик";
+    if (status === "ordered") return "Заказан";
+    if (status === "received") return "Поступил";
+    if (status === "posted") return "Проведён";
+    if (status === "cancelled") return "Отменён";
+    if (status === "paid") return "Оплачен";
+    return status || "—";
+  }
+
+  function getDocumentStatusStyle(status: string | null | undefined) {
+    const isPositive =
+      status === "posted" || status === "received" || status === "paid";
+
+    if (isPositive) {
+      return {
+        ...inlineDocumentStatusStyle,
+        background: "#dcfce7",
+        color: "#166534",
+        borderColor: "#86efac",
+      };
+    }
+
+    if (status === "cancelled") {
+      return {
+        ...inlineDocumentStatusStyle,
+        background: "#fef2f2",
+        color: "#991b1b",
+        borderColor: "#fecaca",
+      };
+    }
+
+    return inlineDocumentStatusStyle;
+  }
+
+  function getInlineLinkedDocuments() {
+    const docs = [
+      ...supplierReceipts.map((receipt) => ({
+        id: receipt.id,
+        type: "supplier_receipt" as const,
+        icon: "📦",
+        label: "Поступление товаров",
+        number: receipt.receipt_number || "Черновик приёмки",
+        date: receipt.receipt_date || "—",
+        status: receipt.status,
+        amount: Number(receipt.total_amount || 0),
+        responsible: receipt.supplier_name || order?.supplier_name || "—",
+      })),
+      ...supplierPayments.map((payment) => ({
+        id: payment.id,
+        type: "supplier_payment" as const,
+        icon: "💸",
+        label: "Оплата поставщику",
+        number: payment.payment_number || "Оплата без номера",
+        date: payment.payment_date || "—",
+        status: "paid",
+        amount: Number(payment.amount || 0),
+        responsible: payment.finance_accounts?.name || "—",
+      })),
+    ];
+
+    return docs.sort((a, b) => {
+      const dateA = a.date === "—" ? "" : a.date;
+      const dateB = b.date === "—" ? "" : b.date;
+      return dateA.localeCompare(dateB);
+    });
+  }
+
+  function openInlineLinkedDocument(
+    type: "supplier_receipt" | "supplier_payment",
+    id: string,
+  ) {
+    if (type === "supplier_receipt") {
+      setLinkedPaymentId(null);
+      openLinkedReceipt(id);
+      return;
+    }
+
+    setLinkedReceipt(null);
+    setLinkedPaymentId(id);
+  }
+
   function getItemName(item: SupplierOrderItem) {
     if (item.item_type === "material") {
       return item.materials?.name || "Материал";
@@ -1212,7 +1431,15 @@ export default function SupplierOrderModal({
       return item.consumables?.name || "Расходник";
     }
 
-    return item.items?.name || item.products?.name || "Товар";
+    const lookupId = item.item_id || item.product_id || "";
+    const lookupItem = lookupId ? orderItemLookup[lookupId] : null;
+
+    return (
+      item.items?.name ||
+      item.products?.name ||
+      lookupItem?.name ||
+      "Товар не найден"
+    );
   }
 
   function getItemArticle(item: SupplierOrderItem) {
@@ -1224,7 +1451,10 @@ export default function SupplierOrderModal({
       return item.consumables?.article || "";
     }
 
-    return item.items?.article || item.products?.article || "";
+    const lookupId = item.item_id || item.product_id || "";
+    const lookupItem = lookupId ? orderItemLookup[lookupId] : null;
+
+    return item.items?.article || item.products?.article || lookupItem?.article || "";
   }
 
   function getSelectedDraftItemName(item: OrderItemDraft) {
@@ -1264,58 +1494,167 @@ export default function SupplierOrderModal({
   }
 
   function openProductPicker(itemId: string) {
-    const currentItem = items.find((item) => item.id === itemId);
-
     setProductPickerItemId(itemId);
-    setProductPickerType(currentItem?.item_type || "material");
+    setProductPickerFilters(["all"]);
+    setIsProductTypeDropdownOpen(false);
     setProductPickerSearch("");
     setIsProductPickerOpen(true);
   }
 
-  function getFilteredProducts() {
-    const query = productPickerSearch.trim().toLowerCase();
+  function getProductPickerType(product: Material | Consumable | Product) {
+    const maybeProduct = product as Product;
 
-    if (productPickerType === "material") {
-      return materials.filter((material) => {
-        const color = getColorById(material.color_id);
-
-        return (
-          !query ||
-          material.name.toLowerCase().includes(query) ||
-          (material.article || "").toLowerCase().includes(query) ||
-          (color?.name || "").toLowerCase().includes(query)
-        );
-      });
+    if (maybeProduct.item_type === "asset") {
+      return "asset";
     }
 
-    if (productPickerType === "consumable") {
-      return consumables.filter((consumable) => {
-        return (
-          !query ||
-          consumable.name.toLowerCase().includes(query) ||
-          (consumable.article || "").toLowerCase().includes(query)
-        );
-      });
+    if (maybeProduct.item_type === "resale_product") {
+      return "product";
     }
 
-    return products.filter((product) => {
-      return (
-        !query ||
-        product.name.toLowerCase().includes(query) ||
-        (product.article || "").toLowerCase().includes(query)
-      );
+    if (materials.some((material) => material.id === product.id)) {
+      return "material";
+    }
+
+    if (consumables.some((consumable) => consumable.id === product.id)) {
+      return "consumable";
+    }
+
+    return "product";
+  }
+
+  function getProductPickerLabel(type: ProductPickerSpecificFilter) {
+    if (type === "material") return "Материал";
+    if (type === "consumable") return "Расходник";
+    if (type === "asset") return "Имущество";
+    return "Товар на перепродажу";
+  }
+
+  function getProductPickerBadgeIcon(type: ProductPickerSpecificFilter) {
+    if (type === "material") return "📦";
+    if (type === "consumable") return "🧵";
+    if (type === "asset") return "🏭";
+    return "🛒";
+  }
+
+  function getProductPickerBadgeColor(type: ProductPickerSpecificFilter) {
+    if (type === "material") {
+      return {
+        background: "#eff6ff",
+        color: "#1d4ed8",
+        borderColor: "#bfdbfe",
+      };
+    }
+
+    if (type === "consumable") {
+      return {
+        background: "#f0fdf4",
+        color: "#166534",
+        borderColor: "#bbf7d0",
+      };
+    }
+
+    if (type === "asset") {
+      return {
+        background: "#f0f9ff",
+        color: "#0369a1",
+        borderColor: "#bae6fd",
+      };
+    }
+
+    return {
+      background: "#f5f3ff",
+      color: "#6d28d9",
+      borderColor: "#ddd6fe",
+    };
+  }
+
+  function toggleProductPickerFilter(type: ProductPickerFilterType) {
+    setProductPickerFilters((prev) => {
+      if (type === "all") {
+        return ["all"];
+      }
+
+      const withoutAll = prev.filter((item) => item !== "all");
+      const nextValues = withoutAll.includes(type)
+        ? withoutAll.filter((item) => item !== type)
+        : [...withoutAll, type];
+
+      return nextValues.length === 0 ? ["all"] : nextValues;
     });
   }
 
-  function selectProduct(productId: string) {
+  function isProductPickerFilterChecked(type: ProductPickerFilterType) {
+    return productPickerFilters.includes(type);
+  }
+
+  function getProductPickerFilterSummary() {
+    if (productPickerFilters.includes("all")) {
+      return "Все типы";
+    }
+
+    const labels = productPickerFilterOptions
+      .filter((option) => productPickerFilters.includes(option.value))
+      .map((option) => option.label);
+
+    return labels.length > 0 ? labels.join(", ") : "Все типы";
+  }
+
+  function getUnifiedPickerProducts() {
+    return [
+      ...materials.map((material) => ({
+        ...material,
+        picker_type: "material" as ProductPickerSpecificFilter,
+      })),
+      ...consumables.map((consumable) => ({
+        ...consumable,
+        picker_type: "consumable" as ProductPickerSpecificFilter,
+      })),
+      ...products.map((product) => ({
+        ...product,
+        picker_type: getProductPickerType(product),
+      })),
+    ];
+  }
+
+  function getFilteredProducts() {
+    const query = productPickerSearch.trim().toLowerCase();
+    const activeFilters = productPickerFilters.includes("all")
+      ? productPickerFilterOptions.map((item) => item.value)
+      : (productPickerFilters as ProductPickerSpecificFilter[]);
+
+    return getUnifiedPickerProducts().filter((product) => {
+      const pickerType = product.picker_type as ProductPickerSpecificFilter;
+      const color =
+        pickerType === "material"
+          ? getColorById((product as Material).color_id)
+          : null;
+      const inventoryNumber =
+        pickerType === "asset" ? (product as Product).inventory_number || "" : "";
+
+      const matchesType = activeFilters.includes(pickerType);
+      const matchesSearch =
+        !query ||
+        product.name.toLowerCase().includes(query) ||
+        (product.article || "").toLowerCase().includes(query) ||
+        (color?.name || "").toLowerCase().includes(query) ||
+        inventoryNumber.toLowerCase().includes(query);
+
+      return matchesType && matchesSearch;
+    });
+  }
+
+  function selectProduct(product: Material | Consumable | Product) {
     if (!productPickerItemId) return;
 
-    if (productPickerType === "material") {
-      const material = materials.find((item) => item.id === productId);
+    const pickerType = getProductPickerType(product);
+
+    if (pickerType === "material") {
+      const material = materials.find((item) => item.id === product.id);
 
       updateItem(productPickerItemId, {
         item_type: "material",
-        material_id: productId,
+        material_id: product.id,
         consumable_id: "",
         product_id: "",
         item_id: "",
@@ -1325,13 +1664,13 @@ export default function SupplierOrderModal({
             ? String(material.default_price)
             : "",
       });
-    } else if (productPickerType === "consumable") {
-      const consumable = consumables.find((item) => item.id === productId);
+    } else if (pickerType === "consumable") {
+      const consumable = consumables.find((item) => item.id === product.id);
 
       updateItem(productPickerItemId, {
         item_type: "consumable",
         material_id: "",
-        consumable_id: productId,
+        consumable_id: product.id,
         product_id: "",
         item_id: "",
         price:
@@ -1341,18 +1680,18 @@ export default function SupplierOrderModal({
             : "",
       });
     } else {
-      const product = products.find((item) => item.id === productId);
+      const selectedProduct = products.find((item) => item.id === product.id);
 
       updateItem(productPickerItemId, {
         item_type: "product",
         material_id: "",
         consumable_id: "",
         product_id: "",
-        item_id: productId,
+        item_id: product.id,
         price:
-          product?.default_price !== null &&
-          product?.default_price !== undefined
-            ? String(product.default_price)
+          selectedProduct?.default_price !== null &&
+          selectedProduct?.default_price !== undefined
+            ? String(selectedProduct.default_price)
             : "",
       });
     }
@@ -1440,7 +1779,10 @@ export default function SupplierOrderModal({
                             ? "Материал"
                             : item.item_type === "consumable"
                               ? "Расходник"
-                              : "Товар на перепродажу"}
+                              : products.find((product) => product.id === item.item_id)
+                                  ?.item_type === "asset"
+                                ? "Имущество"
+                                : "Товар на перепродажу"}
                           {selectedArticle ? ` · ${selectedArticle}` : ""}
                         </div>
                       </div>
@@ -1704,7 +2046,14 @@ export default function SupplierOrderModal({
               </div>
 
               <div style={modalInfoCardStyle}>
-                <div style={modalInfoLabelStyle}>Сумма</div>
+                <div style={modalInfoLabelStyle}>Поставщик</div>
+                <div style={modalInfoValueStyle}>
+                  {order?.supplier_name || "—"}
+                </div>
+              </div>
+
+              <div style={modalInfoCardStyle}>
+                <div style={modalInfoLabelStyle}>Сумма заказа</div>
                 <div style={modalInfoValueStyle}>
                   {Number(order?.total_amount || 0).toLocaleString("ru-RU", {
                     minimumFractionDigits: 2,
@@ -1760,9 +2109,10 @@ export default function SupplierOrderModal({
                 <div style={emptyStyle}>В заказе нет позиций.</div>
               ) : (
                 <div style={tableWrapStyle}>
-                  <table style={tableStyle}>
+                  <table style={{ ...tableStyle, minWidth: 980 }}>
                     <thead>
                       <tr>
+                        <th style={thStyle}>№</th>
                         <th style={thStyle}>Тип</th>
                         <th style={thStyle}>Номенклатура</th>
                         <th style={thStyle}>Артикул</th>
@@ -1774,14 +2124,17 @@ export default function SupplierOrderModal({
                     </thead>
 
                     <tbody>
-                      {orderItems.map((item) => (
+                      {orderItems.map((item, index) => (
                         <tr key={item.id}>
+                          <td style={tdStyle}>{index + 1}</td>
                           <td style={tdStyle}>
-                            {item.item_type === "material"
-                              ? "Материал"
-                              : item.item_type === "consumable"
-                                ? "Расходник"
-                                : "Товар на перепродажу"}
+                            <span style={orderItemTypeBadgeStyle}>
+                              {item.item_type === "material"
+                                ? "Материал"
+                                : item.item_type === "consumable"
+                                  ? "Расходник"
+                                  : "Товар"}
+                            </span>
                           </td>
                           <td style={tdStyle}>{getItemName(item)}</td>
                           <td style={tdStyle}>{getItemArticle(item) || "—"}</td>
@@ -1809,6 +2162,156 @@ export default function SupplierOrderModal({
                       ))}
                     </tbody>
                   </table>
+
+                  <div style={orderItemsTotalRowStyle}>
+                    <button
+                      type="button"
+                      onClick={startEditOrder}
+                      style={addPositionButtonStyle}
+                    >
+                      + Добавить позицию
+                    </button>
+
+                    <div>
+                      Итого:{" "}
+                      {Number(order?.total_amount || 0).toLocaleString("ru-RU", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}{" "}
+                      ₽
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div style={inlineLinkedHeaderStyle}>
+                <div
+                  style={{
+                    fontSize: 18,
+                    fontWeight: 900,
+                    color: "#0f172a",
+                  }}
+                >
+                  Связанные документы
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (order?.id) {
+                      setLinkedDocumentsSourceType("supplier_order");
+                      setLinkedDocumentsSourceId(order.id);
+                    }
+                    setIsLinkedDocumentsModalOpen(true);
+                  }}
+                  style={smallLinkButtonStyle}
+                >
+                  Показать цепочку
+                </button>
+              </div>
+
+              {getInlineLinkedDocuments().length === 0 ? (
+                <div style={inlineLinkedEmptyStyle}>
+                  Связанные документы пока не созданы.
+                </div>
+              ) : (
+                <div style={inlineLinkedTableWrapStyle}>
+                  <table style={{ ...tableStyle, minWidth: 1040 }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Тип документа</th>
+                        <th style={thStyle}>Номер</th>
+                        <th style={thStyle}>Дата</th>
+                        <th style={thStyle}>Статус</th>
+                        <th style={thStyle}>Сумма</th>
+                        <th style={thStyle}>Ответственный / счёт</th>
+                        <th style={thStyle}>Действия</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {getInlineLinkedDocuments().map((document) => (
+                        <tr key={`${document.type}-${document.id}`}>
+                          <td style={tdStyle}>
+                            <span style={inlineDocumentTypeStyle}>
+                              <span style={inlineDocumentIconStyle}>
+                                {document.icon}
+                              </span>
+                              {document.label}
+                            </span>
+                          </td>
+                          <td style={tdStyle}>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                openInlineLinkedDocument(document.type, document.id)
+                              }
+                              style={inlineDocumentNumberButtonStyle}
+                            >
+                              {document.number}
+                            </button>
+                          </td>
+                          <td style={tdStyle}>{document.date}</td>
+                          <td style={tdStyle}>
+                            <span style={getDocumentStatusStyle(document.status)}>
+                              {getDocumentStatusLabel(document.status)}
+                            </span>
+                          </td>
+                          <td style={tdStyle}>
+                            {document.amount.toLocaleString("ru-RU", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{" "}
+                            ₽
+                          </td>
+                          <td style={tdStyle}>{document.responsible}</td>
+                          <td style={tdStyle}>
+                            <div style={inlineDocumentActionsStyle}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openInlineLinkedDocument(document.type, document.id)
+                                }
+                                style={iconActionButtonStyle}
+                                title="Открыть документ"
+                              >
+                                👁
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openInlineLinkedDocument(document.type, document.id)
+                                }
+                                style={iconActionButtonStyle}
+                                title="Перейти к документу"
+                              >
+                                ↗
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div style={inlineLinkedFooterStyle}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (order?.id) {
+                          setLinkedDocumentsSourceType("supplier_order");
+                          setLinkedDocumentsSourceId(order.id);
+                        }
+                        setIsLinkedDocumentsModalOpen(true);
+                      }}
+                      style={showAllDocumentsButtonStyle}
+                    >
+                      Показать все связанные документы ↓
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1887,7 +2390,10 @@ export default function SupplierOrderModal({
 
         {isProductPickerOpen && (
           <div
-            onClick={() => setIsProductPickerOpen(false)}
+            onClick={() => {
+              setIsProductPickerOpen(false);
+              setIsProductTypeDropdownOpen(false);
+            }}
             style={supplierPickerOverlayStyle}
           >
             <div
@@ -1898,71 +2404,79 @@ export default function SupplierOrderModal({
                 <div>
                   <div style={supplierPickerTitleStyle}>Выбор позиции</div>
                   <div style={{ color: "#64748b", marginTop: 4 }}>
-                    Сначала выбери тип, затем позицию из списка.
+                    Выберите нужные типы и найдите позицию в общем списке.
                   </div>
                 </div>
 
                 <button
                   type="button"
-                  onClick={() => setIsProductPickerOpen(false)}
+                  onClick={() => {
+                    setIsProductPickerOpen(false);
+                    setIsProductTypeDropdownOpen(false);
+                  }}
                   style={modalCloseButtonStyle}
                 >
                   ×
                 </button>
               </div>
 
-              <div style={productPickerStepsStyle}>
-                <div style={productStepCardStyle}>
-                  <div style={productStepNumberStyle}>1</div>
-                  <div>
-                    <div style={productStepTitleStyle}>Что выбираем</div>
-                    <div style={productTypeTabsStyle}>
-                      <button
-                        type="button"
-                        onClick={() => setProductPickerType("material")}
-                        style={productTypeTabStyle(
-                          productPickerType === "material",
-                        )}
-                      >
-                        Материалы
-                      </button>
+              <div style={productPickerUnifiedTopStyle}>
+                <div style={productPickerTypeSelectWrapStyle}>
+                  <div style={productStepTitleStyle}>Типы позиций</div>
 
-                      <button
-                        type="button"
-                        onClick={() => setProductPickerType("consumable")}
-                        style={productTypeTabStyle(
-                          productPickerType === "consumable",
-                        )}
-                      >
-                        Расходники
-                      </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIsProductTypeDropdownOpen((prev) => !prev)
+                    }
+                    style={productPickerTypeSelectButtonStyle}
+                  >
+                    <span>{getProductPickerFilterSummary()}</span>
+                    <span style={{ color: "#64748b", fontSize: 12 }}>▼</span>
+                  </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setProductPickerType("product")}
-                        style={productTypeTabStyle(
-                          productPickerType === "product",
-                        )}
-                      >
-                        Товары
-                      </button>
+                  {isProductTypeDropdownOpen && (
+                    <div
+                      style={productPickerTypeDropdownStyle}
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <label style={productPickerDropdownOptionStyle}>
+                        <input
+                          type="checkbox"
+                          checked={isProductPickerFilterChecked("all")}
+                          onChange={() => toggleProductPickerFilter("all")}
+                        />
+                        <span>Все</span>
+                      </label>
+
+                      {productPickerFilterOptions.map((filter) => (
+                        <label
+                          key={filter.value}
+                          style={productPickerDropdownOptionStyle}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={
+                              isProductPickerFilterChecked("all") ||
+                              isProductPickerFilterChecked(filter.value)
+                            }
+                            onChange={() => toggleProductPickerFilter(filter.value)}
+                          />
+                          <span>{filter.label}</span>
+                        </label>
+                      ))}
                     </div>
-                  </div>
+                  )}
                 </div>
 
-                <div style={productStepCardStyle}>
-                  <div style={productStepNumberStyle}>2</div>
-                  <div>
-                    <div style={productStepTitleStyle}>Поиск</div>
-                    <input
-                      value={productPickerSearch}
-                      onChange={(event) =>
-                        setProductPickerSearch(event.target.value)
-                      }
-                      placeholder="Название, артикул или цвет"
-                      style={inputStyle}
-                    />
-                  </div>
+                <div style={productPickerSearchBlockStyle}>
+                  <div style={productStepTitleStyle}>Поиск</div>
+                  <input
+                    value={productPickerSearch}
+                    onChange={(event) => setProductPickerSearch(event.target.value)}
+                    placeholder="Название, артикул, цвет или инвентарный номер"
+                    style={inputStyle}
+                  />
                 </div>
               </div>
 
@@ -1971,39 +2485,42 @@ export default function SupplierOrderModal({
                   <div style={emptyStyle}>Позиции не найдены.</div>
                 ) : (
                   getFilteredProducts().map((product) => {
-                    const isMaterial = productPickerType === "material";
-                    const isConsumable = productPickerType === "consumable";
-                    const material = isMaterial
-                      ? (product as Material)
+                    const pickerType = product.picker_type as ProductPickerSpecificFilter;
+                    const isMaterial = pickerType === "material";
+                    const color = isMaterial
+                      ? getColorById((product as Material).color_id)
                       : null;
-                    const color = material
-                      ? getColorById(material.color_id)
-                      : null;
+                    const badgeColors = getProductPickerBadgeColor(pickerType);
+                    const inventoryNumber =
+                      pickerType === "asset"
+                        ? (product as Product).inventory_number || ""
+                        : "";
 
                     return (
                       <button
-                        key={`${productPickerType}-${product.id}`}
+                        key={`${pickerType}-${product.id}`}
                         type="button"
-                        onClick={() => selectProduct(product.id)}
+                        onClick={() => selectProduct(product)}
                         style={productCardStyle}
                       >
                         <div style={productCardMainStyle}>
                           <div>
-                            <div style={productCardTitleStyle}>
-                              {product.name}
-                            </div>
+                            <div style={productCardTitleStyle}>{product.name}</div>
 
                             <div style={productCardSubStyle}>
                               {product.article || "без артикула"}
+                              {inventoryNumber ? ` · ${inventoryNumber}` : ""}
                             </div>
                           </div>
 
-                          <span style={productTypeBadgeStyle(isMaterial)}>
-                            {isMaterial
-                              ? "Материал"
-                              : isConsumable
-                                ? "Расходник"
-                                : "Товар на перепродажу"}
+                          <span
+                            style={{
+                              ...productPickerTypeBadgeStyle,
+                              ...badgeColors,
+                            }}
+                          >
+                            {getProductPickerBadgeIcon(pickerType)}{" "}
+                            {getProductPickerLabel(pickerType)}
                           </span>
                         </div>
 
@@ -2024,6 +2541,12 @@ export default function SupplierOrderModal({
                                 Цвет не указан
                               </span>
                             )
+                          )}
+
+                          {pickerType === "asset" && inventoryNumber && (
+                            <span style={productParamStyle}>
+                              Инв. № {inventoryNumber}
+                            </span>
                           )}
 
                           <span style={productParamStyle}>
@@ -2430,7 +2953,7 @@ const chooseProductButtonStyle: React.CSSProperties = {
 };
 
 const productPickerModalStyle: React.CSSProperties = {
-  width: "min(760px, 94vw)",
+  width: "min(920px, 94vw)",
   maxHeight: "78vh",
   overflowY: "auto",
   background: "#ffffff",
@@ -2441,6 +2964,88 @@ const productPickerModalStyle: React.CSSProperties = {
   display: "grid",
   gap: 14,
 };
+
+const productPickerUnifiedTopStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "260px 1fr",
+  gap: 12,
+  alignItems: "start",
+};
+
+const productPickerFilterBlockStyle: React.CSSProperties = {
+  display: "none",
+};
+
+const productPickerSearchBlockStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#f8fbff",
+  borderRadius: 14,
+  padding: 12,
+  display: "grid",
+  gap: 10,
+  alignContent: "start",
+};
+
+const productPickerCheckboxStyle: React.CSSProperties = {
+  display: "none",
+};
+
+const productPickerTypeSelectWrapStyle: React.CSSProperties = {
+  position: "relative",
+  border: "1px solid #dbe4f0",
+  background: "#f8fbff",
+  borderRadius: 14,
+  padding: 12,
+  display: "grid",
+  gap: 10,
+  alignContent: "start",
+};
+
+const productPickerTypeSelectButtonStyle: React.CSSProperties = {
+  width: "100%",
+  height: 44,
+  border: "1px solid #cbd5e1",
+  borderRadius: 12,
+  background: "#ffffff",
+  color: "#0f172a",
+  padding: "0 12px",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  cursor: "pointer",
+  fontWeight: 800,
+  textAlign: "left",
+};
+
+const productPickerTypeDropdownStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 12,
+  right: 12,
+  top: 84,
+  zIndex: 30,
+  border: "1px solid #cbd5e1",
+  borderRadius: 14,
+  background: "#ffffff",
+  boxShadow: "0 16px 34px rgba(15, 23, 42, 0.18)",
+  padding: 8,
+  display: "grid",
+  gap: 4,
+};
+
+const productPickerDropdownOptionStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "22px 1fr",
+  alignItems: "center",
+  gap: 8,
+  padding: "9px 10px",
+  borderRadius: 10,
+  color: "#0f172a",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+
+
 
 const productPickerStepsStyle: React.CSSProperties = {
   display: "grid",
@@ -2555,18 +3160,16 @@ const productParamStyle: React.CSSProperties = {
   fontWeight: 800,
 };
 
-function productTypeBadgeStyle(isMaterial: boolean): React.CSSProperties {
-  return {
-    border: isMaterial ? "1px solid #bfdbfe" : "1px solid #ddd6fe",
-    background: isMaterial ? "#eff6ff" : "#f5f3ff",
-    color: isMaterial ? "#1d4ed8" : "#7c3aed",
-    borderRadius: 999,
-    padding: "6px 10px",
-    fontSize: 12,
-    fontWeight: 900,
-    whiteSpace: "nowrap",
-  };
-}
+const productPickerTypeBadgeStyle: React.CSSProperties = {
+  border: "1px solid #ddd6fe",
+  background: "#f5f3ff",
+  color: "#7c3aed",
+  borderRadius: 999,
+  padding: "6px 10px",
+  fontSize: 12,
+  fontWeight: 900,
+  whiteSpace: "nowrap",
+};
 
 const supplierPickerOverlayStyle: React.CSSProperties = {
   position: "fixed",
@@ -2694,16 +3297,16 @@ const modalOverlayStyle: React.CSSProperties = {
 };
 
 const modalStyle: React.CSSProperties = {
-  width: "min(1120px, 96vw)",
-  maxHeight: "84vh",
+  width: "min(1380px, 96vw)",
+  maxHeight: "88vh",
   overflowY: "auto",
   background: "#ffffff",
   borderRadius: 18,
-  padding: 14,
+  padding: 18,
   border: "1px solid #dbe4f0",
   boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)",
   display: "grid",
-  gap: 10,
+  gap: 14,
 };
 
 const modalHeaderStyle: React.CSSProperties = {
@@ -2783,7 +3386,7 @@ const modalCloseButtonStyle: React.CSSProperties = {
 
 const modalInfoGridStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+  gridTemplateColumns: "1.15fr 0.85fr 0.85fr",
   gap: 12,
 };
 
@@ -2815,3 +3418,150 @@ const commentBoxStyle: React.CSSProperties = {
   color: "#334155",
   lineHeight: 1.5,
 };
+
+
+const orderItemTypeBadgeStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  border: "1px solid #ddd6fe",
+  background: "#f5f3ff",
+  color: "#7c3aed",
+  borderRadius: 999,
+  padding: "5px 9px",
+  fontSize: 12,
+  fontWeight: 900,
+  whiteSpace: "nowrap",
+};
+
+const orderItemsTotalRowStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  padding: 14,
+  borderTop: "1px solid #e2e8f0",
+  color: "#0f172a",
+  fontSize: 18,
+  fontWeight: 900,
+};
+
+const addPositionButtonStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  borderRadius: 12,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const inlineLinkedHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  marginBottom: 10,
+};
+
+const smallLinkButtonStyle: React.CSSProperties = {
+  border: "1px solid #bfdbfe",
+  background: "#ffffff",
+  color: "#2563eb",
+  borderRadius: 12,
+  padding: "9px 12px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const inlineLinkedEmptyStyle: React.CSSProperties = {
+  border: "1px dashed #cbd5e1",
+  borderRadius: 16,
+  padding: 18,
+  color: "#64748b",
+  background: "#f8fafc",
+  fontWeight: 700,
+};
+
+const inlineLinkedTableWrapStyle: React.CSSProperties = {
+  width: "100%",
+  overflowX: "auto",
+  border: "1px solid #dbe4f0",
+  borderRadius: 16,
+  background: "#ffffff",
+};
+
+const inlineDocumentTypeStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 10,
+  color: "#334155",
+  fontWeight: 800,
+};
+
+const inlineDocumentIconStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  borderRadius: 10,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  background: "#f8fafc",
+  border: "1px solid #dbe4f0",
+};
+
+const inlineDocumentNumberButtonStyle: React.CSSProperties = {
+  border: "none",
+  background: "transparent",
+  color: "#2563eb",
+  padding: 0,
+  cursor: "pointer",
+  fontWeight: 900,
+  textDecoration: "underline",
+  textUnderlineOffset: 3,
+};
+
+const inlineDocumentStatusStyle: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  border: "1px solid #cbd5e1",
+  background: "#f8fafc",
+  color: "#475569",
+  borderRadius: 999,
+  padding: "5px 9px",
+  fontSize: 12,
+  fontWeight: 900,
+};
+
+const inlineDocumentActionsStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+};
+
+const iconActionButtonStyle: React.CSSProperties = {
+  width: 34,
+  height: 34,
+  border: "1px solid #dbe4f0",
+  background: "#ffffff",
+  color: "#334155",
+  borderRadius: 10,
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const inlineLinkedFooterStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "center",
+  padding: 12,
+  borderTop: "1px solid #e2e8f0",
+};
+
+const showAllDocumentsButtonStyle: React.CSSProperties = {
+  border: "1px solid #dbe4f0",
+  background: "#ffffff",
+  color: "#2563eb",
+  borderRadius: 12,
+  padding: "10px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
