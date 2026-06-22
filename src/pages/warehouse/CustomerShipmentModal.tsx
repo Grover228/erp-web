@@ -49,6 +49,7 @@ export default function CustomerShipmentModal({
 }: CustomerShipmentModalProps) {
   const [currentShipment, setCurrentShipment] = useState(shipment);
   const [posting, setPosting] = useState(false);
+  const [unposting, setUnposting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
 
@@ -165,6 +166,73 @@ export default function CustomerShipmentModal({
     }
   }
 
+  async function unpostShipment() {
+    if (currentShipment.status !== "posted") return;
+
+    const confirmed = window.confirm(
+      [
+        `Отменить проведение отгрузки ${currentShipment.shipment_number || "Без номера"}?`,
+        "",
+        "Складские движения по этой отгрузке будут удалены.",
+        "После этого документ можно будет исправить или удалить.",
+      ].join("\n"),
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setUnposting(true);
+      setError("");
+
+      const now = new Date().toISOString();
+
+      const { error: movementsError } = await supabase
+        .from("stock_movements")
+        .delete()
+        .eq("source_document_type", "customer_shipment")
+        .eq("source_document_id", currentShipment.id);
+
+      if (movementsError) throw movementsError;
+
+      const { error: shipmentUpdateError } = await supabase
+        .from("customer_shipments")
+        .update({
+          status: "draft",
+          updated_at: now,
+        })
+        .eq("id", currentShipment.id);
+
+      if (shipmentUpdateError) throw shipmentUpdateError;
+
+      if (currentShipment.customer_order_id) {
+        const { error: orderUpdateError } = await supabase
+          .from("customer_orders")
+          .update({
+            status: "ordered",
+            updated_at: now,
+          })
+          .eq("id", currentShipment.customer_order_id);
+
+        if (orderUpdateError) throw orderUpdateError;
+      }
+
+      setCurrentShipment((prev) => ({
+        ...prev,
+        status: "draft",
+      }));
+
+      onSaved?.();
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка отмены проведения отгрузки",
+      );
+    } finally {
+      setUnposting(false);
+    }
+  }
+
   async function deleteShipment() {
     if (currentShipment.status === "posted") {
       setError("Проведённую отгрузку пока нельзя удалить напрямую. Сначала нужно сделать отмену проведения.");
@@ -239,25 +307,33 @@ export default function CustomerShipmentModal({
               </button>
             )}
 
-            <button
-              type="button"
-              onClick={postShipment}
-              disabled={posting || currentShipment.status === "posted"}
-              style={{
-                ...postButtonStyle,
-                opacity: posting || currentShipment.status === "posted" ? 0.65 : 1,
-                cursor:
-                  posting || currentShipment.status === "posted"
-                    ? "not-allowed"
-                    : "pointer",
-              }}
-            >
-              {currentShipment.status === "posted"
-                ? "✓ Проведена"
-                : posting
-                  ? "Провожу..."
-                  : "✓ Провести отгрузку"}
-            </button>
+            {currentShipment.status === "posted" ? (
+              <button
+                type="button"
+                onClick={unpostShipment}
+                disabled={unposting}
+                style={{
+                  ...unpostButtonStyle,
+                  opacity: unposting ? 0.65 : 1,
+                  cursor: unposting ? "not-allowed" : "pointer",
+                }}
+              >
+                {unposting ? "Отменяю..." : "↩ Отменить проведение"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={postShipment}
+                disabled={posting}
+                style={{
+                  ...postButtonStyle,
+                  opacity: posting ? 0.65 : 1,
+                  cursor: posting ? "not-allowed" : "pointer",
+                }}
+              >
+                {posting ? "Провожу..." : "✓ Провести отгрузку"}
+              </button>
+            )}
 
             {currentShipment.status !== "posted" && (
               <button
@@ -298,7 +374,7 @@ export default function CustomerShipmentModal({
 
         <div style={noticeStyle}>
           {currentShipment.status === "posted"
-            ? "Отгрузка проведена. Остатки списаны со склада."
+            ? "Отгрузка проведена. Остатки списаны со склада. Если документ ошибочный, сначала отмените проведение."
             : "При проведении отгрузка спишет товары со склада и закроет резерв по заказу."}
         </div>
 
@@ -350,6 +426,7 @@ const subtitleStyle: React.CSSProperties = { color: "#64748b", marginTop: 5, fon
 const actionsStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" };
 const secondaryButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900 };
 const postButtonStyle: React.CSSProperties = { border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#15803d", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 14 };
+const unpostButtonStyle: React.CSSProperties = { border: "1px solid #fed7aa", background: "#fff7ed", color: "#c2410c", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 14 };
 const deleteButtonStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fff1f2", color: "#991b1b", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 14 };
 const closeButtonStyle: React.CSSProperties = { width: 44, height: 44, borderRadius: 14, border: "1px solid #cbd5e1", background: "#ffffff", cursor: "pointer", fontSize: 24, fontWeight: 800, color: "#0f172a" };
 const infoGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 };
