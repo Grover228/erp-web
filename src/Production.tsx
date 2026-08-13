@@ -669,74 +669,13 @@ export default function Production({
         (operationsResult.data as ProductionOrderOperation[]) || [];
       const safeBatches = (batchesResult.data as ProductionBatch[]) || [];
 
-      const finalizedAny = await finalizeFinishedOrdersFromLoadedData(
-        safeOrders,
-        safeOperations,
-      );
-
-      if (finalizedAny) {
-        const { data: refreshedOrdersData, error: refreshedOrdersError } =
-          await supabase
-            .from("production_orders")
-            .select(
-              `
-              *,
-              product:products (
-                name,
-                article
-              )
-            `,
-            )
-            .order("created_at", { ascending: false });
-
-        if (refreshedOrdersError) throw refreshedOrdersError;
-
-        const refreshedOrders =
-          (refreshedOrdersData as ProductionOrder[]) || [];
-        setOrders(refreshedOrders);
-
-        const refreshedOrderIds = refreshedOrders.map((item) => item.id);
-
-        if (refreshedOrderIds.length === 0) {
-          setOperations([]);
-          setOperationLogs([]);
-          setBatches([]);
-          return;
-        }
-
-        await loadOperationLogsForOrders(refreshedOrderIds);
-
-        const [refreshedOperationsResult, refreshedBatchesResult] =
-          await Promise.all([
-            supabase
-              .from("production_order_operations")
-              .select("*")
-              .in("production_order_id", refreshedOrderIds)
-              .order("sort_order", { ascending: true }),
-
-            supabase
-              .from("production_batches")
-              .select("*")
-              .in("production_order_id", refreshedOrderIds)
-              .order("created_at", { ascending: false }),
-          ]);
-
-        if (refreshedOperationsResult.error) {
-          throw refreshedOperationsResult.error;
-        }
-
-        if (refreshedBatchesResult.error) {
-          throw refreshedBatchesResult.error;
-        }
-
-        setOperations(
-          (refreshedOperationsResult.data as ProductionOrderOperation[]) || [],
-        );
-        setBatches((refreshedBatchesResult.data as ProductionBatch[]) || []);
-      } else {
-        setOperations(safeOperations);
-        setBatches(safeBatches);
-      }
+      /*
+        ВАЖНО: загрузка списка заказов не должна сама проводить производство.
+        Готовая продукция ставится на склад только при закрытии конкретной QR-пачки
+        на последней операции через finalizeProductionBatchStock().
+      */
+      setOperations(safeOperations);
+      setBatches(safeBatches);
 
       setOpenJobs((prev) => {
         const next = { ...prev };
@@ -928,7 +867,18 @@ export default function Production({
 
       const plannedMaterialsCost = techMaterials.reduce((sum, item) => {
         const price = materialPriceMap.get(item.material_id) || 0;
-        return sum + Number(item.quantity || 0) * orderQuantity * price;
+        const materialInfo = materialInfoMap.get(item.material_id);
+        const productionUnitsPerPurchaseUnit = Number(
+          materialInfo?.production_units_per_purchase_unit || 0,
+        );
+        const totalProductionQuantity =
+          Number(item.quantity || 0) * orderQuantity;
+        const totalPurchaseQuantity =
+          productionUnitsPerPurchaseUnit > 0
+            ? totalProductionQuantity / productionUnitsPerPurchaseUnit
+            : totalProductionQuantity;
+
+        return sum + totalPurchaseQuantity * price;
       }, 0);
 
       const plannedConsumablesCost = techConsumables.reduce((sum, item) => {
@@ -979,7 +929,13 @@ export default function Production({
           quantity_per_unit: item.quantity,
           total_quantity: totalQuantity,
           planned_price: price,
-          planned_total: totalQuantity * price,
+          planned_total:
+            (Number(item.quantity || 0) * orderQuantity) /
+              Number(
+                materialInfoMap.get(item.material_id)
+                  ?.production_units_per_purchase_unit || 1,
+              ) *
+              price,
           comment: item.comment,
         };
       });
@@ -1777,16 +1733,11 @@ export default function Production({
           Number(item.completed_quantity || 0) >= Number(order.quantity || 0)
       );
 
-      if (allDone) {
-        const fullyDone = await isProductionOrderFullyDone(
-          order.id,
-          Number(order.quantity || 0),
-        );
-
-        if (fullyDone) {
-          await finalizeProductionOrderStock(order.id);
-        }
-      }
+      /*
+        Здесь НЕ ставим готовую продукцию на склад по заказу целиком.
+        Производственный заказ может быть полностью закрыт по операциям,
+        но складской приход создаётся только по QR-пачкам после последней операции.
+      */
 
       if (finishOperation.sort_order === 1) {
         const batchNumber = `PK-${String(Date.now()).slice(-6)}`;

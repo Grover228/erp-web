@@ -156,8 +156,7 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
 
   const totals = useMemo(() => {
     const materialsTotal = materials.reduce((sum, row) => {
-      const material = materialCatalog.find((item) => item.id === row.material_id);
-      return sum + row.quantity * (material?.default_price || 0);
+      return sum + row.quantity * getMaterialPrice(row.material_id);
     }, 0);
 
     const consumablesTotal = consumables.reduce((sum, row) => {
@@ -779,7 +778,19 @@ export default function ProductTechCardModal({ product, onClose }: Props) {
 
   function getMaterialPrice(materialId: string) {
     const material = materialCatalog.find((item) => item.id === materialId);
-    return material?.default_price || 0;
+
+    if (!material) return 0;
+
+    const purchasePrice = Number(material.default_price || 0);
+    const productionUnitsPerPurchaseUnit = Number(
+      material.production_units_per_purchase_unit || 0,
+    );
+
+    if (productionUnitsPerPurchaseUnit > 0) {
+      return purchasePrice / productionUnitsPerPurchaseUnit;
+    }
+
+    return purchasePrice;
   }
 
   function getConsumableName(consumableId: string) {
