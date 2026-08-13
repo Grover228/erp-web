@@ -1,9 +1,26 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../supabase";
+import * as XLSX from "xlsx";
+import BulkEditModal from "./BulkEditModal";
+import InventoryImportModal from "./InventoryImportModal";
 
 type StockItemType = "product" | "material" | "consumable";
 type StockTab = "all" | StockItemType;
 type AdjustmentMode = "receipt" | "write_off";
+
+type BulkEditChange = {
+  id: string;
+  itemType: StockItemType;
+  currentName: string;
+  newName: string;
+  currentArticle: string;
+  newArticle: string;
+  currentColor: string;
+  newColor: string;
+  currentPrice: number;
+  newPrice: number;
+  changes: string[];
+};
 
 type StockAvailableRow = {
   item_type: StockItemType | string;
@@ -146,6 +163,9 @@ export default function StockPage() {
   const [adjustmentComment, setAdjustmentComment] = useState("");
   const [adjustmentSaving, setAdjustmentSaving] = useState(false);
   const [adjustmentError, setAdjustmentError] = useState("");
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [inventoryImportOpen, setInventoryImportOpen] = useState(false);
+  const [bulkEditSaving, setBulkEditSaving] = useState(false);
 
   useEffect(() => {
     loadStockItems();
@@ -465,6 +485,142 @@ export default function StockPage() {
   const selectedRow =
     stockRows.find((row) => row.key === selectedRowKey) || null;
 
+  function exportStockToExcel() {
+    if (filteredRows.length === 0) {
+      setError("Нет данных для выгрузки в Excel.");
+      return;
+    }
+
+    const exportRows = filteredRows.map((row) => ({
+      "ID": row.itemId,
+      "Тип": getItemTypeLabel(row.itemType),
+      "Номенклатура": row.name,
+      "Артикул": row.article || "",
+      "Цвет": row.colorName || "",
+      "Остаток": row.quantityOnHand,
+      "Резерв": row.quantityReserved,
+      "Доступно": row.quantityAvailable,
+      "Цена": row.avgPrice,
+      "Стоимость": row.amount,
+      "Последнее движение": row.lastMovementType || "",
+      "Документ": row.lastDocumentType || "",
+      "Дата последнего движения": row.lastMovementDate
+        ? new Date(row.lastMovementDate).toLocaleString("ru-RU")
+        : "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+
+    worksheet["!cols"] = [
+      { wch: 38 },
+      { wch: 20 },
+      { wch: 34 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 16 },
+      { wch: 24 },
+      { wch: 24 },
+      { wch: 24 },
+      { wch: 24 },
+    ];
+
+    worksheet["!autofilter"] = {
+      ref: worksheet["!ref"] || "A1:L1",
+    };
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Остатки");
+
+    const date = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `Остатки_${date}.xlsx`);
+  }
+
+  async function handleBulkEditApply(changes: BulkEditChange[]) {
+    if (changes.length === 0 || bulkEditSaving) return;
+
+    try {
+      setBulkEditSaving(true);
+      setError("");
+
+      const errors: string[] = [];
+      let updated = 0;
+
+      for (const change of changes) {
+        let result;
+
+        if (change.itemType === "product") {
+          result = await supabase
+            .from("products")
+            .update({
+              name: change.newName,
+              article: change.newArticle || null,
+            })
+            .eq("id", change.id)
+            .select("id")
+            .maybeSingle();
+        } else if (change.itemType === "material") {
+          const materialPayload: Record<string, unknown> = {
+            name: change.newName,
+            article: change.newArticle || null,
+            default_price: change.newPrice,
+          };
+
+          // Цвет пока не изменяем автоматически: для него нужен безопасный
+          // поиск color_id. Остальные поля применяем независимо.
+          result = await supabase
+            .from("materials")
+            .update(materialPayload)
+            .eq("id", change.id)
+            .select("id")
+            .maybeSingle();
+        } else {
+          result = await supabase
+            .from("consumables")
+            .update({
+              name: change.newName,
+              article: change.newArticle || null,
+              default_price: change.newPrice,
+            })
+            .eq("id", change.id)
+            .select("id")
+            .maybeSingle();
+        }
+
+        if (result.error) {
+          errors.push(`${change.newName || change.id}: ${result.error.message}`);
+        } else if (!result.data) {
+          errors.push(
+            `${change.newName || change.id}: запись с ID ${change.id} не найдена, изменение не применено.`,
+          );
+        } else {
+          updated += 1;
+        }
+      }
+
+      await loadStockItems();
+
+      if (errors.length > 0) {
+        setError(
+          `Обновлено: ${updated}. Ошибок: ${errors.length}. ${errors.join(" | ")}`,
+        );
+      } else {
+        setBulkEditOpen(false);
+      }
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось применить массовые изменения.",
+      );
+    } finally {
+      setBulkEditSaving(false);
+    }
+  }
+
   const selectedMovements = selectedRow
     ? movements
         .filter((movement) => {
@@ -495,9 +651,38 @@ export default function StockPage() {
             </div>
           </div>
 
-          <button type="button" onClick={loadStockItems} style={secondaryButtonStyle}>
-            Обновить
-          </button>
+          <div style={headerActionsStyle}>
+            <button
+              type="button"
+              onClick={() => setBulkEditOpen(true)}
+              style={bulkEditButtonStyle}
+              disabled={loading || stockRows.length === 0}
+            >
+              ✏️ Массовое редактирование
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setInventoryImportOpen(true)}
+              style={inventoryButtonStyle}
+              disabled={loading || stockRows.length === 0}
+            >
+              📦 Инвентаризация
+            </button>
+
+            <button
+              type="button"
+              onClick={exportStockToExcel}
+              style={exportButtonStyle}
+              disabled={loading || filteredRows.length === 0}
+            >
+              📤 Выгрузить Excel
+            </button>
+
+            <button type="button" onClick={loadStockItems} style={secondaryButtonStyle}>
+              Обновить
+            </button>
+          </div>
         </div>
 
         {error && <div style={errorStyle}>{error}</div>}
@@ -801,6 +986,20 @@ export default function StockPage() {
           </div>
         </div>
       )}
+
+      <BulkEditModal
+        open={bulkEditOpen}
+        stockRows={stockRows}
+        onClose={() => setBulkEditOpen(false)}
+        onApply={handleBulkEditApply}
+        saving={bulkEditSaving}
+      />
+
+      <InventoryImportModal
+        open={inventoryImportOpen}
+        stockRows={stockRows}
+        onClose={() => setInventoryImportOpen(false)}
+      />
     </div>
   );
 }
@@ -1168,6 +1367,43 @@ const sectionSubtitleStyle: React.CSSProperties = {
   color: "#64748b",
   fontSize: 15,
   lineHeight: 1.5,
+};
+
+const headerActionsStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 10,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const bulkEditButtonStyle: React.CSSProperties = {
+  border: "1px solid #c4b5fd",
+  background: "#f5f3ff",
+  color: "#6d28d9",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const inventoryButtonStyle: React.CSSProperties = {
+  border: "1px solid #fde68a",
+  background: "#fffbeb",
+  color: "#b45309",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const exportButtonStyle: React.CSSProperties = {
+  border: "1px solid #86efac",
+  background: "#f0fdf4",
+  color: "#15803d",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
 };
 
 const secondaryButtonStyle: React.CSSProperties = {
