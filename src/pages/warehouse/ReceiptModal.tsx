@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 import LinkedDocumentsModal from "../purchases/LinkedDocumentsModal";
 
-export type PurchaseItemType = "material" | "consumable" | "product";
+export type PurchaseItemType = "material" | "consumable" | "product" | "resale_product";
 
 export type SupplierReceipt = {
   id: string;
@@ -20,6 +20,7 @@ export type SupplierReceipt = {
 export type SupplierReceiptItem = {
   id: string;
   item_type: PurchaseItemType;
+  item_id: string | null;
   material_id: string | null;
   consumable_id: string | null;
   product_id: string | null;
@@ -39,6 +40,10 @@ export type SupplierReceiptItem = {
     name: string | null;
     article: string | null;
   } | null;
+  items?: {
+    name: string | null;
+    article: string | null;
+  } | null;
 };
 
 export type Color = {
@@ -52,6 +57,7 @@ type DocumentType = "supplier_order" | "supplier_receipt" | "supplier_payment";
 type ReceiptItemDraft = {
   id: string;
   item_type: PurchaseItemType;
+  item_id: string;
   material_id: string;
   consumable_id: string;
   product_id: string;
@@ -71,6 +77,7 @@ function receiptItemToDraft(item: SupplierReceiptItem): ReceiptItemDraft {
   return {
     id: item.id,
     item_type: item.item_type,
+    item_id: item.item_id || "",
     material_id: item.material_id || "",
     consumable_id: item.consumable_id || "",
     product_id: item.product_id || "",
@@ -122,7 +129,8 @@ export default function ReceiptModal({
           *,
           materials(name, article, color_id),
           consumables(name, article),
-          products(name, article)
+          products(name, article),
+          items(name, article)
         `,
         )
         .eq("supplier_receipt_id", receipt.id)
@@ -286,6 +294,7 @@ export default function ReceiptModal({
           source_document_id: currentReceipt.id,
           production_order_id: null,
           item_type: item.item_type,
+          item_id: item.item_id || null,
           product_id: item.item_type === "product" ? item.product_id : null,
           material_id: item.item_type === "material" ? item.material_id : null,
           consumable_id:
@@ -375,6 +384,10 @@ export default function ReceiptModal({
       return item.consumables?.name || "Расходник";
     }
 
+    if (item.item_type === "resale_product") {
+      return item.items?.name || "Товар для перепродажи";
+    }
+
     return item.products?.name || "Товар";
   }
 
@@ -385,6 +398,10 @@ export default function ReceiptModal({
 
     if (item.item_type === "consumable") {
       return item.consumables?.article || "";
+    }
+
+    if (item.item_type === "resale_product") {
+      return item.items?.article || "";
     }
 
     return item.products?.article || "";

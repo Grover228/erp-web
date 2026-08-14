@@ -21,7 +21,8 @@ export type CustomerOrder = {
 export type CustomerOrderItem = {
   id: string;
   customer_order_id: string;
-  item_type: "product" | "material" | "consumable";
+  item_type: "product" | "material" | "consumable" | "resale_product";
+  item_id: string | null;
   product_id: string | null;
   material_id: string | null;
   consumable_id: string | null;
@@ -71,6 +72,25 @@ export type Consumable = {
   sale_price?: number | null;
 };
 
+export type ResaleProduct = {
+  id: string;
+  name: string;
+  article?: string | null;
+  default_price?: number | null;
+  price?: number | null;
+  sale_price?: number | null;
+};
+
+type PickerDirectoryItem = {
+  id: string;
+  name: string;
+  article?: string | null;
+  default_price?: number | null;
+  price?: number | null;
+  sale_price?: number | null;
+  item_type: "product" | "material" | "consumable" | "resale_product";
+};
+
 export type Counterparty = {
   id: string;
   name: string;
@@ -86,7 +106,8 @@ type Status = {
 
 type CustomerOrderItemDraft = {
   id: string;
-  item_type: "product" | "material" | "consumable";
+  item_type: "product" | "material" | "consumable" | "resale_product";
+  item_id: string;
   product_id: string;
   material_id: string;
   consumable_id: string;
@@ -102,6 +123,7 @@ type CustomerOrderModalProps = {
   products: Product[];
   materials: Material[];
   consumables: Consumable[];
+  resaleProducts: ResaleProduct[];
   counterparties: Counterparty[];
   directoriesLoading: boolean;
   onClose: () => void;
@@ -111,6 +133,7 @@ type CustomerOrderModalProps = {
 const emptyItem = (): CustomerOrderItemDraft => ({
   id: crypto.randomUUID(),
   item_type: "product",
+  item_id: "",
   product_id: "",
   material_id: "",
   consumable_id: "",
@@ -122,6 +145,7 @@ function itemToDraft(item: CustomerOrderItem): CustomerOrderItemDraft {
   return {
     id: item.id || crypto.randomUUID(),
     item_type: item.item_type || "product",
+    item_id: item.item_id || "",
     product_id: item.product_id || "",
     material_id: item.material_id || "",
     consumable_id: item.consumable_id || "",
@@ -138,6 +162,7 @@ export default function CustomerOrderModal({
   products,
   materials,
   consumables,
+  resaleProducts,
   counterparties,
   directoriesLoading,
   onClose,
@@ -285,7 +310,7 @@ export default function CustomerOrderModal({
     );
   }
 
-  function getItemDirectoryPrice(item: Product | Material | Consumable | undefined | null) {
+  function getItemDirectoryPrice(item: Product | Material | Consumable | ResaleProduct | undefined | null) {
     if (!item) return "";
     const price = item.sale_price ?? item.default_price ?? item.price;
     return price !== null && price !== undefined ? String(price) : "";
@@ -319,6 +344,7 @@ export default function CustomerOrderModal({
   function getDraftItemSelectedId(item: CustomerOrderItemDraft) {
     if (item.item_type === "material") return item.material_id;
     if (item.item_type === "consumable") return item.consumable_id;
+    if (item.item_type === "resale_product") return item.item_id;
     return item.product_id;
   }
 
@@ -327,6 +353,7 @@ export default function CustomerOrderModal({
       .filter((item) => getDraftItemSelectedId(item) && Number(item.quantity) > 0)
       .map((item) => ({
         item_type: item.item_type,
+        item_id: item.item_type === "resale_product" ? item.item_id : null,
         product_id: item.item_type === "product" ? item.product_id : null,
         material_id: item.item_type === "material" ? item.material_id : null,
         consumable_id: item.item_type === "consumable" ? item.consumable_id : null,
@@ -335,9 +362,10 @@ export default function CustomerOrderModal({
       }));
   }
 
-  function getItemTypeLabel(itemType: "product" | "material" | "consumable") {
+  function getItemTypeLabel(itemType: "product" | "material" | "consumable" | "resale_product") {
     if (itemType === "material") return "Материал";
     if (itemType === "consumable") return "Расходник";
+    if (itemType === "resale_product") return "Перепродажа";
     return "Товар / продукция";
   }
 
@@ -348,6 +376,10 @@ export default function CustomerOrderModal({
 
     if (item.item_type === "consumable") {
       return consumables.find((consumable) => consumable.id === item.consumable_id) || null;
+    }
+
+    if (item.item_type === "resale_product") {
+      return resaleProducts.find((product) => product.id === item.item_id) || null;
     }
 
     return products.find((product) => product.id === item.product_id) || null;
@@ -364,12 +396,26 @@ export default function CustomerOrderModal({
   function getProductName(item: CustomerOrderItem) {
     if (item.item_type === "material") return item.materials?.name || "Материал";
     if (item.item_type === "consumable") return item.consumables?.name || "Расходник";
+    if (item.item_type === "resale_product") {
+      return (
+        item.products?.name ||
+        resaleProducts.find((product) => product.id === item.item_id)?.name ||
+        "Товар для перепродажи"
+      );
+    }
     return item.products?.name || "Товар";
   }
 
   function getProductArticle(item: CustomerOrderItem) {
     if (item.item_type === "material") return item.materials?.article || "";
     if (item.item_type === "consumable") return item.consumables?.article || "";
+    if (item.item_type === "resale_product") {
+      return (
+        item.products?.article ||
+        resaleProducts.find((product) => product.id === item.item_id)?.article ||
+        ""
+      );
+    }
     return item.products?.article || "";
   }
 
@@ -379,39 +425,50 @@ export default function CustomerOrderModal({
     setIsProductPickerOpen(true);
   }
 
-  function getPickerItemType() {
-    return items.find((item) => item.id === productPickerItemId)?.item_type || "product";
+  function getPickerDirectoryItems(): PickerDirectoryItem[] {
+    const query = productPickerSearch.trim().toLowerCase();
+    const allItems: PickerDirectoryItem[] = [
+      ...products.map((item) => ({ ...item, item_type: "product" as const })),
+      ...resaleProducts.map((item) => ({ ...item, item_type: "resale_product" as const })),
+      ...materials.map((item) => ({ ...item, item_type: "material" as const })),
+      ...consumables.map((item) => ({ ...item, item_type: "consumable" as const })),
+    ];
+
+    return allItems
+      .filter(
+        (item) =>
+          !query ||
+          getPickerDirectoryItemSearchText(item).includes(query),
+      )
+      .sort((a, b) => {
+        const nameCompare = a.name.localeCompare(b.name, "ru");
+        if (nameCompare !== 0) return nameCompare;
+        return (a.article || "").localeCompare(b.article || "", "ru");
+      });
   }
 
-  function getPickerDirectoryItems() {
-    const query = productPickerSearch.trim().toLowerCase();
-    const itemType = getPickerItemType();
+  function getPickerDirectoryItemSearchText(item: PickerDirectoryItem) {
+    return [item.name, item.article || "", getItemTypeLabel(item.item_type)]
+      .join(" ")
+      .toLowerCase();
+  }
 
-    const source =
-      itemType === "material"
-        ? materials
-        : itemType === "consumable"
-          ? consumables
-          : products;
-
-    return source.filter(
-      (item) =>
-        !query ||
-        item.name.toLowerCase().includes(query) ||
-        (item.article || "").toLowerCase().includes(query),
-    );
+  function getPickerDirectoryItemKey(item: PickerDirectoryItem) {
+    return `${item.item_type}-${item.id}`;
   }
 
   function selectProduct(itemId: string) {
     if (!productPickerItemId) return;
 
-    const itemType = getPickerItemType();
     const directoryItem = getPickerDirectoryItems().find((item) => item.id === itemId);
+    if (!directoryItem) return;
 
     updateItem(productPickerItemId, {
-      product_id: itemType === "product" ? itemId : "",
-      material_id: itemType === "material" ? itemId : "",
-      consumable_id: itemType === "consumable" ? itemId : "",
+      item_type: directoryItem.item_type,
+      item_id: directoryItem.item_type === "resale_product" ? itemId : "",
+      product_id: directoryItem.item_type === "product" ? itemId : "",
+      material_id: directoryItem.item_type === "material" ? itemId : "",
+      consumable_id: directoryItem.item_type === "consumable" ? itemId : "",
       price: getItemDirectoryPrice(directoryItem),
     });
 
@@ -592,7 +649,8 @@ export default function CustomerOrderModal({
           *,
           products(name, article),
           materials(name, article, color_id),
-          consumables(name, article)
+          consumables(name, article),
+          items(name, article)
         `,
         )
         .eq("customer_shipment_id", shipmentId)
@@ -660,44 +718,25 @@ export default function CustomerOrderModal({
 
             return (
               <div key={item.id} style={compactItemRowStyle}>
-                <div style={{ fontWeight: 900, color: "#64748b" }}>#{index + 1}</div>
+                <div style={itemNumberStyle}>#{index + 1}</div>
 
-                <label style={labelStyle}>
-                  <span style={labelTextStyle}>Тип</span>
-                  <select
-                    value={item.item_type}
-                    onChange={(event) =>
-                      updateItem(item.id, {
-                        item_type: event.target.value as "product" | "material" | "consumable",
-                        product_id: "",
-                        material_id: "",
-                        consumable_id: "",
-                        price: "",
-                      })
-                    }
-                    style={inputStyle}
-                  >
-                    <option value="product">Товар / продукция</option>
-                    <option value="material">Материал</option>
-                    <option value="consumable">Расходник</option>
-                  </select>
-                </label>
+                <div style={itemNomenclatureCellStyle}>
+                  <button type="button" onClick={() => openProductPicker(item.id)} style={chooseProductButtonStyle}>
+                    + Выбрать
+                  </button>
 
-                <button type="button" onClick={() => openProductPicker(item.id)} style={chooseProductButtonStyle}>
-                  + Выбрать
-                </button>
-
-                <div style={selectedProductBoxStyle}>
-                  {selectedName ? (
-                    <div style={{ display: "grid", gap: 2 }}>
-                      <div style={selectedProductTitleStyle}>{selectedName}</div>
-                      <div style={selectedProductMetaStyle}>
-                        {getItemTypeLabel(item.item_type)}{selectedArticle ? ` · ${selectedArticle}` : ""}
+                  <div style={selectedProductBoxStyle}>
+                    {selectedName ? (
+                      <div style={{ display: "grid", gap: 2, minWidth: 0 }}>
+                        <div style={selectedProductTitleStyle}>{selectedName}</div>
+                        <div style={selectedProductMetaStyle}>
+                          {getItemTypeLabel(item.item_type)}{selectedArticle ? ` · ${selectedArticle}` : ""}
+                        </div>
                       </div>
-                    </div>
-                  ) : (
-                    <div style={selectedProductEmptyStyle}>Товар не выбран</div>
-                  )}
+                    ) : (
+                      <div style={selectedProductEmptyStyle}>Товар не выбран</div>
+                    )}
+                  </div>
                 </div>
 
                 <label style={labelStyle}>
@@ -725,7 +764,7 @@ export default function CustomerOrderModal({
                   />
                 </label>
 
-                <div style={{ display: "grid", gap: 4 }}>
+                <div style={amountCellStyle}>
                   <span style={labelTextStyle}>Сумма</span>
                   <div style={amountStyle}>
                     {getItemAmount(item).toLocaleString("ru-RU", {
@@ -745,8 +784,10 @@ export default function CustomerOrderModal({
                     opacity: items.length === 1 ? 0.45 : 1,
                     cursor: items.length === 1 ? "not-allowed" : "pointer",
                   }}
+                  title="Удалить позицию"
+                  aria-label="Удалить позицию"
                 >
-                  Удалить
+                  🗑
                 </button>
               </div>
             );
@@ -761,6 +802,8 @@ export default function CustomerOrderModal({
   }
 
   const orderStatus = getOrderStatus();
+  const pickerItems = getPickerDirectoryItems();
+  const pickerHasResults = pickerItems.length > 0;
 
   return (
     <div onClick={onClose} style={modalOverlayStyle}>
@@ -920,7 +963,7 @@ export default function CustomerOrderModal({
                     <tbody>
                       {orderItems.map((item) => (
                         <tr key={item.id}>
-                          <td style={tdStyle}>Готовая продукция</td>
+                          <td style={tdStyle}>{getItemTypeLabel(item.item_type)}</td>
                           <td style={tdStyle}>{getProductName(item)}</td>
                           <td style={tdStyle}>{getProductArticle(item) || "—"}</td>
                           <td style={tdStyle}>{item.quantity}</td>
@@ -943,7 +986,7 @@ export default function CustomerOrderModal({
                 <div>
                   <div style={pickerTitleStyle}>Выбор номенклатуры</div>
                   <div style={{ color: "#64748b", marginTop: 4 }}>
-                    Выбери {getItemTypeLabel(getPickerItemType()).toLowerCase()} из справочника.
+                    Найди нужную номенклатуру по названию или артикулу.
                   </div>
                 </div>
                 <button type="button" onClick={() => setIsProductPickerOpen(false)} style={modalCloseButtonStyle}>×</button>
@@ -952,13 +995,15 @@ export default function CustomerOrderModal({
               <input value={productPickerSearch} onChange={(event) => setProductPickerSearch(event.target.value)} placeholder="Название или артикул" style={inputStyle} />
 
               <div style={pickerListStyle}>
-                {getPickerDirectoryItems().length === 0 ? (
+                {!pickerHasResults ? (
                   <div style={emptyStyle}>Номенклатура не найдена.</div>
                 ) : (
-                  getPickerDirectoryItems().map((item) => (
-                    <button key={item.id} type="button" onClick={() => selectProduct(item.id)} style={productCardStyle}>
+                  pickerItems.map((item) => (
+                    <button key={getPickerDirectoryItemKey(item)} type="button" onClick={() => selectProduct(item.id)} style={productCardStyle}>
                       <div style={productCardTitleStyle}>{item.name}</div>
-                      <div style={productCardSubStyle}>{item.article || "без артикула"}</div>
+                      <div style={productCardSubStyle}>
+                        {getItemTypeLabel(item.item_type)} · {item.article || "без артикула"}
+                      </div>
                       <div style={productParamStyle}>
                         Цена: {Number(getItemDirectoryPrice(item) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
                       </div>
@@ -1067,7 +1112,7 @@ export default function CustomerOrderModal({
 }
 
 const modalOverlayStyle: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(15, 23, 42, 0.45)", zIndex: 10000, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 };
-const modalStyle: React.CSSProperties = { width: "min(1120px, 96vw)", maxHeight: "84vh", overflowY: "auto", background: "#ffffff", borderRadius: 18, padding: 14, border: "1px solid #dbe4f0", boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)", display: "grid", gap: 10 };
+const modalStyle: React.CSSProperties = { width: "min(1280px, 96vw)", maxHeight: "90vh", overflowY: "auto", background: "#ffffff", borderRadius: 18, padding: 14, border: "1px solid #dbe4f0", boxShadow: "0 24px 60px rgba(15, 23, 42, 0.32)", display: "grid", gap: 10 };
 const modalHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" };
 const modalActionsStyle: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" };
 const createShipmentButtonStyle: React.CSSProperties = { border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#15803d", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap" };
@@ -1075,7 +1120,7 @@ const editOrderButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe",
 const deleteOrderButtonStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fff1f2", color: "#991b1b", borderRadius: 12, padding: "10px 13px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap" };
 const modalCloseButtonStyle: React.CSSProperties = { width: 42, height: 42, borderRadius: 14, border: "1px solid #cbd5e1", background: "#ffffff", cursor: "pointer", fontSize: 24, fontWeight: 700, color: "#0f172a" };
 const formCardStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 14, padding: 12, display: "grid", gap: 10 };
-const grid3Style: React.CSSProperties = { display: "grid", gridTemplateColumns: "190px 190px minmax(240px, 1fr)", gap: 10 };
+const grid3Style: React.CSSProperties = { display: "grid", gridTemplateColumns: "190px 190px minmax(300px, 1fr)", gap: 10 };
 const autoNumberBoxStyle: React.CSSProperties = { display: "grid", gap: 6 };
 const autoNumberValueStyle: React.CSSProperties = { width: "100%", boxSizing: "border-box", border: "1px solid #cbd5e1", borderRadius: 10, padding: "9px 11px", fontSize: 13, background: "#f8fafc", color: "#64748b", minHeight: 38 };
 const labelStyle: React.CSSProperties = { display: "grid", gap: 4 };
@@ -1085,13 +1130,16 @@ const customerSelectRowStyle: React.CSSProperties = { display: "grid", gridTempl
 const searchCustomerButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 10, cursor: "pointer", fontSize: 18, fontWeight: 900 };
 const itemsBlockStyle: React.CSSProperties = { border: "1px solid #dbe4f0", borderRadius: 14, padding: 12, background: "#ffffff", display: "grid", gap: 10 };
 const itemsHeaderStyle: React.CSSProperties = { display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", flexWrap: "wrap" };
-const compactItemRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "42px 110px minmax(220px, 1fr) 120px 115px 125px 90px", gap: 8, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 10, background: "#f8fafc", overflowX: "auto" };
-const chooseProductButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 10, padding: "9px 10px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap", flexShrink: 0 };
-const selectedProductBoxStyle: React.CSSProperties = { minHeight: 44, border: "1px solid #cbd5e1", borderRadius: 10, background: "#ffffff", padding: "8px 12px", display: "flex", alignItems: "center", gap: 10, boxSizing: "border-box" };
-const selectedProductTitleStyle: React.CSSProperties = { color: "#0f172a", fontSize: 14, fontWeight: 800, lineHeight: 1.2 };
-const selectedProductMetaStyle: React.CSSProperties = { color: "#64748b", fontSize: 12, fontWeight: 600 };
-const selectedProductEmptyStyle: React.CSSProperties = { color: "#94a3b8", fontSize: 14, fontWeight: 800, alignSelf: "center" };
-const amountStyle: React.CSSProperties = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "9px 10px", background: "#ffffff", fontWeight: 800, color: "#0f172a", minHeight: 38, boxSizing: "border-box", fontSize: 14 };
+const compactItemRowStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "38px minmax(360px, 1fr) 112px 112px 118px 48px", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: "10px 12px", background: "#f8fafc", minWidth: 0 };
+const itemNumberStyle: React.CSSProperties = { fontWeight: 900, color: "#64748b", fontSize: 15 };
+const itemNomenclatureCellStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "minmax(130px, 0.42fr) minmax(180px, 1fr)", gap: 8, alignItems: "stretch", minWidth: 0 };
+const chooseProductButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 10, padding: "9px 12px", cursor: "pointer", fontWeight: 900, fontSize: 13, whiteSpace: "nowrap", minWidth: 0 };
+const selectedProductBoxStyle: React.CSSProperties = { minHeight: 44, border: "1px solid #cbd5e1", borderRadius: 10, background: "#ffffff", padding: "7px 10px", display: "flex", alignItems: "center", gap: 10, boxSizing: "border-box", minWidth: 0, overflow: "hidden" };
+const selectedProductTitleStyle: React.CSSProperties = { color: "#0f172a", fontSize: 14, fontWeight: 800, lineHeight: 1.2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const selectedProductMetaStyle: React.CSSProperties = { color: "#64748b", fontSize: 11, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
+const selectedProductEmptyStyle: React.CSSProperties = { color: "#94a3b8", fontSize: 13, fontWeight: 800, alignSelf: "center", whiteSpace: "nowrap" };
+const amountCellStyle: React.CSSProperties = { display: "grid", gap: 4, minWidth: 0 };
+const amountStyle: React.CSSProperties = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "9px 10px", background: "#ffffff", fontWeight: 800, color: "#0f172a", minHeight: 38, boxSizing: "border-box", fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 const totalStyle: React.CSSProperties = { textAlign: "right", fontSize: 18, fontWeight: 900, color: "#0f172a" };
 const secondaryButtonStyle: React.CSSProperties = { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", borderRadius: 10, padding: "9px 12px", cursor: "pointer", fontWeight: 800, fontSize: 14 };
 const deleteButtonStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fff", color: "#991b1b", borderRadius: 10, padding: "9px 8px", fontWeight: 800, fontSize: 13 };

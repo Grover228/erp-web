@@ -23,6 +23,13 @@ type Status = {
   color: string | null;
 };
 
+type ResaleProduct = {
+  id: string;
+  name: string | null;
+  article: string | null;
+  default_price: number | null;
+};
+
 export default function SalesPage() {
   const [activeTab, setActiveTab] = useState<SalesTab>("orders");
 
@@ -31,6 +38,7 @@ export default function SalesPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [consumables, setConsumables] = useState<Consumable[]>([]);
+  const [resaleProducts, setResaleProducts] = useState<ResaleProduct[]>([]);
   const [counterparties, setCounterparties] = useState<Counterparty[]>([]);
   const [statuses, setStatuses] = useState<Status[]>([]);
 
@@ -108,12 +116,18 @@ export default function SalesPage() {
         productsResult,
         materialsResult,
         consumablesResult,
+        resaleProductsResult,
         counterpartiesResult,
         statusesResult,
       ] = await Promise.all([
         supabase.from("products").select("*").order("name", { ascending: true }),
         supabase.from("materials").select("*").order("name", { ascending: true }),
         supabase.from("consumables").select("*").order("name", { ascending: true }),
+        supabase
+          .from("items")
+          .select("id, name, article, default_price")
+          .eq("item_type", "resale_product")
+          .order("name", { ascending: true }),
         supabase
           .from("counterparties")
           .select("id, name, type")
@@ -127,12 +141,14 @@ export default function SalesPage() {
       if (productsResult.error) throw productsResult.error;
       if (materialsResult.error) throw materialsResult.error;
       if (consumablesResult.error) throw consumablesResult.error;
+      if (resaleProductsResult.error) throw resaleProductsResult.error;
       if (counterpartiesResult.error) throw counterpartiesResult.error;
       if (statusesResult.error) throw statusesResult.error;
 
       setProducts((productsResult.data as Product[]) || []);
       setMaterials((materialsResult.data as Material[]) || []);
       setConsumables((consumablesResult.data as Consumable[]) || []);
+      setResaleProducts((resaleProductsResult.data as ResaleProduct[]) || []);
       setCounterparties((counterpartiesResult.data as Counterparty[]) || []);
       setStatuses((statusesResult.data as Status[]) || []);
     } catch (error) {
@@ -484,6 +500,7 @@ export default function SalesPage() {
           products={products}
           materials={materials}
           consumables={consumables}
+          resaleProducts={resaleProducts}
           counterparties={counterparties}
           directoriesLoading={directoriesLoading}
           onClose={closeModal}

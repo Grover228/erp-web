@@ -208,6 +208,7 @@ export default function RelatedDocumentModal({
         orderItems.map((item) => ({
           supplier_receipt_id: receipt.id,
           item_type: item.item_type,
+          item_id: item.item_id || null,
           material_id: item.item_type === "material" ? item.material_id : null,
           consumable_id:
             item.item_type === "consumable" ? item.consumable_id : null,

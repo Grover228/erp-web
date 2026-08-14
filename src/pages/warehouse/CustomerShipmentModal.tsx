@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
 
 type DocumentType = "customer_order" | "customer_shipment" | "customer_payment";
@@ -20,7 +20,8 @@ export type CustomerShipment = {
 export type CustomerShipmentItem = {
   id: string;
   customer_shipment_id: string;
-  item_type: "product" | "material" | "consumable";
+  item_type: "product" | "material" | "consumable" | "resale_product";
+  item_id: string | null;
   product_id: string | null;
   material_id: string | null;
   consumable_id: string | null;
@@ -30,6 +31,7 @@ export type CustomerShipmentItem = {
   products?: { name: string | null; article: string | null } | null;
   materials?: { name: string | null; article: string | null; color_id?: string | null } | null;
   consumables?: { name: string | null; article: string | null } | null;
+  items?: { name: string | null; article: string | null } | null;
 };
 
 type CustomerShipmentModalProps = {
@@ -52,23 +54,88 @@ export default function CustomerShipmentModal({
   const [unposting, setUnposting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState("");
+  const [resaleItems, setResaleItems] = useState<
+    Record<string, { name: string; article: string }>
+  >({});
+
+  useEffect(() => {
+    loadResaleItems();
+  }, [shipmentItems]);
+
+  async function loadResaleItems() {
+    const itemIds = Array.from(
+      new Set(
+        shipmentItems
+          .filter((item) => item.item_type === "resale_product")
+          .map((item) => item.item_id)
+          .filter((itemId): itemId is string => Boolean(itemId)),
+      ),
+    );
+
+    if (itemIds.length === 0) {
+      setResaleItems({});
+      return;
+    }
+
+    const { data, error: resaleItemsError } = await supabase
+      .from("items")
+      .select("id, name, article")
+      .in("id", itemIds);
+
+    if (resaleItemsError) {
+      setError(resaleItemsError.message);
+      return;
+    }
+
+    const nextItems: Record<string, { name: string; article: string }> = {};
+
+    ((data || []) as Array<{
+      id: string;
+      name: string | null;
+      article: string | null;
+    }>).forEach((item) => {
+      nextItems[item.id] = {
+        name: item.name || "Товар для перепродажи",
+        article: item.article || "",
+      };
+    });
+
+    setResaleItems(nextItems);
+  }
 
   function getItemTypeLabel(itemType: CustomerShipmentItem["item_type"]) {
     if (itemType === "product") return "Товар / продукция";
     if (itemType === "material") return "Материал";
     if (itemType === "consumable") return "Расходник";
+    if (itemType === "resale_product") return "Товар для перепродажи";
     return "Товар";
   }
 
   function getItemName(item: CustomerShipmentItem) {
     if (item.item_type === "material") return item.materials?.name || "Материал";
     if (item.item_type === "consumable") return item.consumables?.name || "Расходник";
+    if (item.item_type === "resale_product") {
+      return (
+        resaleItems[item.item_id || ""]?.name ||
+        item.items?.name ||
+        item.products?.name ||
+        "Товар для перепродажи"
+      );
+    }
     return item.products?.name || "Товар";
   }
 
   function getItemArticle(item: CustomerShipmentItem) {
     if (item.item_type === "material") return item.materials?.article || "";
     if (item.item_type === "consumable") return item.consumables?.article || "";
+    if (item.item_type === "resale_product") {
+      return (
+        resaleItems[item.item_id || ""]?.article ||
+        item.items?.article ||
+        item.products?.article ||
+        ""
+      );
+    }
     return item.products?.article || "";
   }
 
@@ -111,6 +178,7 @@ export default function CustomerShipmentModal({
             customer_order_id: currentShipment.customer_order_id,
             customer_shipment_id: currentShipment.id,
             item_type: item.item_type,
+            item_id: item.item_type === "resale_product" ? item.item_id : null,
             product_id: item.product_id,
             material_id: item.material_id,
             consumable_id: item.consumable_id,

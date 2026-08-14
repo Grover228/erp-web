@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import BulkEditModal from "./BulkEditModal";
 import InventoryImportModal from "./InventoryImportModal";
 
-type StockItemType = "product" | "material" | "consumable";
+type StockItemType = "product" | "resale_product" | "material" | "consumable";
 type StockTab = "all" | StockItemType;
 type AdjustmentMode = "receipt" | "write_off";
 
@@ -27,6 +27,7 @@ type StockAvailableRow = {
   product_id: string | null;
   material_id: string | null;
   consumable_id: string | null;
+  item_id: string | null;
   quantity_on_hand: number | null;
   quantity_reserved: number | null;
   quantity_available: number | null;
@@ -36,6 +37,15 @@ type ProductCatalogItem = {
   id: string;
   name: string | null;
   article: string | null;
+};
+
+type ResaleCatalogItem = {
+  id: string;
+  name: string | null;
+  article: string | null;
+  default_price: number | null;
+  source_id: string | null;
+  is_active: boolean | null;
 };
 
 type MaterialCatalogItem = {
@@ -65,6 +75,7 @@ type StockMovementRow = {
   product_id: string | null;
   material_id: string | null;
   consumable_id: string | null;
+  item_id: string | null;
   movement_type: string | null;
   source_document_type: string | null;
   source_document_id?: string | null;
@@ -116,6 +127,7 @@ function getStockKey(itemType: string, itemId: string | null) {
 }
 
 function getStockRowId(row: StockAvailableRow) {
+  if (row.item_type === "resale_product") return row.item_id;
   if (row.item_type === "product") return row.product_id;
   if (row.item_type === "material") return row.material_id;
   if (row.item_type === "consumable") return row.consumable_id;
@@ -147,6 +159,7 @@ function getDocumentLabel(type: string) {
 export default function StockPage() {
   const [stockAvailable, setStockAvailable] = useState<StockAvailableRow[]>([]);
   const [products, setProducts] = useState<ProductCatalogItem[]>([]);
+  const [resaleProducts, setResaleProducts] = useState<ResaleCatalogItem[]>([]);
   const [materials, setMaterials] = useState<MaterialCatalogItem[]>([]);
   const [consumables, setConsumables] = useState<ConsumableCatalogItem[]>([]);
   const [colors, setColors] = useState<ColorCatalogItem[]>([]);
@@ -180,6 +193,7 @@ export default function StockPage() {
       const [
         stockResult,
         productsResult,
+        resaleProductsResult,
         materialsResult,
         consumablesResult,
         colorsResult,
@@ -189,12 +203,18 @@ export default function StockPage() {
         supabase
           .from("stock_available")
           .select(
-            "item_type, product_id, material_id, consumable_id, quantity_on_hand, quantity_reserved, quantity_available",
+            "item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
           ),
 
         supabase
           .from("products")
           .select("id, name, article")
+          .order("name", { ascending: true }),
+
+        supabase
+          .from("items")
+          .select("id, name, article, default_price, source_id, is_active")
+          .eq("item_type", "resale_product")
           .order("name", { ascending: true }),
 
         supabase
@@ -215,7 +235,7 @@ export default function StockPage() {
         supabase
           .from("stock_movements")
           .select(
-            "id, item_type, product_id, material_id, consumable_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
+            "id, item_type, product_id, material_id, consumable_id, item_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
           )
           .order("created_at", { ascending: false }),
 
@@ -227,6 +247,7 @@ export default function StockPage() {
 
       if (stockResult.error) throw stockResult.error;
       if (productsResult.error) throw productsResult.error;
+      if (resaleProductsResult.error) throw resaleProductsResult.error;
       if (materialsResult.error) throw materialsResult.error;
       if (consumablesResult.error) throw consumablesResult.error;
       if (colorsResult.error) throw colorsResult.error;
@@ -235,6 +256,7 @@ export default function StockPage() {
 
       setStockAvailable((stockResult.data as StockAvailableRow[]) || []);
       setProducts((productsResult.data as ProductCatalogItem[]) || []);
+      setResaleProducts((resaleProductsResult.data as ResaleCatalogItem[]) || []);
       setMaterials((materialsResult.data as MaterialCatalogItem[]) || []);
       setConsumables((consumablesResult.data as ConsumableCatalogItem[]) || []);
       setColors((colorsResult.data as ColorCatalogItem[]) || []);
@@ -310,6 +332,7 @@ export default function StockPage() {
           selectedRow.itemType === "material" ? selectedRow.itemId : null,
         consumable_id:
           selectedRow.itemType === "consumable" ? selectedRow.itemId : null,
+        item_id: selectedRow.itemType === "resale_product" ? selectedRow.itemId : null,
         quantity: signedQuantity,
         created_at: new Date().toISOString(),
 };
@@ -335,6 +358,12 @@ export default function StockPage() {
 
   const stockRows = useMemo(() => {
     const productMap = new Map(products.map((item) => [item.id, item]));
+    const resaleProductMap = new Map(resaleProducts.map((item) => [item.id, item]));
+    const productToResaleMap = new Map(
+      resaleProducts
+        .filter((item) => item.source_id)
+        .map((item) => [item.source_id as string, item]),
+    );
     const materialMap = new Map(materials.map((item) => [item.id, item]));
     const consumableMap = new Map(consumables.map((item) => [item.id, item]));
     const colorMap = new Map(colors.map((item) => [item.id, item]));
@@ -362,27 +391,52 @@ export default function StockPage() {
     const lastMovementMap = new Map<string, StockMovementRow>();
 
     movements.forEach((movement) => {
-      const itemId =
-        movement.item_type === "product"
-          ? movement.product_id
-          : movement.item_type === "material"
-            ? movement.material_id
-            : movement.consumable_id;
+      let movementItemType: StockItemType = movement.item_type as StockItemType;
+      let itemId =
+        movement.item_type === "resale_product"
+          ? movement.item_id
+          : movement.item_type === "product"
+            ? movement.product_id
+            : movement.item_type === "material"
+              ? movement.material_id
+              : movement.consumable_id;
+
+      if (movement.item_type === "product" && movement.product_id) {
+        const resaleItem = productToResaleMap.get(movement.product_id);
+        if (resaleItem) {
+          movementItemType = "resale_product";
+          itemId = resaleItem.id;
+        }
+      }
 
       if (!itemId) return;
 
-      const key = getStockKey(movement.item_type, itemId);
+      const key = getStockKey(movementItemType, itemId);
       if (!lastMovementMap.has(key)) {
         lastMovementMap.set(key, movement);
       }
     });
 
-    return stockAvailable
+    const movementRows = stockAvailable
       .map((row) => {
-        const itemId = getStockRowId(row);
-        if (!itemId) return null;
+        const legacyProductId = row.item_type === "product" ? row.product_id : null;
+        const legacyResaleItem = legacyProductId
+          ? productToResaleMap.get(legacyProductId)
+          : null;
 
-        const itemType = row.item_type as StockItemType;
+        const rawItemId = getStockRowId(row);
+        if (!rawItemId) return null;
+
+        const itemType: StockItemType =
+          row.item_type === "product" && legacyResaleItem
+            ? "resale_product"
+            : (row.item_type as StockItemType);
+
+        const itemId =
+          itemType === "resale_product" && legacyResaleItem
+            ? legacyResaleItem.id
+            : rawItemId;
+
         const key = getStockKey(itemType, itemId);
         const quantityOnHand = Number(row.quantity_on_hand || 0);
         const quantityReserved = Number(row.quantity_reserved || 0);
@@ -403,6 +457,29 @@ export default function StockPage() {
             itemId,
             name: product?.name || "Готовая продукция / товар",
             article: product?.article || "",
+            colorName: "",
+            colorHex: "",
+            quantityOnHand,
+            quantityReserved,
+            quantityAvailable,
+            avgPrice: price,
+            amount: quantityOnHand * price,
+            lastMovementDate: lastMovement?.created_at || "",
+            lastMovementType: getMovementLabel(lastMovement?.movement_type || ""),
+            lastDocumentType: getDocumentLabel(lastMovement?.source_document_type || ""),
+          } as StockRow;
+        }
+
+        if (itemType === "resale_product") {
+          const resaleProduct = resaleProductMap.get(itemId);
+          const price = Number(resaleProduct?.default_price || 0);
+
+          return {
+            key,
+            itemType,
+            itemId,
+            name: resaleProduct?.name || "Товар на перепродажу",
+            article: resaleProduct?.article || "",
             colorName: "",
             colorHex: "",
             quantityOnHand,
@@ -461,9 +538,37 @@ export default function StockPage() {
           lastDocumentType: getDocumentLabel(lastMovement?.source_document_type || ""),
         } as StockRow;
       })
-      .filter(Boolean)
-      .sort((a, b) => a!.name.localeCompare(b!.name, "ru")) as StockRow[];
-  }, [stockAvailable, products, materials, consumables, colors, movements, productionCosts]);
+      .filter(Boolean) as StockRow[];
+
+    const resaleStockIds = new Set(
+      movementRows
+        .filter((row) => row?.itemType === "resale_product")
+        .map((row) => row!.itemId),
+    );
+
+    const zeroStockResaleRows: StockRow[] = resaleProducts
+      .filter((item) => item.is_active !== false && !resaleStockIds.has(item.id))
+      .map((item) => ({
+        key: getStockKey("resale_product", item.id),
+        itemType: "resale_product",
+        itemId: item.id,
+        name: item.name || "Товар на перепродажу",
+        article: item.article || "",
+        colorName: "",
+        colorHex: "",
+        quantityOnHand: 0,
+        quantityReserved: 0,
+        quantityAvailable: 0,
+        avgPrice: Number(item.default_price || 0),
+        amount: 0,
+        lastMovementDate: "",
+        lastMovementType: "—",
+        lastDocumentType: "—",
+      }));
+
+    return [...movementRows, ...zeroStockResaleRows]
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [stockAvailable, products, resaleProducts, materials, consumables, colors, movements, productionCosts]);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -565,6 +670,18 @@ export default function StockPage() {
             .eq("id", change.id)
             .select("id")
             .maybeSingle();
+        } else if (change.itemType === "resale_product") {
+          result = await supabase
+            .from("items")
+            .update({
+              name: change.newName,
+              article: change.newArticle || null,
+              default_price: change.newPrice,
+            })
+            .eq("id", change.id)
+            .eq("item_type", "resale_product")
+            .select("id")
+            .maybeSingle();
         } else if (change.itemType === "material") {
           const materialPayload: Record<string, unknown> = {
             name: change.newName,
@@ -643,6 +760,7 @@ export default function StockPage() {
       const invalidType = changes.find(
         (change) =>
           change.itemType !== "product" &&
+          change.itemType !== "resale_product" &&
           change.itemType !== "material" &&
           change.itemType !== "consumable",
       );
@@ -660,6 +778,7 @@ export default function StockPage() {
         product_id: change.itemType === "product" ? change.id : null,
         material_id: change.itemType === "material" ? change.id : null,
         consumable_id: change.itemType === "consumable" ? change.id : null,
+        item_id: change.itemType === "resale_product" ? change.id : null,
         quantity:
           change.difference > 0
             ? Math.abs(change.difference)
@@ -690,6 +809,7 @@ export default function StockPage() {
     ? movements
         .filter((movement) => {
           if (movement.item_type !== selectedRow.itemType) return false;
+          if (selectedRow.itemType === "resale_product") return movement.item_id === selectedRow.itemId;
           if (selectedRow.itemType === "product") return movement.product_id === selectedRow.itemId;
           if (selectedRow.itemType === "material") return movement.material_id === selectedRow.itemId;
           return movement.consumable_id === selectedRow.itemId;
@@ -761,6 +881,9 @@ export default function StockPage() {
             </button>
             <button type="button" onClick={() => setActiveTab("product")} style={filterTabStyle(activeTab === "product")}>
               Товары / продукция
+            </button>
+            <button type="button" onClick={() => setActiveTab("resale_product")} style={filterTabStyle(activeTab === "resale_product")}>
+              Перепродажа
             </button>
             <button type="button" onClick={() => setActiveTab("material")} style={filterTabStyle(activeTab === "material")}>
               Материалы
@@ -1082,6 +1205,7 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
 
 function getItemTypeLabel(itemType: StockItemType) {
   if (itemType === "product") return "Товар / продукция";
+  if (itemType === "resale_product") return "Перепродажа";
   if (itemType === "material") return "Материал";
   return "Расходник";
 }
@@ -1594,7 +1718,9 @@ function typeBadgeStyle(itemType: StockItemType): React.CSSProperties {
   const palette =
     itemType === "product"
       ? { border: "1px solid #bbf7d0", background: "#f0fdf4", color: "#15803d" }
-      : itemType === "material"
+      : itemType === "resale_product"
+        ? { border: "1px solid #fed7aa", background: "#fff7ed", color: "#c2410c" }
+        : itemType === "material"
         ? { border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8" }
         : { border: "1px solid #ddd6fe", background: "#f5f3ff", color: "#7c3aed" };
 

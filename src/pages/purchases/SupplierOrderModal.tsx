@@ -5,7 +5,7 @@ import LinkedDocumentsModal from "./LinkedDocumentsModal";
 import ReceiptModal, { type SupplierReceipt } from "../warehouse/ReceiptModal";
 import SupplierPaymentModal from "./SupplierPaymentModal";
 
-export type PurchaseItemType = "material" | "consumable" | "product";
+export type PurchaseItemType = "material" | "consumable" | "product" | "resale_product";
 
 export type SupplierOrder = {
   id: string;
@@ -973,7 +973,10 @@ export default function SupplierOrderModal({
         consumable_id:
           item.item_type === "consumable" ? item.consumable_id : null,
         product_id: null,
-        item_id: item.item_type === "product" ? item.item_id : null,
+        item_id:
+          item.item_type === "product" || item.item_type === "resale_product"
+            ? item.item_id
+            : null,
         quantity: Number(item.quantity),
         price: Number(item.price) || 0,
       }));
@@ -1682,15 +1685,26 @@ export default function SupplierOrderModal({
     } else {
       const selectedProduct = products.find((item) => item.id === product.id);
 
+      if (!selectedProduct) {
+        return;
+      }
+
+      const selectedItemType =
+        selectedProduct.item_type === "resale_product"
+          ? "resale_product"
+          : selectedProduct.item_type === "asset"
+            ? "asset"
+            : "product";
+
       updateItem(productPickerItemId, {
-        item_type: "product",
+        item_type: selectedItemType,
         material_id: "",
         consumable_id: "",
         product_id: "",
         item_id: product.id,
         price:
-          selectedProduct?.default_price !== null &&
-          selectedProduct?.default_price !== undefined
+          selectedProduct.default_price !== null &&
+          selectedProduct.default_price !== undefined
             ? String(selectedProduct.default_price)
             : "",
       });

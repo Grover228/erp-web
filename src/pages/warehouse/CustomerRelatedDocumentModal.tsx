@@ -44,10 +44,49 @@ export default function CustomerRelatedDocumentModal({
   const [paymentAmount, setPaymentAmount] = useState(String(Number(order.total_amount || 0)));
   const [paymentComment, setPaymentComment] = useState("");
   const [error, setError] = useState("");
+  const [resaleItems, setResaleItems] = useState<Record<string, { name: string; article: string }>>({});
 
   useEffect(() => {
     loadFinanceAccounts();
+    loadResaleItems();
   }, []);
+
+  async function loadResaleItems() {
+    const resaleItemIds = Array.from(
+      new Set(
+        orderItems
+          .filter((item) => item.item_type === "resale_product")
+          .map((item) => item.item_id)
+          .filter(Boolean),
+      ),
+    );
+
+    if (resaleItemIds.length === 0) {
+      setResaleItems({});
+      return;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, name, article")
+        .in("id", resaleItemIds);
+
+      if (error) throw error;
+
+      const nextItems: Record<string, { name: string; article: string }> = {};
+      ((data || []) as Array<{ id: string; name?: string | null; article?: string | null }>).forEach((item) => {
+        nextItems[item.id] = {
+          name: item.name || "Товар для перепродажи",
+          article: item.article || "",
+        };
+      });
+
+      setResaleItems(nextItems);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Ошибка загрузки товаров для перепродажи");
+    }
+  }
 
   async function loadFinanceAccounts() {
     try {
@@ -112,6 +151,7 @@ export default function CustomerRelatedDocumentModal({
           orderItems.map((item) => ({
             customer_shipment_id: shipment.id,
             item_type: item.item_type,
+            item_id: item.item_type === "resale_product" ? item.item_id : null,
             product_id: item.product_id,
             material_id: item.material_id,
             consumable_id: item.consumable_id,
@@ -119,7 +159,7 @@ export default function CustomerRelatedDocumentModal({
             price: item.price,
           })),
         )
-        .select("id, customer_shipment_id, item_type, product_id, material_id, consumable_id, quantity, price, amount");
+        .select("id, customer_shipment_id, item_type, item_id, product_id, material_id, consumable_id, quantity, price, amount");
 
       if (itemsError) throw itemsError;
 
@@ -129,6 +169,7 @@ export default function CustomerRelatedDocumentModal({
           if (savedItem.item_type === "product") return orderItem.product_id === savedItem.product_id;
           if (savedItem.item_type === "material") return orderItem.material_id === savedItem.material_id;
           if (savedItem.item_type === "consumable") return orderItem.consumable_id === savedItem.consumable_id;
+          if (savedItem.item_type === "resale_product") return orderItem.item_id === savedItem.item_id;
           return false;
         });
 
@@ -137,6 +178,7 @@ export default function CustomerRelatedDocumentModal({
           products: sourceItem?.products || null,
           materials: sourceItem?.materials || null,
           consumables: sourceItem?.consumables || null,
+          items: savedItem.items || null,
         };
       });
 
@@ -513,7 +555,11 @@ function handleCreateDocument(type: RelatedDocumentType) {
               ) : (
                 orderItems.map((item) => (
                   <div key={item.id} style={positionRowStyle}>
-                    <span>{getItemName(item)}</span>
+                    <span>
+                      {item.item_type === "resale_product"
+                        ? resaleItems[item.item_id || ""]?.name || getItemName(item)
+                        : getItemName(item)}
+                    </span>
                     <strong>{item.quantity}</strong>
                   </div>
                 ))
@@ -586,6 +632,10 @@ function getItemName(item: CustomerOrderItem) {
 
   if (item.item_type === "consumable") {
     return item.consumables?.name || "Расходник";
+  }
+
+  if (item.item_type === "resale_product") {
+    return item.items?.name || item.products?.name || "Товар для перепродажи";
   }
 
   return item.products?.name || "Товар";

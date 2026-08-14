@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 
+type StockItemType = "product" | "resale_product" | "material" | "consumable";
+
 type StockRow = {
   key: string;
-  itemType: "product" | "material" | "consumable";
+  itemType: StockItemType;
   itemId: string;
   name: string;
   article: string;
@@ -13,7 +15,7 @@ type StockRow = {
 
 export type BulkEditChange = {
   id: string;
-  itemType: "product" | "material" | "consumable";
+  itemType: StockItemType;
   itemTypeLabel: string;
   currentName: string;
   newName: string;
@@ -48,6 +50,7 @@ function numberValue(value: unknown) {
 
 function getItemTypeLabel(itemType: string) {
   if (itemType === "product") return "Товар / продукция";
+  if (itemType === "resale_product") return "Перепродажа";
   if (itemType === "material") return "Материал";
   return "Расходник";
 }
@@ -73,7 +76,6 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
       const newColor = normalize(excelRow["Цвет"]);
       const parsedPrice = numberValue(excelRow["Цена"]);
       const newPrice = parsedPrice ?? current.avgPrice;
-
       const changeList: string[] = [];
 
       if (newName !== current.name) changeList.push("Название");
@@ -82,7 +84,9 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
         changeList.push("Цвет");
       }
       if (
-        (current.itemType === "material" || current.itemType === "consumable") &&
+        (current.itemType === "material" ||
+          current.itemType === "consumable" ||
+          current.itemType === "resale_product") &&
         Math.abs(newPrice - current.avgPrice) > 0.000001
       ) {
         changeList.push("Цена");
@@ -123,7 +127,6 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
   async function handleFile(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
-
     if (!file) return;
 
     try {
@@ -168,7 +171,7 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
             <div style={titleStyle}>✏️ Массовое редактирование</div>
             <div style={subtitleStyle}>
               Загрузи Excel, отредактированный на основе выгрузки из «Остатков».
-              После проверки изменения можно применить к базе.
+              Для перепродажи можно менять название, артикул и цену.
             </div>
           </div>
           <button type="button" onClick={handleClose} style={closeStyle}>×</button>
@@ -220,7 +223,10 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
                           )}
                         </td>
                         <td style={tdStyle}>
-                          {row.newPrice.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽
+                          {row.newPrice.toLocaleString("ru-RU", {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })} ₽
                         </td>
                         <td style={tdStyle}>{row.changes.join(", ")}</td>
                       </tr>
@@ -240,9 +246,7 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
             disabled={saving || changes.length === 0}
             style={changes.length > 0 && !saving ? applyButtonStyle : disabledButtonStyle}
           >
-            {saving
-              ? "Сохраняю..."
-              : `Применить изменения (${changes.length})`}
+            {saving ? "Сохраняю..." : `Применить изменения (${changes.length})`}
           </button>
         </div>
       </div>
@@ -251,7 +255,12 @@ export default function BulkEditModal({ open, stockRows, onClose, onApply, savin
 }
 
 function Summary({ label, value }: { label: string; value: string }) {
-  return <div style={summaryStyle}><div style={summaryLabel}>{label}</div><div style={summaryValue}>{value}</div></div>;
+  return (
+    <div style={summaryStyle}>
+      <div style={summaryLabel}>{label}</div>
+      <div style={summaryValue}>{value}</div>
+    </div>
+  );
 }
 
 const overlayStyle: React.CSSProperties = {
@@ -284,13 +293,7 @@ const emptyStyle: React.CSSProperties = { padding: 22, textAlign: "center", colo
 const footerStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" };
 const secondaryButtonStyle: React.CSSProperties = { border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", borderRadius: 12, padding: "11px 14px", cursor: "pointer", fontWeight: 900 };
 const applyButtonStyle: React.CSSProperties = {
-  border: "1px solid #86efac",
-  background: "#16a34a",
-  color: "#ffffff",
-  borderRadius: 12,
-  padding: "11px 14px",
-  cursor: "pointer",
-  fontWeight: 900,
+  border: "1px solid #86efac", background: "#16a34a", color: "#ffffff",
+  borderRadius: 12, padding: "11px 14px", cursor: "pointer", fontWeight: 900,
 };
-
 const disabledButtonStyle: React.CSSProperties = { ...secondaryButtonStyle, opacity: 0.5, cursor: "not-allowed" };

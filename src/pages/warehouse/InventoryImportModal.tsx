@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 
 type StockRow = {
   key: string;
-  itemType: "product" | "material" | "consumable";
+  itemType: "product" | "material" | "consumable" | "resale_product";
   itemId: string;
   name: string;
   article: string;
@@ -11,7 +11,7 @@ type StockRow = {
   quantityOnHand: number;
 };
 
-type InventoryItemType = "product" | "material" | "consumable";
+type InventoryItemType = "product" | "material" | "consumable" | "resale_product";
 
 type InventoryRow = {
   id: string;
@@ -64,6 +64,7 @@ function normalizeItemType(value: string): InventoryItemType | null {
   if (normalized === "product" || normalized === "товар" || normalized === "товар / продукция") return "product";
   if (normalized === "material" || normalized === "материал") return "material";
   if (normalized === "consumable" || normalized === "расходник") return "consumable";
+  if (normalized === "resale_product" || normalized === "resale product" || normalized === "перепродажа" || normalized === "товар для перепродажи") return "resale_product";
   return null;
 }
 
