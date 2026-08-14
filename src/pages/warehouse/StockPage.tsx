@@ -166,6 +166,7 @@ export default function StockPage() {
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const [inventoryImportOpen, setInventoryImportOpen] = useState(false);
   const [bulkEditSaving, setBulkEditSaving] = useState(false);
+  const [inventoryImportSaving, setInventoryImportSaving] = useState(false);
 
   useEffect(() => {
     loadStockItems();
@@ -502,6 +503,7 @@ export default function StockPage() {
       "Доступно": row.quantityAvailable,
       "Цена": row.avgPrice,
       "Стоимость": row.amount,
+      "Фактический остаток": "",
       "Последнее движение": row.lastMovementType || "",
       "Документ": row.lastDocumentType || "",
       "Дата последнего движения": row.lastMovementDate
@@ -522,6 +524,7 @@ export default function StockPage() {
       { wch: 14 },
       { wch: 14 },
       { wch: 16 },
+      { wch: 20 },
       { wch: 24 },
       { wch: 24 },
       { wch: 24 },
@@ -618,6 +621,68 @@ export default function StockPage() {
       );
     } finally {
       setBulkEditSaving(false);
+    }
+  }
+
+  async function handleInventoryApply(changes: Array<{
+    id: string;
+    name: string;
+    article: string;
+    itemType: StockItemType;
+    currentQuantity: number;
+    actualQuantity: number;
+    difference: number;
+    action: string;
+  }>) {
+    if (changes.length === 0 || inventoryImportSaving) return;
+
+    try {
+      setInventoryImportSaving(true);
+      setError("");
+
+      const invalidType = changes.find(
+        (change) =>
+          change.itemType !== "product" &&
+          change.itemType !== "material" &&
+          change.itemType !== "consumable",
+      );
+
+      if (invalidType) {
+        throw new Error(`Неизвестный тип номенклатуры у «${invalidType.name}».`);
+      }
+
+      const movementRows = changes.map((change) => ({
+        movement_type: change.difference > 0 ? "manual_receipt" : "manual_write_off",
+        source_document_type: "stock_adjustment",
+        source_document_id: null,
+        production_order_id: null,
+        item_type: change.itemType,
+        product_id: change.itemType === "product" ? change.id : null,
+        material_id: change.itemType === "material" ? change.id : null,
+        consumable_id: change.itemType === "consumable" ? change.id : null,
+        quantity:
+          change.difference > 0
+            ? Math.abs(change.difference)
+            : -Math.abs(change.difference),
+        created_at: new Date().toISOString(),
+      }));
+
+      const { error: movementError } = await supabase
+        .from("stock_movements")
+        .insert(movementRows);
+
+      if (movementError) throw movementError;
+
+      await loadStockItems();
+      setInventoryImportOpen(false);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось применить корректировки инвентаризации.",
+      );
+    } finally {
+      setInventoryImportSaving(false);
     }
   }
 
@@ -999,6 +1064,8 @@ export default function StockPage() {
         open={inventoryImportOpen}
         stockRows={stockRows}
         onClose={() => setInventoryImportOpen(false)}
+        onApply={handleInventoryApply}
+        saving={inventoryImportSaving}
       />
     </div>
   );

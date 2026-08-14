@@ -11,21 +11,34 @@ type StockRow = {
   quantityOnHand: number;
 };
 
+type InventoryItemType = "product" | "material" | "consumable";
+
 type InventoryRow = {
   id: string;
   name: string;
   article: string;
-  itemType: string;
+  itemType: InventoryItemType;
   currentQuantity: number;
   actualQuantity: number;
   difference: number;
   action: string;
 };
 
+type InventoryError = {
+  rowNumber: number;
+  name: string;
+  article: string;
+  id: string;
+  actualValue: string;
+  reason: string;
+};
+
 type Props = {
   open: boolean;
   stockRows: StockRow[];
   onClose: () => void;
+  onApply: (changes: InventoryRow[]) => Promise<void> | void;
+  saving: boolean;
 };
 
 function normalize(value: unknown) {
@@ -46,72 +59,81 @@ function getItemTypeLabel(itemType: string) {
   return "Расходник";
 }
 
-export default function InventoryImportModal({ open, stockRows, onClose }: Props) {
+function normalizeItemType(value: string): InventoryItemType | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "product" || normalized === "товар" || normalized === "товар / продукция") return "product";
+  if (normalized === "material" || normalized === "материал") return "material";
+  if (normalized === "consumable" || normalized === "расходник") return "consumable";
+  return null;
+}
+
+export default function InventoryImportModal({ open, stockRows, onClose, onApply, saving }: Props) {
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [fileName, setFileName] = useState("");
   const [error, setError] = useState("");
   const [showAll, setShowAll] = useState(false);
 
   const result = useMemo(() => {
-    const byId = new Map(stockRows.map((row) => [row.itemId, row]));
-    const byArticle = new Map<string, StockRow[]>();
-
-    stockRows.forEach((row) => {
-      const article = row.article.trim();
-      if (!article) return;
-      const list = byArticle.get(article) || [];
-      list.push(row);
-      byArticle.set(article, list);
-    });
-
     const inventory: InventoryRow[] = [];
-    let errors = 0;
+    const errors: InventoryError[] = [];
+    const seenIds = new Set<string>();
 
-    rows.forEach((excelRow) => {
+    rows.forEach((excelRow, index) => {
+      const rowNumber = index + 2;
       const id = normalize(excelRow["ID"]);
+      const name = normalize(excelRow["Номенклатура"]);
       const article = normalize(excelRow["Артикул"]);
+      const itemTypeValue = normalize(excelRow["Тип"]);
+      const itemType = normalizeItemType(itemTypeValue);
+      const current = numberValue(excelRow["Остаток"]);
       const actual = numberValue(excelRow["Фактический остаток"]);
+      const actualValue = normalize(excelRow["Фактический остаток"]);
 
-      if (!id && !article) {
-        errors++;
+      if (!id) {
+        errors.push({ rowNumber, name, article, id: "", actualValue, reason: "В Excel отсутствует ID." });
         return;
       }
 
-      if (actual === null || actual < 0) {
-        errors++;
+      if (!itemType) {
+        errors.push({ rowNumber, name, article, id, actualValue, reason: `Неизвестный тип номенклатуры: «${itemTypeValue || "пусто"}».` });
         return;
       }
 
-      let current = id ? byId.get(id) : undefined;
-
-      if (!current && article) {
-        const matches = byArticle.get(article) || [];
-        if (matches.length === 1) current = matches[0];
-        else if (matches.length > 1) {
-          errors++;
-          return;
-        }
+      if (seenIds.has(id)) {
+        errors.push({ rowNumber, name, article, id, actualValue, reason: "ID повторяется в файле." });
+        return;
       }
+      seenIds.add(id);
 
-      if (!current) {
-        errors++;
+      if (current === null) {
+        errors.push({ rowNumber, name, article, id, actualValue, reason: "В Excel отсутствует или некорректен столбец «Остаток»." });
         return;
       }
 
-      const difference = actual - current.quantityOnHand;
+      if (actual === null) {
+        errors.push({ rowNumber, name, article, id, actualValue, reason: "«Фактический остаток» пустой или не является числом." });
+        return;
+      }
+
+      if (actual < 0) {
+        errors.push({ rowNumber, name, article, id, actualValue, reason: "Фактический остаток не может быть отрицательным." });
+        return;
+      }
+
+      const difference = actual - current;
 
       inventory.push({
-        id: current.itemId,
-        name: current.name,
-        article: current.article,
-        itemType: getItemTypeLabel(current.itemType),
-        currentQuantity: current.quantityOnHand,
+        id,
+        name,
+        article,
+        itemType,
+        currentQuantity: current,
         actualQuantity: actual,
         difference,
         action:
-          difference > 0
+          difference > 0.000001
             ? "Оприходование"
-            : difference < 0
+            : difference < -0.000001
               ? "Списание"
               : "Без изменений",
       });
@@ -126,7 +148,7 @@ export default function InventoryImportModal({ open, stockRows, onClose }: Props
       receipts: changes.filter((row) => row.difference > 0).length,
       writeOffs: changes.filter((row) => row.difference < 0).length,
     };
-  }, [rows, stockRows]);
+  }, [rows]);
 
   function reset() {
     setRows([]);
@@ -216,7 +238,7 @@ export default function InventoryImportModal({ open, stockRows, onClose }: Props
               <Summary label="Расхождений" value={String(result.changes.length)} />
               <Summary label="Оприходований" value={String(result.receipts)} />
               <Summary label="Списаний" value={String(result.writeOffs)} />
-              <Summary label="Ошибок" value={String(result.errors)} />
+              <Summary label="Ошибок" value={String(result.errors.length)} />
             </div>
 
             <div style={toggleRowStyle}>
@@ -227,6 +249,39 @@ export default function InventoryImportModal({ open, stockRows, onClose }: Props
                 Все строки
               </button>
             </div>
+
+            {result.errors.length > 0 && (
+              <div style={errorListStyle}>
+                <div style={errorListTitleStyle}>Ошибки сопоставления</div>
+                <div style={errorListSubtitleStyle}>Эти строки не будут допущены к применению, пока не исправлен Excel.</div>
+                <div style={errorTableWrapStyle}>
+                  <table style={tableStyle}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Строка</th>
+                        <th style={thStyle}>Номенклатура</th>
+                        <th style={thStyle}>Артикул</th>
+                        <th style={thStyle}>ID</th>
+                        <th style={thStyle}>Факт</th>
+                        <th style={thStyle}>Причина</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.errors.map((row) => (
+                        <tr key={`${row.rowNumber}-${row.id}`}>
+                          <td style={tdStyle}>{row.rowNumber}</td>
+                          <td style={strongStyle}>{row.name || "—"}</td>
+                          <td style={tdStyle}>{row.article || "—"}</td>
+                          <td style={tdStyle}>{row.id || "—"}</td>
+                          <td style={tdStyle}>{row.actualValue || "—"}</td>
+                          <td style={dangerStyle}>{row.reason}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             <div style={tableWrapStyle}>
               <table style={tableStyle}>
@@ -268,8 +323,23 @@ export default function InventoryImportModal({ open, stockRows, onClose }: Props
 
         <div style={footerStyle}>
           <button type="button" onClick={handleClose} style={secondaryButtonStyle}>Закрыть</button>
-          <button type="button" disabled style={disabledButtonStyle}>
-            Применить корректировки — следующий этап
+          <button
+            type="button"
+            onClick={() => onApply(result.changes)}
+            disabled={saving || result.errors.length > 0 || result.changes.length === 0}
+            style={
+              !saving && result.errors.length === 0 && result.changes.length > 0
+                ? applyButtonStyle
+                : disabledButtonStyle
+            }
+          >
+            {saving
+              ? "Применяем..."
+              : result.errors.length > 0
+                ? `Исправьте ошибки (${result.errors.length})`
+                : result.changes.length > 0
+                  ? `Применить корректировки (${result.changes.length})`
+                  : "Нет изменений для применения"}
           </button>
         </div>
       </div>
@@ -290,6 +360,10 @@ const closeStyle: React.CSSProperties = { width: 44, height: 44, borderRadius: 1
 const fileLabelStyle: React.CSSProperties = { border: "1px dashed #f59e0b", background: "#fffbeb", color: "#b45309", borderRadius: 14, padding: 16, cursor: "pointer", fontWeight: 900, textAlign: "center" };
 const fileInfoStyle: React.CSSProperties = { color: "#475569", fontSize: 13 };
 const errorStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fef2f2", color: "#991b1b", borderRadius: 14, padding: 12, fontWeight: 800 };
+const errorListStyle: React.CSSProperties = { border: "1px solid #fecaca", background: "#fff7f7", borderRadius: 16, padding: 14, display: "grid", gap: 8 };
+const errorListTitleStyle: React.CSSProperties = { color: "#991b1b", fontWeight: 900, fontSize: 16 };
+const errorListSubtitleStyle: React.CSSProperties = { color: "#7f1d1d", fontSize: 13 };
+const errorTableWrapStyle: React.CSSProperties = { overflow: "auto", border: "1px solid #fecaca", borderRadius: 12, maxHeight: 320 };
 const summaryGridStyle: React.CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 };
 const summaryStyle: React.CSSProperties = { border: "1px solid #dbe4f0", background: "#f8fafc", borderRadius: 16, padding: 14 };
 const summaryLabel: React.CSSProperties = { color: "#64748b", fontSize: 12, fontWeight: 800 };
@@ -306,4 +380,13 @@ const dangerStyle: React.CSSProperties = { ...tdStyle, color: "#b91c1c", fontWei
 const emptyStyle: React.CSSProperties = { padding: 22, textAlign: "center", color: "#64748b" };
 const footerStyle: React.CSSProperties = { display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" };
 const secondaryButtonStyle: React.CSSProperties = { border: "1px solid #cbd5e1", background: "#fff", color: "#0f172a", borderRadius: 12, padding: "11px 14px", cursor: "pointer", fontWeight: 900 };
+const applyButtonStyle: React.CSSProperties = {
+  border: "1px solid #86efac",
+  background: "#f0fdf4",
+  color: "#15803d",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
 const disabledButtonStyle: React.CSSProperties = { ...secondaryButtonStyle, opacity: 0.5, cursor: "not-allowed" };
