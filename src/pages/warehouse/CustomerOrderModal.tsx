@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../../supabase";
 import CustomerRelatedDocumentModal from "./CustomerRelatedDocumentModal";
 import CustomerLinkedDocumentsModal from "./CustomerLinkedDocumentsModal";
@@ -510,6 +511,43 @@ export default function CustomerOrderModal({
     );
   }
 
+  function exportCurrentOrderToExcel() {
+    if (!order) return;
+
+    const rows = orderItems.map((item) => ({
+      "Номер заказа": order.order_number || "",
+      "Дата": order.order_date || "",
+      "Покупатель": order.customer_name || "",
+      "Статус": getOrderStatus()?.name || order.status || "",
+      "Тип": getItemTypeLabel(item.item_type),
+      "Артикул": getProductArticle(item),
+      "Номенклатура": getProductName(item),
+      "Количество": Number(item.quantity || 0),
+      "Цена": Number(item.price || 0),
+      "Сумма": Number(item.amount || 0),
+      "Комментарий": order.comment || "",
+    }));
+
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    worksheet["!cols"] = [
+      { wch: 16 },
+      { wch: 12 },
+      { wch: 28 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 20 },
+      { wch: 34 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 40 },
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Заказ");
+    XLSX.writeFile(workbook, `${order.order_number || "заказ"}.xlsx`);
+  }
+
   async function createCustomerOrder() {
     try {
       setSaving(true);
@@ -844,6 +882,16 @@ export default function CustomerOrderModal({
                   style={createShipmentButtonStyle}
                 >
                   + Создать документ
+                </button>
+
+                <button
+                  type="button"
+                  onClick={exportCurrentOrderToExcel}
+                  style={editOrderButtonStyle}
+                  disabled={orderLoading || orderItems.length === 0}
+                  title="Выгрузить текущий заказ в Excel"
+                >
+                  📤 Excel
                 </button>
 
                 <button type="button" onClick={startEditOrder} style={editOrderButtonStyle}>

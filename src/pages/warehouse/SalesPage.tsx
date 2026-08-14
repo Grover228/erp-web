@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../../supabase";
 import CustomerOrderModal, {
   type Counterparty,
@@ -30,6 +31,24 @@ type ResaleProduct = {
   default_price: number | null;
 };
 
+type ImportPreviewRow = {
+  rowNumber: number;
+  article: string;
+  quantity: number;
+  price: number;
+  itemId?: string;
+  itemSourceId?: string;
+  itemType?: CustomerOrderItem["item_type"];
+  name?: string;
+  status: "pending" | "ready" | "error";
+  message: string;
+};
+
+type ImportPreview = {
+  fileName: string;
+  rows: ImportPreviewRow[];
+};
+
 export default function SalesPage() {
   const [activeTab, setActiveTab] = useState<SalesTab>("orders");
 
@@ -46,6 +65,8 @@ export default function SalesPage() {
   const [shipmentsLoading, setShipmentsLoading] = useState(false);
   const [directoriesLoading, setDirectoriesLoading] = useState(false);
   const [error, setError] = useState("");
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const importFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const [modalMode, setModalMode] = useState<ModalMode | null>(null);
   const [selectedOrder, setSelectedOrder] = useState<CustomerOrder | null>(null);
@@ -157,6 +178,286 @@ export default function SalesPage() {
       );
     } finally {
       setDirectoriesLoading(false);
+    }
+  }
+
+  function normalizeExcelHeader(value: unknown) {
+    return String(value ?? "")
+      .trim()
+      .toLowerCase()
+      .replace(/ё/g, "е");
+  }
+
+  function parseExcelNumber(value: unknown) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    const normalized = String(value ?? "")
+      .trim()
+      .replace(/\s/g, "")
+      .replace(",", ".");
+    const number = Number(normalized);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  async function prepareExcelImport(file: File) {
+    setError("");
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: "array" });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+
+      if (!firstSheet) throw new Error("В Excel не найден лист с данными.");
+
+      const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(firstSheet, {
+        defval: "",
+        raw: true,
+      });
+
+      if (rawRows.length === 0) {
+        throw new Error("Excel-файл не содержит строк с данными.");
+      }
+
+      const headerMap = new Map<string, string>();
+      Object.keys(rawRows[0]).forEach((header) => {
+        headerMap.set(normalizeExcelHeader(header), header);
+      });
+
+      const articleHeader =
+        headerMap.get("артикул") ||
+        headerMap.get("article") ||
+        headerMap.get("sku");
+
+      const quantityHeader =
+        headerMap.get("количество") ||
+        headerMap.get("кол-во") ||
+        headerMap.get("колво") ||
+        headerMap.get("quantity") ||
+        headerMap.get("qty");
+
+      const priceHeader =
+        headerMap.get("цена") ||
+        headerMap.get("цена продажи") ||
+        headerMap.get("price");
+
+      if (!articleHeader || !quantityHeader || !priceHeader) {
+        throw new Error(
+          "Не удалось определить обязательные колонки. Нужны: «Артикул», «Количество», «Цена».",
+        );
+      }
+
+      const rows: ImportPreviewRow[] = [];
+
+      for (let index = 0; index < rawRows.length; index += 1) {
+        const rawRow = rawRows[index];
+        const excelRowNumber = index + 2;
+        const article = String(rawRow[articleHeader] ?? "").trim();
+        const quantity = parseExcelNumber(rawRow[quantityHeader]);
+        const price = parseExcelNumber(rawRow[priceHeader]);
+
+        if (!article && quantity === null && price === null) continue;
+
+        if (!article) {
+          rows.push({
+            rowNumber: excelRowNumber,
+            article: "",
+            quantity: quantity ?? 0,
+            price: price ?? 0,
+            status: "error",
+            message: "Не указан артикул.",
+          });
+          continue;
+        }
+
+        if (quantity === null || quantity <= 0) {
+          rows.push({
+            rowNumber: excelRowNumber,
+            article,
+            quantity: quantity ?? 0,
+            price: price ?? 0,
+            status: "error",
+            message: "Количество должно быть больше нуля.",
+          });
+          continue;
+        }
+
+        if (price === null || price < 0) {
+          rows.push({
+            rowNumber: excelRowNumber,
+            article,
+            quantity,
+            price: price ?? 0,
+            status: "error",
+            message: "Цена должна быть числом не меньше нуля.",
+          });
+          continue;
+        }
+
+        rows.push({
+          rowNumber: excelRowNumber,
+          article,
+          quantity,
+          price,
+          status: "pending",
+          message: "",
+        });
+      }
+
+      if (rows.length === 0) {
+        throw new Error("После чтения Excel не найдено ни одной заполненной строки.");
+      }
+
+      const articles = Array.from(new Set(rows.filter((row) => row.status !== "error").map((row) => row.article)));
+
+      if (articles.length > 0) {
+        const { data, error: itemsError } = await supabase
+          .from("items")
+          .select("id, item_type, name, article, is_active, source_table, source_id")
+          .eq("is_active", true)
+          .in("article", articles);
+
+        if (itemsError) throw itemsError;
+
+        const foundByArticle = new Map<string, any[]>();
+        ((data || []) as any[]).forEach((item) => {
+          const key = String(item.article ?? "").trim().toLowerCase();
+          const list = foundByArticle.get(key) || [];
+          list.push(item);
+          foundByArticle.set(key, list);
+        });
+
+        rows.forEach((row) => {
+          if (row.status === "error") return;
+
+          const matches = foundByArticle.get(row.article.toLowerCase()) || [];
+
+          if (matches.length === 0) {
+            row.status = "error";
+            row.message = "Артикул не найден в активной номенклатуре.";
+            return;
+          }
+
+          if (matches.length > 1) {
+            row.status = "error";
+            row.message = `Артикул найден ${matches.length} раза. Импорт остановлен.`;
+            return;
+          }
+
+          const item = matches[0];
+          row.itemId = item.id;
+          row.itemSourceId = item.source_id || undefined;
+          row.itemType = item.item_type;
+          row.name = item.name || "Без названия";
+
+          if (
+            item.item_type !== "resale_product" &&
+            !row.itemSourceId
+          ) {
+            row.status = "error";
+            row.message = "Для этой номенклатуры не указан source_id.";
+            return;
+          }
+
+          row.status = "ready";
+          row.message = "";
+        });
+      }
+
+      setImportPreview({
+        fileName: file.name,
+        rows,
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Не удалось прочитать Excel-файл.");
+    } finally {
+      if (importFileInputRef.current) {
+        importFileInputRef.current.value = "";
+      }
+    }
+  }
+
+  async function importPreparedOrder() {
+    if (!importPreview) return;
+
+    const invalidRows = importPreview.rows.filter((row) => row.status !== "ready");
+    if (invalidRows.length > 0) {
+      setError("Импорт невозможен: сначала исправь строки с ошибками в Excel.");
+      return;
+    }
+
+    try {
+      setError("");
+
+      const totalAmount = importPreview.rows.reduce(
+        (sum, row) => sum + row.quantity * row.price,
+        0,
+      );
+
+      const draftStatus = statuses.find((status) => status.code === "draft");
+
+      if (!draftStatus) {
+        throw new Error("Не найден статус заказа «draft» в справочнике statuses.");
+      }
+
+      const { data: createdOrder, error: orderError } = await supabase
+        .from("customer_orders")
+        .insert({
+          order_date: new Date().toISOString().slice(0, 10),
+          customer_name: "Импорт из Excel",
+          total_amount: totalAmount,
+          status: "draft",
+          status_id: draftStatus.id,
+        })
+        .select("*")
+        .single();
+
+      if (orderError) {
+        throw new Error(
+          `Ошибка создания customer_orders: ${orderError.code || "без кода"} — ${orderError.message}` +
+            (orderError.details ? ` | details: ${orderError.details}` : "") +
+            (orderError.hint ? ` | hint: ${orderError.hint}` : ""),
+        );
+      }
+
+      const orderItems = importPreview.rows.map((row) => ({
+        customer_order_id: createdOrder.id,
+        item_type: row.itemType,
+        item_id: row.itemType === "resale_product" ? row.itemId : null,
+        product_id: row.itemType === "product" ? row.itemSourceId : null,
+        material_id: row.itemType === "material" ? row.itemSourceId : null,
+        consumable_id: row.itemType === "consumable" ? row.itemSourceId : null,
+        quantity: row.quantity,
+        price: row.price,
+      }));
+
+      for (let index = 0; index < orderItems.length; index += 1) {
+        const item = orderItems[index];
+        const row = importPreview.rows[index];
+
+        const { error: itemError } = await supabase
+          .from("customer_order_items")
+          .insert(item);
+
+        if (itemError) {
+          await supabase.from("customer_orders").delete().eq("id", createdOrder.id);
+
+          throw new Error(
+            `Ошибка позиции Excel, строка ${row.rowNumber}, артикул «${row.article}»: ` +
+              `${itemError.code || "без кода"} — ${itemError.message}` +
+              (itemError.details ? ` | details: ${itemError.details}` : "") +
+              (itemError.hint ? ` | hint: ${itemError.hint}` : ""),
+          );
+        }
+      }
+
+      setImportPreview(null);
+      await loadOrders();
+      await openOrderById(createdOrder.id);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось импортировать заказ.",
+      );
     }
   }
 
@@ -334,9 +635,28 @@ export default function SalesPage() {
           </button>
 
           {activeTab === "orders" ? (
-            <button type="button" onClick={openCreateOrder} style={primaryButtonStyle}>
-              + Новый заказ покупателя
-            </button>
+            <>
+              <input
+                ref={importFileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                style={{ display: "none" }}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void prepareExcelImport(file);
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => importFileInputRef.current?.click()}
+                style={secondaryButtonStyle}
+              >
+                📥 Загрузить Excel
+              </button>
+              <button type="button" onClick={openCreateOrder} style={primaryButtonStyle}>
+                + Новый заказ покупателя
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -508,6 +828,73 @@ export default function SalesPage() {
         />
       )}
 
+      {importPreview && (
+        <div style={overlayStyle}>
+          <div style={importPreviewModalStyle}>
+            <div style={importPreviewHeaderStyle}>
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 900 }}>Предпросмотр импорта</div>
+                <div style={{ color: "#64748b", marginTop: 4 }}>{importPreview.fileName}</div>
+              </div>
+              <button type="button" onClick={() => setImportPreview(null)} style={modalCloseButtonStyle}>
+                ×
+              </button>
+            </div>
+
+            <div style={importSummaryStyle}>
+              <strong>{importPreview.rows.filter((row) => row.status === "ready").length}</strong> готово к импорту
+              {" · "}
+              <strong>{importPreview.rows.filter((row) => row.status === "error").length}</strong> ошибок
+            </div>
+
+            <div style={importTableWrapStyle}>
+              <table style={tableStyle}>
+                <thead>
+                  <tr>
+                    <th style={thStyle}>Строка</th>
+                    <th style={thStyle}>Артикул</th>
+                    <th style={thStyle}>Номенклатура</th>
+                    <th style={thStyle}>Тип</th>
+                    <th style={thStyle}>Количество</th>
+                    <th style={thStyle}>Цена</th>
+                    <th style={thStyle}>Результат</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {importPreview.rows.map((row) => (
+                    <tr key={`${row.rowNumber}-${row.article}`}>
+                      <td style={tdStyle}>{row.rowNumber}</td>
+                      <td style={tdStyle}>{row.article || "—"}</td>
+                      <td style={tdStyle}>{row.name || "—"}</td>
+                      <td style={tdStyle}>{row.itemType || "—"}</td>
+                      <td style={tdStyle}>{row.quantity}</td>
+                      <td style={tdStyle}>{row.price.toLocaleString("ru-RU")} ₽</td>
+                      <td style={{ ...tdStyle, color: row.status === "error" ? "#b91c1c" : "#15803d", fontWeight: 800 }}>
+                        {row.status === "error" ? row.message : "✓ Найдено"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div style={importActionsStyle}>
+              <button type="button" onClick={() => setImportPreview(null)} style={secondaryButtonStyle}>
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={() => void importPreparedOrder()}
+                style={primaryButtonStyle}
+                disabled={importPreview.rows.some((row) => row.status !== "ready")}
+              >
+                Импортировать заказ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {selectedShipment && (
         <CustomerShipmentModal
           shipment={selectedShipment}
@@ -667,4 +1054,69 @@ const statusBadgeStyle: React.CSSProperties = {
   fontSize: 13,
   fontWeight: 900,
   whiteSpace: "nowrap",
+};
+
+const overlayStyle: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  background: "rgba(15, 23, 42, 0.45)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+  zIndex: 1000,
+};
+
+const importPreviewModalStyle: React.CSSProperties = {
+  width: "min(1180px, 96vw)",
+  maxHeight: "90vh",
+  background: "#ffffff",
+  borderRadius: 20,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 24px 60px rgba(15, 23, 42, 0.25)",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+};
+
+const importPreviewHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 16,
+  padding: "18px 20px",
+  borderBottom: "1px solid #e2e8f0",
+};
+
+const modalCloseButtonStyle: React.CSSProperties = {
+  border: "none",
+  background: "#f1f5f9",
+  color: "#334155",
+  borderRadius: 10,
+  width: 36,
+  height: 36,
+  fontSize: 24,
+  cursor: "pointer",
+  lineHeight: 1,
+};
+
+const importSummaryStyle: React.CSSProperties = {
+  padding: "12px 20px",
+  color: "#475569",
+  background: "#f8fafc",
+  borderBottom: "1px solid #e2e8f0",
+};
+
+const importTableWrapStyle: React.CSSProperties = {
+  overflow: "auto",
+  padding: 16,
+  flex: 1,
+};
+
+const importActionsStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  padding: 16,
+  borderTop: "1px solid #e2e8f0",
 };
