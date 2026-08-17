@@ -540,14 +540,55 @@ export default function StockPage() {
       })
       .filter(Boolean) as StockRow[];
 
-    const resaleStockIds = new Set(
-      movementRows
-        .filter((row) => row?.itemType === "resale_product")
-        .map((row) => row!.itemId),
-    );
+    const stockIdsByType = new Map<StockItemType, Set<string>>([
+      ["product", new Set()],
+      ["resale_product", new Set()],
+      ["material", new Set()],
+      ["consumable", new Set()],
+    ]);
+
+    movementRows.forEach((row) => {
+      stockIdsByType.get(row.itemType)?.add(row.itemId);
+    });
+
+    const zeroStockProductRows: StockRow[] = products
+      .filter(
+        (item) =>
+          !productToResaleMap.has(item.id) &&
+          !stockIdsByType.get("product")?.has(item.id),
+      )
+      .map((item) => {
+        const productCost = productCostMap.get(item.id);
+        const price =
+          productCost && productCost.quantity > 0
+            ? productCost.cost / productCost.quantity
+            : 0;
+
+        return {
+          key: getStockKey("product", item.id),
+          itemType: "product",
+          itemId: item.id,
+          name: item.name || "Готовая продукция / товар",
+          article: item.article || "",
+          colorName: "",
+          colorHex: "",
+          quantityOnHand: 0,
+          quantityReserved: 0,
+          quantityAvailable: 0,
+          avgPrice: price,
+          amount: 0,
+          lastMovementDate: "",
+          lastMovementType: "—",
+          lastDocumentType: "—",
+        };
+      });
 
     const zeroStockResaleRows: StockRow[] = resaleProducts
-      .filter((item) => item.is_active !== false && !resaleStockIds.has(item.id))
+      .filter(
+        (item) =>
+          item.is_active !== false &&
+          !stockIdsByType.get("resale_product")?.has(item.id),
+      )
       .map((item) => ({
         key: getStockKey("resale_product", item.id),
         itemType: "resale_product",
@@ -566,8 +607,58 @@ export default function StockPage() {
         lastDocumentType: "—",
       }));
 
-    return [...movementRows, ...zeroStockResaleRows]
-      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    const zeroStockMaterialRows: StockRow[] = materials
+      .filter((item) => !stockIdsByType.get("material")?.has(item.id))
+      .map((item) => {
+        const color = item.color_id ? colorMap.get(item.color_id) : null;
+        const price = Number(item.default_price || 0);
+
+        return {
+          key: getStockKey("material", item.id),
+          itemType: "material",
+          itemId: item.id,
+          name: item.name || "Материал",
+          article: item.article || "",
+          colorName: color?.name || "",
+          colorHex: color?.hex || "",
+          quantityOnHand: 0,
+          quantityReserved: 0,
+          quantityAvailable: 0,
+          avgPrice: price,
+          amount: 0,
+          lastMovementDate: "",
+          lastMovementType: "—",
+          lastDocumentType: "—",
+        };
+      });
+
+    const zeroStockConsumableRows: StockRow[] = consumables
+      .filter((item) => !stockIdsByType.get("consumable")?.has(item.id))
+      .map((item) => ({
+        key: getStockKey("consumable", item.id),
+        itemType: "consumable",
+        itemId: item.id,
+        name: item.name || "Расходник",
+        article: item.article || "",
+        colorName: "",
+        colorHex: "",
+        quantityOnHand: 0,
+        quantityReserved: 0,
+        quantityAvailable: 0,
+        avgPrice: Number(item.default_price || 0),
+        amount: 0,
+        lastMovementDate: "",
+        lastMovementType: "—",
+        lastDocumentType: "—",
+      }));
+
+    return [
+      ...movementRows,
+      ...zeroStockProductRows,
+      ...zeroStockResaleRows,
+      ...zeroStockMaterialRows,
+      ...zeroStockConsumableRows,
+    ].sort((a, b) => a.name.localeCompare(b.name, "ru"));
   }, [stockAvailable, products, resaleProducts, materials, consumables, colors, movements, productionCosts]);
 
   const filteredRows = useMemo(() => {
