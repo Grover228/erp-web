@@ -2,8 +2,6 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { supabase } from "../supabase";
 
-const EMPLOYEE_MOBILE_VERSION = "v0.9.0";
-
 type Shift = {
   id: string;
   user_id: string;
@@ -78,13 +76,6 @@ export default function EmployeeMobilePage({
   const [nextOperationPreview, setNextOperationPreview] = useState<ProductionOperation | null>(null);
   const [lastOperationReady, setLastOperationReady] = useState(false);
   const [finishedFinalBatch, setFinishedFinalBatch] = useState<{ batchNumber: string } | null>(null);
-  const [postOperationAction, setPostOperationAction] = useState<{
-    batchId: string;
-    batchNumber: string;
-    goodQuantity: number;
-    defectQuantity: number;
-    nextOperation: ProductionOperation | null;
-  } | null>(null);
   const [partialQty, setPartialQty] = useState("");
   const [partialDecisionMode, setPartialDecisionMode] = useState(false);
   const [partialGoodQty, setPartialGoodQty] = useState(0);
@@ -797,69 +788,15 @@ export default function EmployeeMobilePage({
       const shouldAskTakeAnother =
         mode === "all" && isCurrentBatchOperationDone && !nextOperation;
 
-      const shouldShowPostOperationAction =
-        defectQuantity > 0 && isCurrentBatchOperationDone;
-
       closeModal();
       await loadMyBatches(user.id);
 
-      if (shouldShowPostOperationAction) {
-        setPostOperationAction({
-          batchId: batch.id,
-          batchNumber: batch.batch_number,
-          goodQuantity: finishQty,
-          defectQuantity,
-          nextOperation: nextOperation || null,
-        });
-      } else if (shouldAskTakeAnother) {
+      if (shouldAskTakeAnother) {
         setFinishedFinalBatch({ batchNumber: batch.batch_number });
       }
     } catch (error) {
       setClosingError(
         error instanceof Error ? error.message : "Не удалось закрыть пачку"
-      );
-    } finally {
-      setClosingLoading(false);
-    }
-  }
-
-  async function takeNextOperationFromPostAction() {
-    if (!postOperationAction?.nextOperation) return;
-
-    try {
-      setClosingLoading(true);
-      setClosingError("");
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
-      if (!user) throw new Error("Пользователь не найден");
-
-      const now = new Date().toISOString();
-
-      const { error: batchError } = await supabase
-        .from("production_batches")
-        .update({
-          status: "in_progress",
-          assigned_user_id: user.id,
-          assigned_at: now,
-          started_at: now,
-          completed_at: null,
-        })
-        .eq("id", postOperationAction.batchId);
-
-      if (batchError) throw batchError;
-
-      setPostOperationAction(null);
-      await loadMyBatches(user.id);
-    } catch (error) {
-      setClosingError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось начать следующую операцию"
       );
     } finally {
       setClosingLoading(false);
@@ -913,7 +850,6 @@ export default function EmployeeMobilePage({
   if (!shift) {
     return (
       <div style={closedShiftPageStyle}>
-        <div style={versionBadgeStyle}>{EMPLOYEE_MOBILE_VERSION}</div>
         <div style={closedShiftBoxStyle}>
           <div style={{ fontSize: 16, color: "#64748b", fontWeight: 800 }}>
             {employeeName}
@@ -961,7 +897,6 @@ export default function EmployeeMobilePage({
   if (shift.is_paused) {
     return (
       <div style={pausedPageStyle}>
-        <div style={versionBadgeStyle}>{EMPLOYEE_MOBILE_VERSION}</div>
         <div style={pausedBoxStyle}>
           <div style={{ fontSize: 18, color: "#64748b", fontWeight: 800 }}>
             Смена на паузе
@@ -991,7 +926,6 @@ export default function EmployeeMobilePage({
 
   return (
     <div style={pageStyle}>
-      <div style={versionBadgeStyle}>{EMPLOYEE_MOBILE_VERSION}</div>
       <div style={employeeStripStyle}>
         <div>
           <div style={{ fontSize: 15, color: "#64748b", fontWeight: 800 }}>
@@ -1525,93 +1459,6 @@ export default function EmployeeMobilePage({
         </div>
       )}
 
-      {postOperationAction && (
-        <div style={modalOverlayStyle}>
-          <div style={modalBoxStyle}>
-            <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
-              ✓ Операция завершена
-            </div>
-
-            <div style={{ color: "#64748b", fontWeight: 700 }}>
-              Пачка {postOperationAction.batchNumber}
-            </div>
-
-            <div style={infoBoxStyle}>
-              Годно: <b>{postOperationAction.goodQuantity} шт.</b>
-              <br />
-              Брак: <b>{postOperationAction.defectQuantity} шт.</b>
-              {postOperationAction.nextOperation && (
-                <>
-                  <div style={{ marginTop: 12, color: "#64748b" }}>
-                    Следующая операция по этой пачке:
-                  </div>
-                  <div
-                    style={{
-                      marginTop: 4,
-                      fontSize: 21,
-                      fontWeight: 900,
-                      color: "#111827",
-                    }}
-                  >
-                    {postOperationAction.nextOperation.operation_name}
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div style={{ fontSize: 18, fontWeight: 900, color: "#111827" }}>
-              Что делаем дальше?
-            </div>
-
-            {closingError && <div style={errorBoxStyle}>{closingError}</div>}
-
-            {postOperationAction.nextOperation && (
-              <button
-                onClick={takeNextOperationFromPostAction}
-                disabled={closingLoading}
-                style={bigGreenButtonStyle}
-              >
-                {closingLoading
-                  ? "Начинаю..."
-                  : `▶ Начать: ${postOperationAction.nextOperation.operation_name}`}
-              </button>
-            )}
-
-            <button
-              onClick={() => {
-                setPostOperationAction(null);
-                handleOpenScanner();
-              }}
-              disabled={closingLoading}
-              style={scanButtonStyle}
-            >
-              <span style={actionIconStyle}>📷</span>
-              <span>Сканировать другую пачку</span>
-            </button>
-
-            <button
-              onClick={async () => {
-                setPostOperationAction(null);
-                await togglePause();
-              }}
-              disabled={closingLoading}
-              style={pauseButtonStyle}
-            >
-              <span style={actionIconStyle}>⏸️</span>
-              <span>Перерыв</span>
-            </button>
-
-            <button
-              onClick={() => setPostOperationAction(null)}
-              disabled={closingLoading}
-              style={cancelButtonStyle}
-            >
-              Вернуться к смене
-            </button>
-          </div>
-        </div>
-      )}
-
       {finishedFinalBatch && (
         <div style={modalOverlayStyle}>
           <div style={modalBoxStyle}>
@@ -1708,22 +1555,6 @@ function MiniBox({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
-const versionBadgeStyle: CSSProperties = {
-  position: "fixed",
-  right: 6,
-  bottom: 6,
-  zIndex: 999,
-  padding: "2px 5px",
-  borderRadius: 6,
-  background: "rgba(255, 255, 255, 0.72)",
-  color: "#94a3b8",
-  fontSize: 10,
-  fontWeight: 700,
-  lineHeight: 1.2,
-  pointerEvents: "none",
-  userSelect: "none",
-};
 
 const pageStyle: CSSProperties = {
   minHeight: "100vh",
