@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { supabase } from "../supabase";
 
+const EMPLOYEE_MOBILE_VERSION = "v0.9.1";
+
 type Shift = {
   id: string;
   user_id: string;
@@ -987,6 +989,22 @@ export default function EmployeeMobilePage({
 
   return (
     <div style={pageStyle}>
+      <div
+        style={{
+          position: "fixed",
+          right: 8,
+          bottom: 6,
+          zIndex: 999,
+          fontSize: 10,
+          fontWeight: 700,
+          color: "#94a3b8",
+          opacity: 0.75,
+          pointerEvents: "none",
+        }}
+      >
+        {EMPLOYEE_MOBILE_VERSION}
+      </div>
+
       <div style={employeeStripStyle}>
         <div>
           <div style={{ fontSize: 15, color: "#64748b", fontWeight: 800 }}>
