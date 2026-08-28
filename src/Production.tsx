@@ -990,6 +990,11 @@ export default function Production({
           .eq("production_order_id", order.id),
 
         supabase
+          .from("production_defects")
+          .delete()
+          .eq("production_order_id", order.id),
+
+        supabase
           .from("production_batches")
           .delete()
           .eq("production_order_id", order.id),

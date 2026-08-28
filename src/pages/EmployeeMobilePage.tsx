@@ -85,6 +85,9 @@ export default function EmployeeMobilePage({
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState("");
   const [batchesExpanded, setBatchesExpanded] = useState(true);
+  const [batchOperationTargets, setBatchOperationTargets] = useState<
+    Record<string, number>
+  >({});
 
   useEffect(() => {
     initEmployeePage();
@@ -235,6 +238,7 @@ export default function EmployeeMobilePage({
       setShift(null);
       setBatches([]);
       setBatchOperations({});
+      setBatchOperationTargets({});
     } catch (error) {
       setShiftError(
         error instanceof Error ? error.message : "Не удалось закрыть смену"
@@ -308,32 +312,75 @@ export default function EmployeeMobilePage({
       setBatches(list);
 
       const operationsMap: Record<string, ProductionOperation | null> = {};
+      const targetsMap: Record<string, number> = {};
 
       await Promise.all(
         list.map(async (batch) => {
           if (!batch.production_order_id || !batch.current_operation_order) {
             operationsMap[batch.id] = null;
+            targetsMap[batch.id] = Number(batch.quantity || 0);
             return;
           }
 
-          const { data: operation, error: operationError } = await supabase
+          const { data: orderOperations, error: operationsError } = await supabase
             .from("production_order_operations")
             .select("*")
             .eq("production_order_id", batch.production_order_id)
-            .eq("sort_order", batch.current_operation_order)
-            .maybeSingle();
+            .order("sort_order", { ascending: true });
 
-          if (operationError) {
+          if (operationsError) {
             operationsMap[batch.id] = null;
+            targetsMap[batch.id] = Number(batch.quantity || 0);
             return;
           }
 
-          operationsMap[batch.id] =
-            (operation as ProductionOperation | null) || null;
+          const safeOperations =
+            (orderOperations as ProductionOperation[]) || [];
+          const currentOperation =
+            safeOperations.find(
+              (item) =>
+                item.sort_order === Number(batch.current_operation_order || 0)
+            ) || null;
+
+          operationsMap[batch.id] = currentOperation;
+
+          const previousOperationIds = safeOperations
+            .filter(
+              (item) =>
+                item.sort_order < Number(batch.current_operation_order || 0)
+            )
+            .map((item) => item.id);
+
+          if (previousOperationIds.length === 0) {
+            targetsMap[batch.id] = Number(batch.quantity || 0);
+            return;
+          }
+
+          const { data: previousDefects, error: defectsError } = await supabase
+            .from("production_defects")
+            .select("quantity")
+            .eq("batch_id", batch.id)
+            .in("production_order_operation_id", previousOperationIds);
+
+          if (defectsError) {
+            targetsMap[batch.id] = Number(batch.quantity || 0);
+            return;
+          }
+
+          const previousDefectQty = (previousDefects || []).reduce(
+            (sum, item) => sum + Number(item.quantity || 0),
+            0
+          );
+
+          targetsMap[batch.id] = Math.max(
+            0,
+            Number(batch.quantity || 0) - previousDefectQty
+          );
         })
       );
 
       setBatchOperations(operationsMap);
+      setBatchOperationTargets(targetsMap);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Ошибка загрузки пачек");
     } finally {
@@ -415,7 +462,8 @@ export default function EmployeeMobilePage({
   function preparePartialDecision(batch: ProductionBatch) {
     setClosingError("");
 
-    const total = Number(batch.quantity || 0);
+    const total =
+      batchOperationTargets[batch.id] ?? Number(batch.quantity || 0);
     const completed = Number(batch.completed_quantity || 0);
     const left = Math.max(0, total - completed);
     const goodQty = Number(String(partialQty).replace(",", "."));
@@ -462,41 +510,7 @@ export default function EmployeeMobilePage({
         throw new Error("Сначала нужно открыть смену");
       }
 
-      const total = Number(batch.quantity || 0);
-      const completed = Number(batch.completed_quantity || 0);
-      const left = Math.max(0, total - completed);
-
-      const finishQty =
-        mode === "all"
-          ? left
-          : goodQtyOverride ?? Number(String(partialQty).replace(",", "."));
       const defectQuantity = Number(defectQtyOverride || 0);
-
-      if (!finishQty || finishQty <= 0) {
-        throw new Error("Укажи количество больше 0");
-      }
-
-      if (!Number.isInteger(finishQty)) {
-        throw new Error("Количество должно быть целым числом");
-      }
-
-      if (finishQty > left) {
-        throw new Error(`Нельзя закрыть ${finishQty} шт. Осталось только ${left} шт.`);
-      }
-
-      if (!Number.isInteger(defectQuantity) || defectQuantity < 0) {
-        throw new Error("Количество брака должно быть целым числом");
-      }
-
-      if (finishQty + defectQuantity > left) {
-        throw new Error(
-          `Годно + брак не могут превышать остаток ${left} шт.`
-        );
-      }
-
-      if (defectQuantity > 0 && !defectReason) {
-        throw new Error("Выбери причину брака");
-      }
 
       const {
         data: { user },
@@ -535,6 +549,73 @@ export default function EmployeeMobilePage({
 
       if (!operation) throw new Error("Операция для пачки не найдена");
 
+      const previousOperationIds = operations
+        .filter((item) => item.sort_order < currentOperationOrder)
+        .map((item) => item.id);
+
+      const { data: batchDefects, error: batchDefectsError } = await supabase
+        .from("production_defects")
+        .select("production_order_operation_id, quantity")
+        .eq("batch_id", batch.id);
+
+      if (batchDefectsError) throw batchDefectsError;
+
+      const previousDefectQuantity = (batchDefects || [])
+        .filter((item) =>
+          previousOperationIds.includes(
+            String(item.production_order_operation_id || "")
+          )
+        )
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+      const existingCurrentDefectQuantity = (batchDefects || [])
+        .filter(
+          (item) =>
+            String(item.production_order_operation_id || "") === operation.id
+        )
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+
+      const total = Math.max(
+        0,
+        Number(batch.quantity || 0) - previousDefectQuantity
+      );
+      const completed = Number(batch.completed_quantity || 0);
+      const left = Math.max(
+        0,
+        total - completed - existingCurrentDefectQuantity
+      );
+
+      const finishQty =
+        mode === "all"
+          ? left
+          : goodQtyOverride ?? Number(String(partialQty).replace(",", "."));
+
+      if (!finishQty || finishQty <= 0) {
+        throw new Error("Укажи количество больше 0");
+      }
+
+      if (!Number.isInteger(finishQty)) {
+        throw new Error("Количество должно быть целым числом");
+      }
+
+      if (finishQty > left) {
+        throw new Error(`Нельзя закрыть ${finishQty} шт. Осталось только ${left} шт.`);
+      }
+
+      if (!Number.isInteger(defectQuantity) || defectQuantity < 0) {
+        throw new Error("Количество брака должно быть целым числом");
+      }
+
+      if (finishQty + defectQuantity > left) {
+        throw new Error(
+          `Годно + брак не могут превышать остаток ${left} шт.`
+        );
+      }
+
+      if (defectQuantity > 0 && !defectReason) {
+        throw new Error("Выбери причину брака");
+      }
+
       const finishedAt = new Date().toISOString();
       const startedAt = batch.started_at || operation.started_at;
 
@@ -550,7 +631,10 @@ export default function EmployeeMobilePage({
 
       const newBatchCompleted = completed + finishQty;
       const isCurrentBatchOperationDone =
-        newBatchCompleted + defectQuantity >= total;
+        newBatchCompleted +
+          existingCurrentDefectQuantity +
+          defectQuantity >=
+        total;
 
       const newOperationCompleted =
         Number(operation.completed_quantity || 0) + finishQty;
@@ -564,8 +648,26 @@ export default function EmployeeMobilePage({
           ? Number(order.quantity || 0)
           : Number(previousOperation?.completed_quantity || 0);
 
+      const { data: operationDefects, error: operationDefectsError } =
+        await supabase
+          .from("production_defects")
+          .select("quantity")
+          .eq("production_order_operation_id", operation.id);
+
+      if (operationDefectsError) throw operationDefectsError;
+
+      const existingOperationDefectQuantity = (operationDefects || []).reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+      );
+
       const operationNextStatus =
-        newOperationCompleted + defectQuantity >= operationTarget ? "done" : "pending";
+        newOperationCompleted +
+          existingOperationDefectQuantity +
+          defectQuantity >=
+        operationTarget
+          ? "done"
+          : "pending";
 
       const { error: operationError } = await supabase
         .from("production_order_operations")
@@ -883,10 +985,13 @@ export default function EmployeeMobilePage({
                 <b>
                   {Math.max(
                     0,
-                    Number(activeBatch.quantity || 0) -
+                    (batchOperationTargets[activeBatch.id] ??
+                      Number(activeBatch.quantity || 0)) -
                       Number(activeBatch.completed_quantity || 0)
                   )}{" "}
-                  из {Number(activeBatch.quantity || 0)}
+                  из{" "}
+                  {batchOperationTargets[activeBatch.id] ??
+                    Number(activeBatch.quantity || 0)}
                 </b>
               </span>
               <span>
@@ -982,7 +1087,8 @@ export default function EmployeeMobilePage({
             {!loading && !error && batches.length > 0 && (
               <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
                 {batches.map((batch) => {
-                  const total = Number(batch.quantity || 0);
+                  const total =
+                    batchOperationTargets[batch.id] ?? Number(batch.quantity || 0);
                   const completed = Number(batch.completed_quantity || 0);
                   const left = Math.max(0, total - completed);
 
