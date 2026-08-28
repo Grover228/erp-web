@@ -864,9 +864,25 @@ export default function EmployeeMobilePage({
           </div>
 
           {activeBatch && (
-            <div style={{ marginTop: 6, fontSize: 13, color: "#64748b", fontWeight: 800 }}>
-              Пачка {activeBatch.batch_number}
-            </div>
+            <>
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: 13,
+                  color: "#64748b",
+                  fontWeight: 800,
+                }}
+              >
+                Пачка {activeBatch.batch_number}
+              </div>
+
+              <button
+                onClick={() => openCloseModal(activeBatch)}
+                style={currentOperationFinishButtonStyle}
+              >
+                Закончить работу
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -1468,6 +1484,19 @@ const shiftSummaryRightStyle: CSSProperties = {
   flexDirection: "column",
   justifyContent: "center",
   textAlign: "right",
+};
+
+const currentOperationFinishButtonStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 46,
+  marginTop: 10,
+  border: "none",
+  borderRadius: 14,
+  background: "#16a34a",
+  color: "#ffffff",
+  fontSize: 16,
+  fontWeight: 900,
+  cursor: "pointer",
 };
 
 const scanButtonStyle: CSSProperties = {
