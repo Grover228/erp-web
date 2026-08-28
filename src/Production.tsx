@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
 import ProductionOrderModal from "./pages/production/ProductionOrderModal";
 import ProductionCreateOrderModal from "./pages/production/ProductionCreateOrderModal";
 import ProductionJobsList from "./pages/production/ProductionJobsList";
 import ProductionActiveBatches from "./pages/production/ProductionActiveBatches";
+import ProductionFinishOperationModal from "./pages/production/ProductionFinishOperationModal";
 import type {
   ActiveBatchItem,
   ConsumablePrice,
@@ -66,6 +68,34 @@ import {
   tabButtonStyle,
 } from "./pages/production/ProductionUi";
 
+const productionKpiCardStyle: CSSProperties = {
+  border: "1px solid #dbeafe",
+  borderRadius: 16,
+  background: "#ffffff",
+  padding: "16px 18px",
+  boxShadow: "0 6px 18px rgba(15, 23, 42, 0.04)",
+};
+
+const productionKpiLabelStyle: CSSProperties = {
+  fontSize: 13,
+  color: "#64748b",
+  fontWeight: 700,
+};
+
+const productionKpiValueStyle: CSSProperties = {
+  marginTop: 6,
+  fontSize: 28,
+  lineHeight: 1,
+  color: "#0f172a",
+  fontWeight: 900,
+};
+
+const productionKpiHintStyle: CSSProperties = {
+  marginTop: 6,
+  fontSize: 12,
+  color: "#64748b",
+};
+
 async function loadWarehouseAvailableMap() {
   const availableMap = new Map<string, number>();
 
@@ -97,6 +127,19 @@ export default function Production({
   const [operations, setOperations] = useState<ProductionOrderOperation[]>([]);
   const [operationLogs, setOperationLogs] = useState<ProductionOperationLog[]>([]);
   const [batches, setBatches] = useState<ProductionBatch[]>([]);
+  const [qrPrintLogs, setQrPrintLogs] = useState<
+    Array<{
+      id: string;
+      batch_id: string;
+      production_order_id: string;
+      printed_at: string;
+      printed_by: string | null;
+      printer_name: string;
+      batch_number: string | null;
+      quantity: number | null;
+    }>
+  >([]);
+  const [defects, setDefects] = useState<Array<{ production_order_id: string; production_order_operation_id: string | null; quantity: number }>>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   const [shiftStats, setShiftStats] = useState<ShiftStats>({
@@ -379,12 +422,14 @@ export default function Production({
         setOperations([]);
         setOperationLogs([]);
         setBatches([]);
+        setQrPrintLogs([]);
+        setDefects([]);
         return;
       }
 
       await loadOperationLogsForOrders(orderIds);
 
-      const [operationsResult, batchesResult] = await Promise.all([
+      const [operationsResult, batchesResult, qrPrintLogsResult] = await Promise.all([
         supabase
           .from("production_order_operations")
           .select("*")
@@ -396,14 +441,23 @@ export default function Production({
           .select("*")
           .in("production_order_id", orderIds)
           .order("created_at", { ascending: false }),
+
+        supabase
+          .from("production_qr_print_logs")
+          .select("*")
+          .in("production_order_id", orderIds)
+          .order("printed_at", { ascending: false }),
       ]);
 
       if (operationsResult.error) throw operationsResult.error;
       if (batchesResult.error) throw batchesResult.error;
+      if (qrPrintLogsResult.error) throw qrPrintLogsResult.error;
 
       const safeOperations =
         (operationsResult.data as ProductionOrderOperation[]) || [];
       const safeBatches = (batchesResult.data as ProductionBatch[]) || [];
+      const safeQrPrintLogs =
+        (qrPrintLogsResult.data as typeof qrPrintLogs) || [];
 
       /*
         ВАЖНО: загрузка списка заказов не должна сама проводить производство.
@@ -412,6 +466,7 @@ export default function Production({
       */
       setOperations(safeOperations);
       setBatches(safeBatches);
+      setQrPrintLogs(safeQrPrintLogs);
 
       // Если все QR-пачки заказа уже закрыты, брак считается учтённым исходом,
       // но completed_quantity остаётся только количеством годной продукции.
@@ -421,6 +476,14 @@ export default function Production({
         .in("production_order_id", orderIds);
 
       if (defectRowsError) throw defectRowsError;
+
+      setDefects(
+        ((defectRows || []) as Array<{
+          production_order_id: string;
+          production_order_operation_id: string | null;
+          quantity: number;
+        }>),
+      );
 
       for (const order of safeOrders) {
         if (["done", "cancelled", "archived"].includes(order.status)) continue;
@@ -1280,7 +1343,42 @@ export default function Production({
         throw new Error(result.error || "Ошибка печати QR");
       }
 
-      setMessage(`QR пачки ${item.batchNumber} отправлен на печать`);
+      const batch =
+        batches.find((itemBatch) => itemBatch.batch_number === item.batchNumber) ||
+        null;
+
+      if (!batch) {
+        throw new Error(
+          `QR отправлен на принтер, но пачка ${item.batchNumber} не найдена для записи журнала печати`,
+        );
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      const { error: printLogError } = await supabase
+        .from("production_qr_print_logs")
+        .insert({
+          batch_id: batch.id,
+          production_order_id: batch.production_order_id,
+          printed_by: user?.id || null,
+          printer_name: "Xprinter XP-365B",
+          batch_number: batch.batch_number,
+          quantity: Number(batch.quantity || 0),
+        });
+
+      if (printLogError) {
+        throw new Error(
+          `QR напечатан, но не удалось записать факт печати: ${printLogError.message}`,
+        );
+      }
+
+      setMessage(`QR пачки ${item.batchNumber} отправлен на печать и записан в журнал`);
+      await loadProductionOrders();
     } catch (error) {
       setError(
         error instanceof Error
@@ -1288,6 +1386,30 @@ export default function Production({
           : "Ошибка печати QR"
       );
     }
+  }
+
+  async function printBatchQr(batch: ProductionBatch) {
+    const order =
+      orders.find((item) => item.id === batch.production_order_id) || null;
+
+    if (!order) {
+      setError("Не найден производственный заказ для этой пачки");
+      return;
+    }
+
+    const fallbackPayload: GeneratedQr["payload"] = {
+      batch_number: batch.batch_number,
+      order_number: order.order_number || order.id.slice(0, 8),
+      product_name:
+        batch.product_name || order.product?.name || "Без названия",
+      product_article:
+        batch.product_article || order.product?.article || null,
+      color_name: batch.color_name || null,
+      quantity: Number(batch.quantity || 0),
+    };
+
+    const qrItem = await makeQrFromPayload(batch.qr_payload || fallbackPayload);
+    await printQrLabel(qrItem);
   }
 
   async function handleTestPrint() {
@@ -2057,14 +2179,20 @@ export default function Production({
 
       const completedQuantity =
         orderOperations.length > 0
-          ? Math.min(
-              ...orderOperations.map((operation) =>
-                Number(operation.completed_quantity || 0)
+          ? order.status === "done"
+            ? Number(
+                [...orderOperations]
+                  .sort((a, b) => b.sort_order - a.sort_order)[0]
+                  ?.completed_quantity || 0,
               )
-            )
+            : Math.min(
+                ...orderOperations.map((operation) =>
+                  Number(operation.completed_quantity || 0)
+                ),
+              )
           : order.status === "done"
-          ? Number(order.quantity || 0)
-          : 0;
+            ? Number(order.quantity || 0)
+            : 0;
 
       return {
         id: order.order_number || order.id.slice(0, 8),
@@ -2188,16 +2316,42 @@ export default function Production({
       return getProgress(job.completed, job.qty);
     }
 
-    const totalProgress = job.operations.reduce((sum, operation) => {
-      const completed = Math.min(
-        Number(operation.completed_quantity || 0),
-        Number(job.qty || 0),
-      );
+    if (job.rawStatus === "done") {
+      return 100;
+    }
 
-      return sum + completed / Number(job.qty || 1);
+    const sortedOperations = [...job.operations].sort(
+      (a, b) => a.sort_order - b.sort_order,
+    );
+
+    let previousGood = Number(job.qty || 0);
+
+    const totalProgress = sortedOperations.reduce((sum, operation) => {
+      const target =
+        operation.sort_order === 1
+          ? Number(job.qty || 0)
+          : previousGood;
+
+      const completed = Number(operation.completed_quantity || 0);
+      const defective = defects
+        .filter(
+          (item) =>
+            item.production_order_id === job.realId &&
+            item.production_order_operation_id === operation.id,
+        )
+        .reduce((defectSum, item) => defectSum + Number(item.quantity || 0), 0);
+
+      const accounted = Math.min(target, completed + defective);
+      // Нулевой target у последующей операции означает, что до неё
+      // ещё не дошло ни одного годного изделия, а не то, что она выполнена.
+      const operationProgress = target > 0 ? accounted / target : 0;
+
+      previousGood = completed;
+
+      return sum + operationProgress;
     }, 0);
 
-    return Math.round((totalProgress / job.operations.length) * 100);
+    return Math.round((totalProgress / sortedOperations.length) * 100);
   }
 
   function getJobCurrentOperation(job: Job) {
@@ -2251,6 +2405,54 @@ export default function Production({
     };
   }
 
+  const productionDashboardStats = useMemo(() => {
+    const activeOrders = orders.filter(
+      (order) => !["done", "cancelled", "archived"].includes(order.status),
+    );
+
+    const plannedQuantity = activeOrders.reduce(
+      (sum, order) => sum + Number(order.quantity || 0),
+      0,
+    );
+
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const doneTodayOrders = orders.filter((order) => {
+      if (order.status !== "done") return false;
+
+      const finishedAt = (order as any).finished_goods_received_at;
+      if (!finishedAt) return false;
+
+      return new Date(finishedAt).getTime() >= startOfToday.getTime();
+    });
+
+    const doneTodayQuantity = doneTodayOrders.reduce((sum, order) => {
+      const orderOperations = operations
+        .filter((operation) => operation.production_order_id === order.id)
+        .sort((a, b) => b.sort_order - a.sort_order);
+
+      return sum + Number(orderOperations[0]?.completed_quantity || 0);
+    }, 0);
+
+    const problemOrderIds = new Set(
+      defects
+        .filter((defect) => Number(defect.quantity || 0) > 0)
+        .map((defect) => defect.production_order_id),
+    );
+
+    const problemOrders = activeOrders.filter((order) =>
+      problemOrderIds.has(order.id),
+    );
+
+    return {
+      activeOrdersCount: activeOrders.length,
+      plannedQuantity,
+      doneTodayOrdersCount: doneTodayOrders.length,
+      doneTodayQuantity,
+      problemOrdersCount: problemOrders.length,
+    };
+  }, [orders, operations, defects]);
 
 
   return (
@@ -2337,27 +2539,52 @@ export default function Production({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-          gap: 10,
-          marginBottom: 16,
+          gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+          gap: 12,
+          marginBottom: 18,
         }}
       >
-        <InfoBox
-          label="Моя смена: заработано"
-          value={formatMoney(shiftStats.totalEarned)}
-        />
-        <InfoBox
-          label="Операций закрыто"
-          value={`${shiftStats.operationsCount} шт`}
-        />
-        <InfoBox
-          label="Количество сделано"
-          value={`${shiftStats.totalQuantity} шт`}
-        />
-        <InfoBox
-          label="Время в работе"
-          value={formatTimer(shiftStats.totalDurationSeconds)}
-        />
+        <div style={productionKpiCardStyle}>
+          <div style={productionKpiLabelStyle}>В производстве</div>
+          <div style={productionKpiValueStyle}>
+            {productionDashboardStats.activeOrdersCount}
+          </div>
+          <div style={productionKpiHintStyle}>заказа</div>
+        </div>
+
+        <div style={productionKpiCardStyle}>
+          <div style={productionKpiLabelStyle}>Запланировано</div>
+          <div style={productionKpiValueStyle}>
+            {formatQuantity(productionDashboardStats.plannedQuantity)}
+          </div>
+          <div style={productionKpiHintStyle}>шт · по активным заказам</div>
+        </div>
+
+        <div style={productionKpiCardStyle}>
+          <div style={productionKpiLabelStyle}>Готово сегодня</div>
+          <div style={{ ...productionKpiValueStyle, color: "#15803d" }}>
+            {formatQuantity(productionDashboardStats.doneTodayQuantity)}
+          </div>
+          <div style={productionKpiHintStyle}>
+            {productionDashboardStats.doneTodayOrdersCount} заказа
+          </div>
+        </div>
+
+        <div style={productionKpiCardStyle}>
+          <div style={productionKpiLabelStyle}>Проблемы</div>
+          <div
+            style={{
+              ...productionKpiValueStyle,
+              color:
+                productionDashboardStats.problemOrdersCount > 0
+                  ? "#dc2626"
+                  : "#0f172a",
+            }}
+          >
+            {productionDashboardStats.problemOrdersCount}
+          </div>
+          <div style={productionKpiHintStyle}>заказа с браком</div>
+        </div>
       </div>
 
       {tab === "jobs" && (
@@ -2369,6 +2596,8 @@ export default function Production({
           orders={orders}
           batches={batches}
           operationLogs={operationLogs}
+          qrPrintLogs={qrPrintLogs}
+          defects={defects}
           nowTick={nowTick}
           actionLoading={actionLoading}
           deletingOrderId={deletingOrderId}
@@ -2383,6 +2612,7 @@ export default function Production({
             setIsCreateOpen(true);
           }}
           onOpenQrHistory={openQrHistory}
+          onPrintBatchQr={printBatchQr}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2405,6 +2635,8 @@ export default function Production({
           orders={orders}
           batches={batches}
           operationLogs={operationLogs}
+          qrPrintLogs={qrPrintLogs}
+          defects={defects}
           nowTick={nowTick}
           actionLoading={actionLoading}
           deletingOrderId={deletingOrderId}
@@ -2419,6 +2651,7 @@ export default function Production({
             setIsCreateOpen(true);
           }}
           onOpenQrHistory={openQrHistory}
+          onPrintBatchQr={printBatchQr}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2493,125 +2726,25 @@ export default function Production({
       )}
 
       {finishOperation && (
-        <div onClick={() => setFinishOperation(null)} style={stackedModalOverlayStyle}>
-          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
-            <div style={modalHeaderStyle}>
-              <div>
-                <div style={modalTitleStyle}>Закончить работу</div>
-                <div style={{ marginTop: 4, color: "#64748b" }}>
-                  {finishOperation.operation_name}
-                </div>
-              </div>
-
-              <button
-                onClick={() => setFinishOperation(null)}
-                style={closeButtonStyle}
-              >
-                ×
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleFinishOperation}
-              style={{ display: "grid", gap: 12 }}
-            >
-              <div
-                style={{
-                  padding: 12,
-                  borderRadius: 12,
-                  border: "1px solid #bfdbfe",
-                  background: "#eff6ff",
-                  color: "#1e3a8a",
-                  fontWeight: 700,
-                }}
-              >
-                Можно закрыть сейчас: {finishAvailableQuantity} шт
-              </div>
-
-              {finishError && (
-                <div
-                  style={{
-                    padding: 12,
-                    borderRadius: 12,
-                    border: "1px solid #fecaca",
-                    background: "#fef2f2",
-                    color: "#991b1b",
-                    fontWeight: 700,
-                  }}
-                >
-                  {finishError}
-                </div>
-              )}
-
-              <Field label="Сколько изделий выполнено?">
-                <input
-                  value={finishQuantity}
-                  onChange={(e) => {
-                    setFinishQuantity(e.target.value);
-                    setFinishError("");
-                  }}
-                  type="number"
-                  step="1"
-                  min="1"
-                  max={finishAvailableQuantity || undefined}
-                  placeholder="Например: 12"
-                  style={inputStyle}
-                />
-              </Field>
-
-              <div
-                style={{
-                  padding: 12,
-                  borderRadius: 12,
-                  border: "1px solid #dbeafe",
-                  background: "#f8fbff",
-                  color: "#0f172a",
-                  fontWeight: 700,
-                }}
-              >
-                Ставка: {formatMoney(finishOperation.price_per_unit || 0)} / шт
-                <br />
-                Заработано:{" "}
-                {formatMoney(
-                  Number(finishQuantity || 0) *
-                    Number(finishOperation.price_per_unit || 0)
-                )}
-              </div>
-
-              <Field label="Комментарий">
-                <input
-                  value={finishComment}
-                  onChange={(e) => setFinishComment(e.target.value)}
-                  placeholder="Необязательно"
-                  style={inputStyle}
-                />
-              </Field>
-
-              <div
-                style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setFinishOperation(null)}
-                  style={secondaryBlueButtonStyle()}
-                >
-                  Отмена
-                </button>
-
-                <button
-                  type="submit"
-                  disabled={actionLoading}
-                  style={{
-                    ...primaryGreenButtonStyle,
-                    opacity: actionLoading ? 0.7 : 1,
-                  }}
-                >
-                  {actionLoading ? "Сохранение..." : "Завершить операцию"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <ProductionFinishOperationModal
+          operation={finishOperation}
+          availableQuantity={finishAvailableQuantity}
+          quantity={finishQuantity}
+          comment={finishComment}
+          error={finishError}
+          actionLoading={actionLoading}
+          onClose={() => setFinishOperation(null)}
+          onSubmit={handleFinishOperation}
+          onQuantityChange={(value) => {
+            setFinishQuantity(value);
+            setFinishError("");
+          }}
+          onCommentChange={setFinishComment}
+          onUseFullRemainder={() => {
+            setFinishQuantity(String(finishAvailableQuantity));
+            setFinishError("");
+          }}
+        />
       )}
 
       {finishBatchItem && (

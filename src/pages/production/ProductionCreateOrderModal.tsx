@@ -29,6 +29,7 @@ export default function ProductionCreateOrderModal({
   onCommentChange,
 }: ProductionCreateOrderModalProps) {
   const [search, setSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
 
   const activeTechCardProductIds = useMemo(() => {
     return new Set(
@@ -42,18 +43,35 @@ export default function ProductionCreateOrderModal({
     return products.filter((product) => activeTechCardProductIds.has(product.id));
   }, [products, activeTechCardProductIds]);
 
+  const productCategories = useMemo(() => {
+    const categories = new Set<string>();
+
+    productsWithActiveTechCards.forEach((product) => {
+      const name = product.name.trim();
+      const firstWord = name.split(/\\s+/)[0];
+      if (firstWord) categories.add(firstWord);
+    });
+
+    return Array.from(categories).sort((a, b) => a.localeCompare(b, "ru"));
+  }, [productsWithActiveTechCards]);
+
   const filteredProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    if (!query) return productsWithActiveTechCards;
+    return productsWithActiveTechCards.filter((product) => {
+      const matchesCategory =
+        categoryFilter === "all" ||
+        product.name.toLowerCase().startsWith(categoryFilter.toLowerCase());
 
-    return productsWithActiveTechCards.filter((product) =>
-      [product.name, product.article || ""]
+      if (!matchesCategory) return false;
+      if (!query) return true;
+
+      return [product.name, product.article || ""]
         .join(" ")
         .toLowerCase()
-        .includes(query),
-    );
-  }, [productsWithActiveTechCards, search]);
+        .includes(query);
+    });
+  }, [productsWithActiveTechCards, search, categoryFilter]);
 
   const selectedProduct =
     productsWithActiveTechCards.find((item) => item.id === selectedProductId) ||
@@ -64,11 +82,8 @@ export default function ProductionCreateOrderModal({
       (item) => item.product_id === selectedProductId && item.is_active,
     ) || null;
 
-  function selectOnlyFoundProduct() {
-    if (filteredProducts.length === 1) {
-      onProductChange(filteredProducts[0].id);
-    }
-  }
+  const visibleProducts = filteredProducts.slice(0, 12);
+
 
   return (
     <div onClick={onClose} style={modalOverlayStyle}>
@@ -86,112 +101,160 @@ export default function ProductionCreateOrderModal({
           </button>
         </div>
 
-        <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
-          <Field label="Поиск изделия">
-            <div style={{ display: "flex", gap: 8 }}>
+        <form onSubmit={onSubmit} style={{ display: "grid", gap: 14 }}>
+          <Field label="Изделие">
+            <div style={{ position: "relative" }}>
+              <span style={searchIconStyle}>⌕</span>
               <input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    selectOnlyFoundProduct();
-                  }
-                }}
-                placeholder="Название или артикул"
-                style={{ ...inputStyle, flex: 1 }}
+                placeholder="Название, артикул, цвет или размер..."
+                autoFocus
+                style={{ ...inputStyle, width: "100%", boxSizing: "border-box", paddingLeft: 38 }}
               />
+            </div>
+          </Field>
 
+          {productCategories.length > 1 && (
+            <div style={categoryRowStyle}>
               <button
                 type="button"
-                onClick={selectOnlyFoundProduct}
-                style={secondaryBlueButtonStyle()}
+                onClick={() => setCategoryFilter("all")}
+                style={categoryButtonStyle(categoryFilter === "all")}
               >
-                Найти
+                Все
               </button>
-            </div>
-          </Field>
-
-          <Field label="Изделие с активной техкартой">
-            <select
-              value={selectedProductId}
-              onChange={(event) => onProductChange(event.target.value)}
-              style={inputStyle}
-            >
-              <option value="">
-                {filteredProducts.length === 0
-                  ? "Ничего не найдено"
-                  : "Выбери изделие"}
-              </option>
-
-              {filteredProducts.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.article
-                    ? `${product.name} · ${product.article}`
-                    : product.name}
-                </option>
+              {productCategories.slice(0, 7).map((category) => (
+                <button
+                  key={category}
+                  type="button"
+                  onClick={() => setCategoryFilter(category)}
+                  style={categoryButtonStyle(categoryFilter === category)}
+                >
+                  {category}
+                </button>
               ))}
-            </select>
-
-            <div style={hintStyle}>
-              Показаны только изделия с активной техкартой:{" "}
-              {filteredProducts.length} из {productsWithActiveTechCards.length}
             </div>
-          </Field>
+          )}
+
+          <div style={productListStyle}>
+            <div style={productListHeaderStyle}>
+              <span>Изделия с активной техкартой</span>
+              <span>{filteredProducts.length}</span>
+            </div>
+
+            {visibleProducts.length === 0 ? (
+              <div style={emptyProductStyle}>
+                По этому запросу изделий с активной техкартой не найдено.
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: 6 }}>
+                {visibleProducts.map((product) => {
+                  const active = product.id === selectedProductId;
+                  const techCard =
+                    techCards.find(
+                      (card) => card.product_id === product.id && card.is_active,
+                    ) || null;
+
+                  return (
+                    <button
+                      key={product.id}
+                      type="button"
+                      onClick={() => onProductChange(product.id)}
+                      style={productRowStyle(active)}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={productNameStyle}>{product.name}</div>
+                        <div style={productMetaStyle}>
+                          {product.article || "Без артикула"}
+                          {techCard ? ` · ${techCard.name}` : ""}
+                        </div>
+                      </div>
+                      <div style={active ? selectedMarkStyle : chooseMarkStyle}>
+                        {active ? "✓ Выбрано" : "Выбрать"}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {filteredProducts.length > visibleProducts.length && (
+              <div style={moreHintStyle}>
+                Показаны первые {visibleProducts.length}. Уточни поиск, чтобы быстрее найти изделие.
+              </div>
+            )}
+          </div>
+
+          {selectedProduct && (
+            <div style={selectedProductStyle}>
+              <div>
+                <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>
+                  Выбрано
+                </div>
+                <div style={{ marginTop: 3, fontWeight: 850, color: "#0f172a" }}>
+                  {selectedProduct.name}
+                </div>
+                <div style={{ marginTop: 3, color: "#64748b", fontSize: 13 }}>
+                  {selectedProduct.article || "Без артикула"}
+                </div>
+              </div>
+              <div style={techCardBadgeStyle}>
+                ✓ {selectedTechCard ? selectedTechCard.name : "Активная техкарта"}
+              </div>
+            </div>
+          )}
 
           <div
             style={{
-              padding: 12,
-              borderRadius: 12,
-              border: "1px solid #dbeafe",
-              background: selectedTechCard ? "#f0fdf4" : "#fef2f2",
-              color: selectedTechCard ? "#166534" : "#991b1b",
-              fontWeight: 700,
+              display: "grid",
+              gridTemplateColumns: "minmax(180px, 0.7fr) minmax(240px, 1.3fr)",
+              gap: 12,
             }}
           >
-            {selectedProduct
-              ? selectedTechCard
-                ? `Активная техкарта найдена: ${selectedTechCard.name}`
-                : "У этого изделия нет активной техкарты"
-              : "Сначала выбери изделие"}
+            <Field label="Количество изделий">
+              <input
+                value={quantity}
+                onChange={(event) => onQuantityChange(event.target.value)}
+                type="number"
+                min="1"
+                step="1"
+                placeholder="Например: 50"
+                style={inputStyle}
+              />
+            </Field>
+
+            <Field label="Комментарий">
+              <input
+                value={comment}
+                onChange={(event) => onCommentChange(event.target.value)}
+                placeholder="Необязательно"
+                style={inputStyle}
+              />
+            </Field>
           </div>
 
-          <Field label="Количество изделий">
-            <input
-              value={quantity}
-              onChange={(event) => onQuantityChange(event.target.value)}
-              type="number"
-              step="1"
-              placeholder="Например: 50"
-              style={inputStyle}
-            />
-          </Field>
+          <div style={footerStyle}>
+            <div style={{ color: "#64748b", fontSize: 12 }}>
+              Показаны только изделия с активной техкартой: {productsWithActiveTechCards.length}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button type="button" onClick={onClose} style={secondaryBlueButtonStyle()}>
+                Отмена
+              </button>
 
-          <Field label="Комментарий">
-            <input
-              value={comment}
-              onChange={(event) => onCommentChange(event.target.value)}
-              placeholder="Необязательно"
-              style={inputStyle}
-            />
-          </Field>
-
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-            <button type="button" onClick={onClose} style={secondaryBlueButtonStyle()}>
-              Отмена
-            </button>
-
-            <button
-              type="submit"
-              disabled={creating}
-              style={{
-                ...primaryBlueButtonStyle,
-                opacity: creating ? 0.7 : 1,
-                cursor: creating ? "not-allowed" : "pointer",
-              }}
-            >
-              {creating ? "Создание..." : "Создать задание"}
-            </button>
+              <button
+                type="submit"
+                disabled={creating || !selectedProductId || !quantity}
+                style={{
+                  ...primaryBlueButtonStyle,
+                  opacity: creating || !selectedProductId || !quantity ? 0.55 : 1,
+                  cursor: creating || !selectedProductId || !quantity ? "not-allowed" : "pointer",
+                }}
+              >
+                {creating ? "Создание..." : "Создать задание"}
+              </button>
+            </div>
           </div>
         </form>
       </div>
@@ -251,7 +314,7 @@ const modalOverlayStyle: React.CSSProperties = {
 
 const modalBoxStyle: React.CSSProperties = {
   width: "100%",
-  maxWidth: 620,
+  maxWidth: 760,
   background: "#ffffff",
   borderRadius: 20,
   border: "1px solid #dbeafe",
@@ -282,6 +345,146 @@ const closeButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontSize: 20,
   color: "#0f172a",
+};
+
+const searchIconStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 13,
+  top: "50%",
+  transform: "translateY(-50%)",
+  color: "#94a3b8",
+  pointerEvents: "none",
+};
+
+const categoryRowStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 7,
+  flexWrap: "wrap",
+};
+
+function categoryButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? "1px solid #93c5fd" : "1px solid #dbe3ef",
+    borderRadius: 999,
+    background: active ? "#eff6ff" : "#ffffff",
+    color: active ? "#1d4ed8" : "#475569",
+    padding: "7px 11px",
+    cursor: "pointer",
+    fontSize: 12,
+    fontWeight: 750,
+  };
+}
+
+const productListStyle: React.CSSProperties = {
+  border: "1px solid #dbeafe",
+  borderRadius: 14,
+  background: "#f8fbff",
+  padding: 10,
+  maxHeight: 330,
+  overflowY: "auto",
+};
+
+const productListHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  color: "#64748b",
+  fontSize: 12,
+  fontWeight: 750,
+  padding: "2px 3px 8px",
+};
+
+function productRowStyle(active: boolean): React.CSSProperties {
+  return {
+    width: "100%",
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    textAlign: "left",
+    border: active ? "1px solid #60a5fa" : "1px solid #e2e8f0",
+    borderRadius: 11,
+    background: active ? "#eff6ff" : "#ffffff",
+    padding: "10px 12px",
+    cursor: "pointer",
+    boxShadow: active ? "0 0 0 2px rgba(96, 165, 250, 0.10)" : "none",
+  };
+}
+
+const productNameStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontWeight: 800,
+  fontSize: 14,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const productMetaStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 12,
+  marginTop: 3,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const chooseMarkStyle: React.CSSProperties = {
+  color: "#2563eb",
+  fontSize: 12,
+  fontWeight: 750,
+  whiteSpace: "nowrap",
+};
+
+const selectedMarkStyle: React.CSSProperties = {
+  color: "#15803d",
+  fontSize: 12,
+  fontWeight: 800,
+  whiteSpace: "nowrap",
+};
+
+const emptyProductStyle: React.CSSProperties = {
+  padding: 18,
+  textAlign: "center",
+  color: "#64748b",
+  fontSize: 13,
+};
+
+const moreHintStyle: React.CSSProperties = {
+  padding: "9px 4px 2px",
+  color: "#64748b",
+  fontSize: 12,
+};
+
+const selectedProductStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  padding: 12,
+  border: "1px solid #bbf7d0",
+  borderRadius: 12,
+  background: "#f0fdf4",
+};
+
+const techCardBadgeStyle: React.CSSProperties = {
+  borderRadius: 999,
+  padding: "7px 10px",
+  background: "#dcfce7",
+  color: "#166534",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const footerStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
+  borderTop: "1px solid #e2e8f0",
+  paddingTop: 14,
 };
 
 const inputStyle: React.CSSProperties = {
