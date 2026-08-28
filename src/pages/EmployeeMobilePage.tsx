@@ -1003,7 +1003,7 @@ export default function EmployeeMobilePage({
               onClick={() => openCloseModal(activeBatch)}
               style={currentOperationFinishButtonStyle}
             >
-              Закончить работу
+              ✓ Закончить работу
             </button>
           </>
         )}
@@ -1013,28 +1013,28 @@ export default function EmployeeMobilePage({
         <StatCard
           label="за смену"
           value={`${shift.total_quantity || 0} шт`}
-          icon="▣"
+          icon="📦"
         />
         <StatCard
           label="заработано"
           value={`${Number(shift.total_earned || 0).toFixed(0)} ₽`}
-          icon="₽"
+          icon="💰"
         />
         <StatCard
           label="в работе"
           value={shiftDuration}
-          icon="◷"
+          icon="⏱️"
         />
       </div>
 
       <div style={quickActionsStyle}>
         <button onClick={handleOpenScanner} style={scanButtonStyle}>
-          <span style={actionIconStyle}>▦</span>
+          <span style={actionIconStyle}>📷</span>
           <span>Сканировать QR</span>
         </button>
 
         <button onClick={togglePause} style={pauseButtonStyle}>
-          <span style={actionIconStyle}>Ⅱ</span>
+          <span style={actionIconStyle}>⏸️</span>
           <span>Пауза / перерыв</span>
         </button>
       </div>
@@ -1124,7 +1124,7 @@ export default function EmployeeMobilePage({
                         onClick={() => openCloseModal(batch)}
                         style={compactFinishButtonStyle}
                       >
-                        Закончить работу
+                        ✓ Закончить работу
                       </button>
                     </div>
                   );
@@ -1647,6 +1647,19 @@ const currentOperationProgressRowStyle: CSSProperties = {
   color: "#64748b",
   fontSize: 13,
   fontWeight: 800,
+};
+
+const currentOperationFinishButtonStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 52,
+  border: "none",
+  borderRadius: 16,
+  background: "#16a34a",
+  color: "#ffffff",
+  fontSize: 18,
+  fontWeight: 900,
+  cursor: "pointer",
+  boxShadow: "0 8px 18px rgba(22, 163, 74, 0.18)",
 };
 
 const activeStatusStyle: CSSProperties = {
