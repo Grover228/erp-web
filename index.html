@@ -1,19 +1,49 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!-- ВОТ ЭТО ДОБАВИЛИ -->
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#111827" />
 
-    <title>erp-web</title>
+    <meta name="theme-color" content="#111827" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Стритстрим" />
+
+    <title>Стритстрим ERP</title>
+
+    <style>
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        background: #111827 url('/splash-1080x1920.png') center center / cover no-repeat;
+        opacity: 1;
+        transition: opacity 220ms ease;
+        pointer-events: none;
+      }
+
+      #app-splash.app-splash--hide {
+        opacity: 0;
+      }
+
+      @media (min-width: 900px) {
+        #app-splash {
+          background-size: contain;
+          background-color: #111827;
+        }
+      }
+    </style>
   </head>
 
   <body>
+    <div id="app-splash" aria-hidden="true"></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
