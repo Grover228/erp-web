@@ -23,6 +23,7 @@ type ProductionOrderModalProps = {
     operation: ProductionOrderOperation,
   ) => void;
   onOpenFinishOperation: (operation: ProductionOrderOperation) => void;
+  onWriteOffDefect: (batch: ProductionBatch) => void;
   getOperationLimit: (
     order: ProductionOrder,
     orderOperations: ProductionOrderOperation[],
@@ -58,6 +59,7 @@ export default function ProductionOrderModal({
   onDeleteOrder,
   onStartOperation,
   onOpenFinishOperation,
+  onWriteOffDefect,
   getOperationLimit,
   canStartOperation,
 }: ProductionOrderModalProps) {
@@ -166,6 +168,79 @@ export default function ProductionOrderModal({
             )}
           </div>
         </div>
+
+        {jobBatches.length > 0 && (
+          <div>
+            <div
+              style={{
+                fontSize: 15,
+                fontWeight: 700,
+                color: "#111827",
+                marginBottom: 10,
+              }}
+            >
+              Пачки
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {jobBatches.map((batch) => {
+                const batchTotal = Number(batch.quantity || 0);
+                const batchCompleted = Number(batch.completed_quantity || 0);
+                const batchLeft = Math.max(0, batchTotal - batchCompleted);
+                const canWriteOff =
+                  variant === "active" &&
+                  !["done", "cancelled", "archived"].includes(batch.status) &&
+                  batchLeft > 0;
+
+                return (
+                  <div
+                    key={batch.id}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 12,
+                      padding: 12,
+                      display: "flex",
+                      justifyContent: "space-between",
+                      gap: 12,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 800, color: "#111827" }}>
+                        {batch.batch_number}
+                      </div>
+                      <div style={{ color: "#64748b", marginTop: 4, fontSize: 13 }}>
+                        Статус: {getStatusLabel(batch.status)} · Годно на текущей
+                        операции: {batchCompleted} / {batchTotal} шт · Остаток:{" "}
+                        {batchLeft} шт
+                      </div>
+                    </div>
+
+                    {canWriteOff && (
+                      <button
+                        type="button"
+                        onClick={() => onWriteOffDefect(batch)}
+                        disabled={actionLoading}
+                        style={{
+                          background: "#fff7ed",
+                          color: "#c2410c",
+                          border: "1px solid #fdba74",
+                          borderRadius: 10,
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          fontWeight: 800,
+                        }}
+                      >
+                        Списать брак
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         <div>
           <div

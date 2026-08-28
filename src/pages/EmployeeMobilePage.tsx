@@ -77,6 +77,11 @@ export default function EmployeeMobilePage({
   const [lastOperationReady, setLastOperationReady] = useState(false);
   const [finishedFinalBatch, setFinishedFinalBatch] = useState<{ batchNumber: string } | null>(null);
   const [partialQty, setPartialQty] = useState("");
+  const [partialDecisionMode, setPartialDecisionMode] = useState(false);
+  const [partialGoodQty, setPartialGoodQty] = useState(0);
+  const [defectMode, setDefectMode] = useState<"all" | "part" | null>(null);
+  const [defectQty, setDefectQty] = useState("");
+  const [defectReason, setDefectReason] = useState("");
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState("");
 
@@ -342,6 +347,11 @@ export default function EmployeeMobilePage({
     setNextOperationPreview(null);
     setLastOperationReady(false);
     setPartialQty("");
+    setPartialDecisionMode(false);
+    setPartialGoodQty(0);
+    setDefectMode(null);
+    setDefectQty("");
+    setDefectReason("");
     setClosingError("");
   }
 
@@ -354,6 +364,11 @@ export default function EmployeeMobilePage({
     setNextOperationPreview(null);
     setLastOperationReady(false);
     setPartialQty("");
+    setPartialDecisionMode(false);
+    setPartialGoodQty(0);
+    setDefectMode(null);
+    setDefectQty("");
+    setDefectReason("");
     setClosingError("");
   }
 
@@ -396,10 +411,47 @@ export default function EmployeeMobilePage({
     }
   }
 
+  function preparePartialDecision(batch: ProductionBatch) {
+    setClosingError("");
+
+    const total = Number(batch.quantity || 0);
+    const completed = Number(batch.completed_quantity || 0);
+    const left = Math.max(0, total - completed);
+    const goodQty = Number(String(partialQty).replace(",", "."));
+
+    if (!goodQty || goodQty <= 0) {
+      setClosingError("Укажи количество больше 0");
+      return;
+    }
+
+    if (!Number.isInteger(goodQty)) {
+      setClosingError("Количество должно быть целым числом");
+      return;
+    }
+
+    if (goodQty > left) {
+      setClosingError(`Нельзя закрыть ${goodQty} шт. Осталось только ${left} шт.`);
+      return;
+    }
+
+    if (goodQty === left) {
+      prepareCompleteCurrentOperation(batch);
+      return;
+    }
+
+    setPartialGoodQty(goodQty);
+    setPartialDecisionMode(true);
+    setDefectMode(null);
+    setDefectQty("");
+    setDefectReason("");
+  }
+
   async function finishBatch(
     batch: ProductionBatch,
     mode: "all" | "partial",
-    nextAction: "self" | "waiting" = "waiting"
+    nextAction: "self" | "waiting" = "waiting",
+    goodQtyOverride?: number,
+    defectQtyOverride = 0
   ) {
     try {
       setClosingLoading(true);
@@ -414,7 +466,10 @@ export default function EmployeeMobilePage({
       const left = Math.max(0, total - completed);
 
       const finishQty =
-        mode === "all" ? left : Number(String(partialQty).replace(",", "."));
+        mode === "all"
+          ? left
+          : goodQtyOverride ?? Number(String(partialQty).replace(",", "."));
+      const defectQuantity = Number(defectQtyOverride || 0);
 
       if (!finishQty || finishQty <= 0) {
         throw new Error("Укажи количество больше 0");
@@ -426,6 +481,20 @@ export default function EmployeeMobilePage({
 
       if (finishQty > left) {
         throw new Error(`Нельзя закрыть ${finishQty} шт. Осталось только ${left} шт.`);
+      }
+
+      if (!Number.isInteger(defectQuantity) || defectQuantity < 0) {
+        throw new Error("Количество брака должно быть целым числом");
+      }
+
+      if (finishQty + defectQuantity > left) {
+        throw new Error(
+          `Годно + брак не могут превышать остаток ${left} шт.`
+        );
+      }
+
+      if (defectQuantity > 0 && !defectReason) {
+        throw new Error("Выбери причину брака");
       }
 
       const {
@@ -479,7 +548,8 @@ export default function EmployeeMobilePage({
         : 0;
 
       const newBatchCompleted = completed + finishQty;
-      const isCurrentBatchOperationDone = newBatchCompleted >= total;
+      const isCurrentBatchOperationDone =
+        newBatchCompleted + defectQuantity >= total;
 
       const newOperationCompleted =
         Number(operation.completed_quantity || 0) + finishQty;
@@ -494,7 +564,7 @@ export default function EmployeeMobilePage({
           : Number(previousOperation?.completed_quantity || 0);
 
       const operationNextStatus =
-        newOperationCompleted >= operationTarget ? "done" : "pending";
+        newOperationCompleted + defectQuantity >= operationTarget ? "done" : "pending";
 
       const { error: operationError } = await supabase
         .from("production_order_operations")
@@ -506,6 +576,22 @@ export default function EmployeeMobilePage({
         .eq("id", operation.id);
 
       if (operationError) throw operationError;
+
+      if (defectQuantity > 0) {
+        const { error: defectError } = await supabase
+          .from("production_defects")
+          .insert({
+            batch_id: batch.id,
+            production_order_id: batch.production_order_id,
+            production_order_operation_id: operation.id,
+            quantity: defectQuantity,
+            reason: defectReason,
+            comment: null,
+            created_by: user.id,
+          });
+
+        if (defectError) throw defectError;
+      }
 
       const nextOperation = operations.find(
         (item) => item.sort_order > currentOperationOrder
@@ -528,7 +614,7 @@ export default function EmployeeMobilePage({
       } else if (isCurrentBatchOperationDone && !nextOperation) {
         nextBatchData = {
           status: "done",
-          completed_quantity: total,
+          completed_quantity: newBatchCompleted,
           assigned_user_id: null,
           assigned_at: null,
           completed_at: finishedAt,
@@ -567,7 +653,12 @@ export default function EmployeeMobilePage({
           started_at: startedAt,
           finished_at: finishedAt,
           duration_seconds: durationSeconds,
-          comment: mode === "all" ? "Всё готово" : "Готово частично",
+          comment:
+            defectQuantity > 0
+              ? `Годно: ${finishQty}. Брак: ${defectQuantity}. ${defectReason}`
+              : mode === "all"
+                ? "Всё готово"
+                : "Готово частично",
         });
 
       if (logError) throw logError;
@@ -993,7 +1084,7 @@ export default function EmployeeMobilePage({
               </>
             )}
 
-            {partialMode && (
+            {partialMode && !partialDecisionMode && (
               <>
                 <input
                   value={partialQty}
@@ -1005,12 +1096,191 @@ export default function EmployeeMobilePage({
                 />
 
                 <button
-                  onClick={() => finishBatch(closingBatch, "partial")}
+                  onClick={() => preparePartialDecision(closingBatch)}
                   disabled={closingLoading}
                   style={bigYellowButtonStyle}
                 >
-                  {closingLoading ? "Сохраняю..." : "Сохранить частично"}
+                  Далее
                 </button>
+              </>
+            )}
+
+            {partialDecisionMode && (
+              <>
+                <div style={infoBoxStyle}>
+                  Годно: <b>{partialGoodQty} шт.</b>
+                  <br />
+                  Осталось:{" "}
+                  <b>
+                    {Math.max(
+                      0,
+                      Number(closingBatch.quantity || 0) -
+                        Number(closingBatch.completed_quantity || 0) -
+                        partialGoodQty
+                    )}{" "}
+                    шт.
+                  </b>
+                  <div style={{ marginTop: 8 }}>
+                    Что с оставшимися изделиями?
+                  </div>
+                </div>
+
+                {!defectMode && (
+                  <>
+                    <button
+                      onClick={() =>
+                        finishBatch(
+                          closingBatch,
+                          "partial",
+                          "waiting",
+                          partialGoodQty,
+                          0
+                        )
+                      }
+                      disabled={closingLoading}
+                      style={bigYellowButtonStyle}
+                    >
+                      {closingLoading ? "Сохраняю..." : "Продолжу позже"}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        const remaining = Math.max(
+                          0,
+                          Number(closingBatch.quantity || 0) -
+                            Number(closingBatch.completed_quantity || 0) -
+                            partialGoodQty
+                        );
+                        setDefectMode("all");
+                        setDefectQty(String(remaining));
+                        setClosingError("");
+                      }}
+                      disabled={closingLoading}
+                      style={defectButtonStyle}
+                    >
+                      Весь остаток — брак
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setDefectMode("part");
+                        setDefectQty("");
+                        setClosingError("");
+                      }}
+                      disabled={closingLoading}
+                      style={defectButtonStyle}
+                    >
+                      Часть остатка — брак
+                    </button>
+                  </>
+                )}
+
+                {defectMode && (
+                  <>
+                    {defectMode === "part" && (
+                      <input
+                        value={defectQty}
+                        onChange={(e) => setDefectQty(e.target.value)}
+                        type="number"
+                        inputMode="numeric"
+                        placeholder="Сколько штук брак?"
+                        style={inputStyle}
+                      />
+                    )}
+
+                    <div style={infoBoxStyle}>
+                      <div style={{ marginBottom: 10, fontWeight: 900 }}>
+                        Причина брака
+                      </div>
+
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {[
+                          "Дефект ткани",
+                          "Ошибка закроя",
+                          "Ошибка при пошиве",
+                        ].map((reason) => (
+                          <button
+                            key={reason}
+                            type="button"
+                            onClick={() => {
+                              setDefectReason(reason);
+                              setClosingError("");
+                            }}
+                            style={
+                              defectReason === reason
+                                ? defectReasonSelectedStyle
+                                : defectReasonButtonStyle
+                            }
+                          >
+                            {reason}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => {
+                        const remaining = Math.max(
+                          0,
+                          Number(closingBatch.quantity || 0) -
+                            Number(closingBatch.completed_quantity || 0) -
+                            partialGoodQty
+                        );
+                        const defectQuantity =
+                          defectMode === "all"
+                            ? remaining
+                            : Number(String(defectQty).replace(",", "."));
+
+                        if (!defectQuantity || defectQuantity <= 0) {
+                          setClosingError("Укажи количество брака больше 0");
+                          return;
+                        }
+
+                        if (!Number.isInteger(defectQuantity)) {
+                          setClosingError("Количество брака должно быть целым числом");
+                          return;
+                        }
+
+                        if (defectQuantity > remaining) {
+                          setClosingError(
+                            `Нельзя списать ${defectQuantity} шт. Остаток только ${remaining} шт.`
+                          );
+                          return;
+                        }
+
+                        if (!defectReason) {
+                          setClosingError("Выбери причину брака");
+                          return;
+                        }
+
+                        finishBatch(
+                          closingBatch,
+                          "partial",
+                          "waiting",
+                          partialGoodQty,
+                          defectQuantity
+                        );
+                      }}
+                      disabled={closingLoading}
+                      style={defectButtonStyle}
+                    >
+                      {closingLoading ? "Сохраняю..." : "Сохранить годное и брак"}
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setDefectMode(null);
+                        setDefectQty("");
+                        setDefectReason("");
+                                            setClosingError("");
+                      }}
+                      disabled={closingLoading}
+                      style={cancelButtonStyle}
+                    >
+                      Назад
+                    </button>
+                  </>
+                )}
               </>
             )}
 
@@ -1426,6 +1696,35 @@ const cancelButtonStyle: CSSProperties = {
   background: "#f1f5f9",
   color: "#0f172a",
   fontSize: 17,
+  fontWeight: 900,
+  cursor: "pointer",
+};
+const defectReasonButtonStyle: CSSProperties = {
+  minHeight: 54,
+  border: "1px solid #cbd5e1",
+  borderRadius: 16,
+  background: "#ffffff",
+  color: "#0f172a",
+  fontSize: 17,
+  fontWeight: 900,
+  cursor: "pointer",
+  padding: "10px 12px",
+};
+
+const defectReasonSelectedStyle: CSSProperties = {
+  ...defectReasonButtonStyle,
+  border: "2px solid #dc2626",
+  background: "#fef2f2",
+  color: "#991b1b",
+};
+
+const defectButtonStyle: CSSProperties = {
+  minHeight: 64,
+  border: "none",
+  borderRadius: 20,
+  background: "#dc2626",
+  color: "#ffffff",
+  fontSize: 20,
   fontWeight: 900,
   cursor: "pointer",
 };

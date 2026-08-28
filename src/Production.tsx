@@ -3,286 +3,68 @@ import QRCode from "qrcode";
 import { supabase } from "./supabase";
 import ProductionOrderModal from "./pages/production/ProductionOrderModal";
 import ProductionCreateOrderModal from "./pages/production/ProductionCreateOrderModal";
-
-export type ProductionTab = "jobs" | "active" | "history" | "techcards";
-
-export type ProductionOrder = {
-  id: string;
-  product_id: string;
-  tech_card_id: string | null;
-  order_number: string | null;
-  quantity: number;
-  status: string;
-  comment: string | null;
-  planned_total_cost: number | null;
-  planned_time_min: number | null;
-  materials_reserved_at?: string | null;
-  materials_written_off_at?: string | null;
-  finished_goods_received_at?: string | null;
-  created_at: string | null;
-  product?: {
-    name: string;
-    article: string | null;
-  } | null;
-};
-
-export type ProductionOrderOperation = {
-  id: string;
-  production_order_id: string;
-  operation_name: string;
-  sort_order: number;
-  planned_total_time_min: number | null;
-  planned_total_price: number | null;
-  price_per_unit: number | null;
-  status: string;
-  assigned_user_id: string | null;
-  assigned_at: string | null;
-  started_at: string | null;
-  completed_quantity: number;
-  completed_at: string | null;
-};
-
-export type ProductionOperationLog = {
-  id: string;
-  production_order_id: string;
-  production_order_operation_id: string | null;
-  user_id: string | null;
-  user_name?: string | null;
-  operation_name: string | null;
-  quantity: number | null;
-  price_per_unit: number | null;
-  earned_amount: number | null;
-  started_at: string | null;
-  finished_at: string | null;
-  duration_seconds: number | null;
-  comment: string | null;
-};
-
-export type ProductionBatch = {
-  id: string;
-  production_order_id: string;
-  source_operation_id: string | null;
-  batch_number: string;
-  quantity: number;
-  completed_quantity: number | null;
-  current_operation_order: number | null;
-  status: string | null;
-  qr_code: string | null;
-  product_name: string | null;
-  product_article: string | null;
-  color_name: string | null;
-  qr_payload: GeneratedQr["payload"] | null;
-  comment: string | null;
-  assigned_user_id: string | null;
-  assigned_at: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  created_at: string | null;
-};
-
-export type ProductItem = {
-  id: string;
-  name: string;
-  article: string | null;
-};
-
-export type TechCardItem = {
-  id: string;
-  product_id: string;
-  name: string;
-  version: number;
-  is_active: boolean;
-};
-
-type TechCardMaterial = {
-  id: string;
-  tech_card_id: string;
-  material_id: string;
-  quantity: number;
-  comment: string | null;
-};
-
-type TechCardConsumable = {
-  id: string;
-  tech_card_id: string;
-  consumable_id: string;
-  quantity: number;
-  comment: string | null;
-};
-
-type TechCardOperation = {
-  id: string;
-  tech_card_id: string;
-  operation_name: string;
-  sort_order: number;
-  planned_time_min: number | null;
-  price: number | null;
-  comment: string | null;
-};
-
-type MaterialPrice = {
-  id: string;
-  name?: string | null;
-  default_price: number | null;
-  production_units_per_purchase_unit?: number | null;
-};
-
-type ConsumablePrice = {
-  id: string;
-  name?: string | null;
-  default_price: number | null;
-};
-
-type ProductionStockCheckResult = {
-  item_type: "material" | "consumable" | string;
-  item_id: string;
-  item_name: string;
-  required_quantity: number | null;
-  available_quantity: number | null;
-  missing_quantity: number | null;
-};
-
-type StockAvailableRow = {
-  item_type: "product" | "material" | "consumable" | string;
-  product_id: string | null;
-  material_id: string | null;
-  consumable_id: string | null;
-  quantity_available: number | null;
-};
-
-type ProductionMaterialRequirement = {
-  item_type: "material";
-  material_id: string;
-  quantity: number;
-  name: string;
-};
-
-type ProductionConsumableRequirement = {
-  item_type: "consumable";
-  consumable_id: string;
-  quantity: number;
-  name: string;
-};
-
-export type Job = {
-  id: string;
-  realId: string;
-  product: string;
-  issuedAt: string;
-  qty: number;
-  completed: number;
-  status: string;
-  rawStatus: string;
-  cost: number;
-  timeMin: number;
-  operations: ProductionOrderOperation[];
-};
-
-type GeneratedQr = {
-  batchNumber: string;
-  dataUrl: string;
-  payload: {
-    batch_number: string;
-    order_number: string;
-    product_name: string;
-    product_article: string | null;
-    color_name: string | null;
-    quantity: number;
-  };
-};
-
-type ShiftStats = {
-  operationsCount: number;
-  totalQuantity: number;
-  totalEarned: number;
-  totalDurationSeconds: number;
-};
-
-type ActiveBatchItem = {
-  batch: ProductionBatch;
-  order: ProductionOrder | null;
-  operation: ProductionOrderOperation | null;
-};
-
-function getProgress(completed: number, total: number) {
-  if (total === 0) return 0;
-  return Math.round((completed / total) * 100);
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "—";
-
-  return new Date(value).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatMoney(value: number | null | undefined) {
-  return `${Number(value || 0).toFixed(2)} ₽`;
-}
-
-function formatTime(minutes: number | null | undefined) {
-  const totalMinutes = Math.round(Number(minutes || 0));
-
-  if (totalMinutes <= 0) return "0 мин";
-
-  const hours = Math.floor(totalMinutes / 60);
-  const restMinutes = totalMinutes % 60;
-
-  if (hours === 0) return `${restMinutes} мин`;
-  if (restMinutes === 0) return `${hours} ч`;
-
-  return `${hours} ч ${restMinutes} мин`;
-}
-
-function formatTimer(seconds: number) {
-  const safeSeconds = Math.max(0, seconds);
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const restSeconds = safeSeconds % 60;
-
-  return [hours, minutes, restSeconds]
-    .map((item) => String(item).padStart(2, "0"))
-    .join(":");
-}
-
-function formatQuantity(value: number) {
-  return Number(value || 0).toLocaleString("ru-RU", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 3,
-  });
-}
-
-function getConversionFactor(value: number | null | undefined) {
-  const factor = Number(value || 1);
-  return factor > 0 ? factor : 1;
-}
-
-function convertProductionUnitsToStockUnits(
-  productionQuantity: number,
-  productionUnitsPerPurchaseUnit: number | null | undefined
-) {
-  return productionQuantity / getConversionFactor(productionUnitsPerPurchaseUnit);
-}
-
-function getStockKey(row: {
-  item_type: string;
-  product_id?: string | null;
-  material_id?: string | null;
-  consumable_id?: string | null;
-}) {
-  if (row.item_type === "product") return `product:${row.product_id || ""}`;
-  if (row.item_type === "material") return `material:${row.material_id || ""}`;
-  if (row.item_type === "consumable") {
-    return `consumable:${row.consumable_id || ""}`;
-  }
-
-  return "";
-}
+import ProductionJobsList from "./pages/production/ProductionJobsList";
+import ProductionActiveBatches from "./pages/production/ProductionActiveBatches";
+import type {
+  ActiveBatchItem,
+  ConsumablePrice,
+  GeneratedQr,
+  Job,
+  MaterialPrice,
+  ProductItem,
+  ProductionBatch,
+  ProductionConsumableRequirement,
+  ProductionMaterialRequirement,
+  ProductionOperationLog,
+  ProductionOrder,
+  ProductionOrderOperation,
+  ProductionStockCheckResult,
+  ProductionTab,
+  ShiftStats,
+  StockAvailableRow,
+  TechCardConsumable,
+  TechCardItem,
+  TechCardMaterial,
+  TechCardOperation,
+} from "./pages/production/productionTypes";
+export type {
+  Job,
+  ProductItem,
+  ProductionBatch,
+  ProductionOperationLog,
+  ProductionOrder,
+  ProductionOrderOperation,
+  ProductionTab,
+  TechCardItem,
+} from "./pages/production/productionTypes";
+import {
+  convertProductionUnitsToStockUnits,
+  formatDate,
+  formatMoney,
+  formatQuantity,
+  formatTime,
+  formatTimer,
+  getElapsedSeconds,
+  getProgress,
+  getStatusLabel,
+  getStockKey,
+} from "./pages/production/productionUtils";
+import {
+  Field,
+  InfoBox,
+  QrCard,
+  closeButtonStyle,
+  emptyStyle,
+  inputStyle,
+  modalBoxStyle,
+  modalHeaderStyle,
+  modalTitleStyle,
+  primaryBlueButtonStyle,
+  primaryGreenButtonStyle,
+  secondaryBlueButtonStyle,
+  stackedModalOverlayStyle,
+  tabButtonStyle,
+} from "./pages/production/ProductionUi";
 
 async function loadWarehouseAvailableMap() {
   const availableMap = new Map<string, number>();
@@ -302,58 +84,6 @@ async function loadWarehouseAvailableMap() {
   });
 
   return availableMap;
-}
-
-function getElapsedSeconds(startedAt: string | null, nowTick: number) {
-  if (!startedAt) return 0;
-  return Math.floor((nowTick - new Date(startedAt).getTime()) / 1000);
-}
-
-function getStatusLabel(status: string | null | undefined) {
-  switch (status) {
-    case "draft":
-      return "Черновик";
-    case "pending":
-      return "Ожидает";
-    case "waiting":
-      return "Ожидает";
-    case "partial":
-      return "Частично выполнено";
-    case "in_progress":
-      return "В работе";
-    case "done":
-      return "Готово";
-    case "cancelled":
-      return "Отменён";
-    case "archived":
-      return "Архив";
-    default:
-      return status || "Черновик";
-  }
-}
-
-function ProgressBar({ value }: { value: number }) {
-  return (
-    <div
-      style={{
-        width: "100%",
-        height: 10,
-        background: "#dcfce7",
-        borderRadius: 999,
-        overflow: "hidden",
-      }}
-    >
-      <div
-        style={{
-          width: `${value}%`,
-          height: "100%",
-          background: "#16a34a",
-          borderRadius: 999,
-          transition: "width 0.2s ease",
-        }}
-      />
-    </div>
-  );
 }
 
 export default function Production({
@@ -405,6 +135,12 @@ export default function Production({
   const [finishBatchQuantity, setFinishBatchQuantity] = useState("");
   const [finishBatchComment, setFinishBatchComment] = useState("");
   const [finishBatchError, setFinishBatchError] = useState("");
+
+  const [defectBatch, setDefectBatch] = useState<ProductionBatch | null>(null);
+  const [defectQuantity, setDefectQuantity] = useState("");
+  const [defectReason, setDefectReason] = useState("");
+  const [defectComment, setDefectComment] = useState("");
+  const [defectError, setDefectError] = useState("");
 
   const [generatedQr, setGeneratedQr] = useState<GeneratedQr | null>(null);
   const [qrHistoryOrder, setQrHistoryOrder] =
@@ -676,6 +412,62 @@ export default function Production({
       */
       setOperations(safeOperations);
       setBatches(safeBatches);
+
+      // Если все QR-пачки заказа уже закрыты, брак считается учтённым исходом,
+      // но completed_quantity остаётся только количеством годной продукции.
+      const { data: defectRows, error: defectRowsError } = await supabase
+        .from("production_defects")
+        .select("production_order_id, production_order_operation_id, quantity")
+        .in("production_order_id", orderIds);
+
+      if (defectRowsError) throw defectRowsError;
+
+      for (const order of safeOrders) {
+        if (["done", "cancelled", "archived"].includes(order.status)) continue;
+
+        const orderBatches = safeBatches.filter(
+          (batch) => batch.production_order_id === order.id
+        );
+        if (orderBatches.length === 0 || !orderBatches.every((batch) => batch.status === "done")) continue;
+
+        const orderOperations = safeOperations
+          .filter((operation) => operation.production_order_id === order.id)
+          .sort((a, b) => a.sort_order - b.sort_order);
+        if (orderOperations.length === 0) continue;
+
+        let previousGood = Number(order.quantity || 0);
+        let allAccounted = true;
+
+        for (const operation of orderOperations) {
+          const defects = (defectRows || [])
+            .filter((row) => row.production_order_operation_id === operation.id)
+            .reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+          const good = Number(operation.completed_quantity || 0);
+          const target = operation.sort_order === 1 ? Number(order.quantity || 0) : previousGood;
+
+          if (good + defects < target) {
+            allAccounted = false;
+          } else if (operation.status !== "done") {
+            const { error: closeOperationError } = await supabase
+              .from("production_order_operations")
+              .update({ status: "done", completed_at: operation.completed_at || new Date().toISOString() })
+              .eq("id", operation.id);
+            if (closeOperationError) throw closeOperationError;
+            operation.status = "done";
+          }
+
+          previousGood = good;
+        }
+
+        if (allAccounted) {
+          const { error: closeOrderError } = await supabase
+            .from("production_orders")
+            .update({ status: "done" })
+            .eq("id", order.id);
+          if (closeOrderError) throw closeOrderError;
+          order.status = "done";
+        }
+      }
 
       setOpenJobs((prev) => {
         const next = { ...prev };
@@ -1258,6 +1050,203 @@ export default function Production({
     setFinishBatchError("");
     setError("");
     setMessage("");
+  }
+
+  function openDefectWriteOff(batch: ProductionBatch) {
+    setDefectBatch(batch);
+    setDefectQuantity("");
+    setDefectReason("");
+    setDefectComment("");
+    setDefectError("");
+    setError("");
+    setMessage("");
+  }
+
+  async function handleDefectWriteOff(e: React.FormEvent) {
+    e.preventDefault();
+
+    if (!defectBatch) return;
+
+    const order = orders.find(
+      (item) => item.id === defectBatch.production_order_id
+    );
+
+    if (!order) {
+      setDefectError("Не найден производственный заказ");
+      return;
+    }
+
+    const operation = operations.find(
+      (item) =>
+        item.production_order_id === defectBatch.production_order_id &&
+        item.sort_order === Number(defectBatch.current_operation_order || 0)
+    );
+
+    if (!operation) {
+      setDefectError("Не найдена текущая операция пачки");
+      return;
+    }
+
+    const quantityNumber = Number(defectQuantity);
+
+    if (!defectQuantity || quantityNumber <= 0) {
+      setDefectError("Укажи количество брака больше 0");
+      return;
+    }
+
+    if (!Number.isInteger(quantityNumber)) {
+      setDefectError("Количество брака должно быть целым числом");
+      return;
+    }
+
+    if (!defectReason.trim()) {
+      setDefectError("Укажи причину брака");
+      return;
+    }
+
+    try {
+      setActionLoading(true);
+      setDefectError("");
+      setError("");
+      setMessage("");
+
+      const { data: existingDefects, error: defectsLoadError } = await supabase
+        .from("production_defects")
+        .select("quantity")
+        .eq("batch_id", defectBatch.id);
+
+      if (defectsLoadError) throw defectsLoadError;
+
+      const alreadyDefective = (existingDefects || []).reduce(
+        (sum, item) => sum + Number(item.quantity || 0),
+        0
+      );
+
+      const batchQuantity = Number(defectBatch.quantity || 0);
+      const goodQuantity = Number(defectBatch.completed_quantity || 0);
+      const availableToWriteOff = Math.max(
+        0,
+        batchQuantity - goodQuantity - alreadyDefective
+      );
+
+      if (quantityNumber > availableToWriteOff) {
+        throw new Error(
+          `Нельзя списать ${quantityNumber} шт. В пачке доступно к списанию только ${availableToWriteOff} шт.`
+        );
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+
+      const { data: createdDefect, error: defectInsertError } = await supabase
+        .from("production_defects")
+        .insert({
+          batch_id: defectBatch.id,
+          production_order_id: order.id,
+          production_order_operation_id: operation.id,
+          quantity: quantityNumber,
+          reason: defectReason.trim(),
+          comment: defectComment.trim() || null,
+          created_by: user?.id || null,
+        })
+        .select("id")
+        .single();
+
+      if (defectInsertError) throw defectInsertError;
+
+      const totalDefective = alreadyDefective + quantityNumber;
+      const isBatchAccounted =
+        goodQuantity + totalDefective >= batchQuantity;
+
+      if (isBatchAccounted) {
+        const orderOperations = operations
+          .filter((item) => item.production_order_id === order.id)
+          .sort((a, b) => a.sort_order - b.sort_order);
+
+        const nextOperation = orderOperations.find(
+          (item) =>
+            item.sort_order > Number(defectBatch.current_operation_order || 0)
+        );
+
+        const now = new Date().toISOString();
+        let nextBatchData: Record<string, unknown>;
+
+        if (nextOperation) {
+          nextBatchData = {
+            status: "waiting",
+            completed_quantity: 0,
+            current_operation_order: nextOperation.sort_order,
+            assigned_user_id: null,
+            assigned_at: null,
+            started_at: null,
+            completed_at: null,
+          };
+        } else {
+          nextBatchData = {
+            status: "done",
+            completed_quantity: goodQuantity,
+            assigned_user_id: null,
+            assigned_at: null,
+            started_at: null,
+            completed_at: now,
+          };
+        }
+
+        const { data: updatedBatch, error: batchUpdateError } = await supabase
+          .from("production_batches")
+          .update(nextBatchData)
+          .eq("id", defectBatch.id)
+          .select("id")
+          .maybeSingle();
+
+        if (batchUpdateError || !updatedBatch) {
+          await supabase
+            .from("production_defects")
+            .delete()
+            .eq("id", createdDefect.id);
+
+          if (batchUpdateError) throw batchUpdateError;
+          throw new Error("Пачка не обновилась после списания брака");
+        }
+
+        if (!nextOperation && goodQuantity > 0) {
+          try {
+            await finalizeProductionBatchStock(
+              order,
+              defectBatch,
+              goodQuantity
+            );
+          } catch (stockError) {
+            setError(
+              stockError instanceof Error
+                ? `Брак записан, пачка закрыта, но склад не проведён: ${stockError.message}`
+                : "Брак записан, пачка закрыта, но склад не проведён"
+            );
+          }
+        }
+      }
+
+      setMessage(
+        `Пачка ${defectBatch.batch_number}: списано в брак ${quantityNumber} шт.${isBatchAccounted ? " Остаток пачки закрыт." : ""}`
+      );
+
+      setDefectBatch(null);
+      setDefectQuantity("");
+      setDefectReason("");
+      setDefectComment("");
+
+      await loadAll();
+    } catch (error) {
+      setDefectError(
+        error instanceof Error ? error.message : "Не удалось списать брак"
+      );
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   async function printQrLabel(item: GeneratedQr) {
@@ -2257,235 +2246,7 @@ export default function Production({
     };
   }
 
-  function renderJobsList(items: Job[], variant: "active" | "history") {
-    const selectedJob = selectedJobId
-      ? items.find((job) => job.realId === selectedJobId) || null
-      : null;
 
-    return (
-      <div style={{ display: "grid", gap: 14 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            gap: 12,
-            flexWrap: "wrap",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111827" }}>
-              {variant === "active"
-                ? "Задания в производство"
-                : "История заданий"}
-            </div>
-            <div style={{ fontSize: 14, color: "#6b7280", marginTop: 4 }}>
-              {variant === "active"
-                ? "Активные производственные заказы"
-                : "Завершённые, отменённые и архивные заказы"}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button onClick={loadAll} style={secondaryBlueButtonStyle()}>
-              Обновить
-            </button>
-
-            {variant === "active" && (
-              <>
-                <button
-                  onClick={() => {
-                    setError("");
-                    setMessage("");
-                    setSelectedProductId("");
-                    setQuantity("");
-                    setComment("");
-                    setIsCreateOpen(true);
-                  }}
-                  style={primaryBlueButtonStyle}
-                >
-                  + Создать задание
-                </button>
-
-              </>
-            )}
-          </div>
-        </div>
-
-        {loading && (
-          <div style={emptyStyle}>Загрузка производственных заказов...</div>
-        )}
-
-        {!loading && items.length === 0 && (
-          <div style={emptyStyle}>
-            {variant === "active"
-              ? "Активных производственных заданий пока нет."
-              : "История производственных заданий пока пустая."}
-          </div>
-        )}
-
-        {!loading && (
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-              gap: 12,
-            }}
-          >
-            {items.map((job) => {
-              const progress = getJobOperationProgress(job);
-              const currentOperation = getJobCurrentOperation(job);
-              const factStats = getJobFactStats(job);
-              const batchStats = getJobBatchesStats(job);
-
-              return (
-                <button
-                  key={job.realId}
-                  type="button"
-                  onClick={() => setSelectedJobId(job.realId)}
-                  style={{
-                    border: "1px solid #dbeafe",
-                    borderRadius: 16,
-                    background: "#ffffff",
-                    padding: 14,
-                    cursor: "pointer",
-                    textAlign: "left",
-                    display: "grid",
-                    gap: 10,
-                    boxShadow: "0 8px 18px rgba(15, 23, 42, 0.04)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontSize: 16,
-                          fontWeight: 800,
-                          color: "#111827",
-                          lineHeight: 1.25,
-                        }}
-                      >
-                        {job.product}
-                      </div>
-
-                      <div style={{ fontSize: 13, color: "#6b7280", marginTop: 4 }}>
-                        {job.id} · {job.status}
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        fontSize: 18,
-                        color: "#2563eb",
-                        fontWeight: 800,
-                        flexShrink: 0,
-                      }}
-                    >
-                      →
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr",
-                      gap: 8,
-                      fontSize: 13,
-                      color: "#334155",
-                    }}
-                  >
-                    <div>
-                      <div style={{ color: "#64748b" }}>Кол-во</div>
-                      <strong>{job.qty} шт</strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>Выполнено</div>
-                      <strong>{job.completed} шт</strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>Прогресс</div>
-                      <strong>{progress}%</strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>План</div>
-                      <strong>{formatTime(job.timeMin)}</strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>Операция</div>
-                      <strong>
-                        {currentOperation
-                          ? `${currentOperation.sort_order}. ${currentOperation.operation_name}`
-                          : "—"}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>Пачки</div>
-                      <strong>
-                        {batchStats.done}/{batchStats.total}
-                        {batchStats.inProgress > 0
-                          ? ` · в работе ${batchStats.inProgress}`
-                          : ""}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>Факт времени</div>
-                      <strong>
-                        {factStats.totalDurationSeconds > 0
-                          ? formatTimer(factStats.totalDurationSeconds)
-                          : "—"}
-                      </strong>
-                    </div>
-
-                    <div>
-                      <div style={{ color: "#64748b" }}>Среднее</div>
-                      <strong>
-                        {factStats.averageSeconds > 0
-                          ? `${factStats.averageSeconds.toFixed(1)} сек`
-                          : "—"}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <ProgressBar value={progress} />
-                </button>
-              );
-            })}          </div>
-        )}
-
-        {selectedJob && (
-          <ProductionOrderModal
-            job={selectedJob}
-            variant={variant}
-            sourceOrder={
-              orders.find((order) => order.id === selectedJob.realId) || null
-            }
-            jobBatches={batches.filter(
-              (batch) => batch.production_order_id === selectedJob.realId
-            )}
-            operationLogs={operationLogs.filter(
-              (log) => log.production_order_id === selectedJob.realId
-            )}
-            nowTick={nowTick}
-            actionLoading={actionLoading}
-            deletingOrderId={deletingOrderId}
-            onClose={() => setSelectedJobId(null)}
-            onOpenQrHistory={openQrHistory}
-            onDeleteOrder={handleDeleteOrder}
-            onStartOperation={handleStartOperation}
-            onOpenFinishOperation={openFinishOperation}
-            getOperationLimit={getOperationLimit}
-            canStartOperation={canStartOperation}
-          />
-        )}
-      </div>
-    );
-  }
 
   return (
     <div
@@ -2594,137 +2355,85 @@ export default function Production({
         />
       </div>
 
-      {tab === "jobs" && renderJobsList(activeJobs, "active")}
+      {tab === "jobs" && (
+        <ProductionJobsList
+          items={activeJobs}
+          variant="active"
+          selectedJobId={selectedJobId}
+          loading={loading}
+          orders={orders}
+          batches={batches}
+          operationLogs={operationLogs}
+          nowTick={nowTick}
+          actionLoading={actionLoading}
+          deletingOrderId={deletingOrderId}
+          onSelectJob={setSelectedJobId}
+          onReload={loadAll}
+          onOpenCreate={() => {
+            setError("");
+            setMessage("");
+            setSelectedProductId("");
+            setQuantity("");
+            setComment("");
+            setIsCreateOpen(true);
+          }}
+          onOpenQrHistory={openQrHistory}
+          onDeleteOrder={handleDeleteOrder}
+          onStartOperation={handleStartOperation}
+          onOpenFinishOperation={openFinishOperation}
+          onWriteOffDefect={openDefectWriteOff}
+          getOperationLimit={getOperationLimit}
+          canStartOperation={canStartOperation}
+          getJobOperationProgress={getJobOperationProgress}
+          getJobCurrentOperation={getJobCurrentOperation}
+          getJobFactStats={getJobFactStats}
+          getJobBatchesStats={getJobBatchesStats}
+        />
+      )}
 
-      {tab === "history" && renderJobsList(historyJobs, "history")}
+      {tab === "history" && (
+        <ProductionJobsList
+          items={historyJobs}
+          variant="history"
+          selectedJobId={selectedJobId}
+          loading={loading}
+          orders={orders}
+          batches={batches}
+          operationLogs={operationLogs}
+          nowTick={nowTick}
+          actionLoading={actionLoading}
+          deletingOrderId={deletingOrderId}
+          onSelectJob={setSelectedJobId}
+          onReload={loadAll}
+          onOpenCreate={() => {
+            setError("");
+            setMessage("");
+            setSelectedProductId("");
+            setQuantity("");
+            setComment("");
+            setIsCreateOpen(true);
+          }}
+          onOpenQrHistory={openQrHistory}
+          onDeleteOrder={handleDeleteOrder}
+          onStartOperation={handleStartOperation}
+          onOpenFinishOperation={openFinishOperation}
+          onWriteOffDefect={openDefectWriteOff}
+          getOperationLimit={getOperationLimit}
+          canStartOperation={canStartOperation}
+          getJobOperationProgress={getJobOperationProgress}
+          getJobCurrentOperation={getJobCurrentOperation}
+          getJobFactStats={getJobFactStats}
+          getJobBatchesStats={getJobBatchesStats}
+        />
+      )}
 
       {tab === "active" && (
-        <div style={{ display: "grid", gap: 12 }}>
-          <div>
-            <div style={{ fontSize: 22, fontWeight: 700, color: "#111827" }}>
-              В работе
-            </div>
-            <div style={{ fontSize: 14, color: "#6b7280", marginTop: 4 }}>
-              Пачки, которые сейчас находятся в работе у сотрудника
-            </div>
-          </div>
-
-          {activeBatchItems.length === 0 && (
-            <div style={emptyStyle}>Сейчас нет пачек в работе</div>
-          )}
-
-          {activeBatchItems.map((item) => {
-            const batch = item.batch;
-            const order = item.order;
-            const operation = item.operation;
-
-            const total = Number(batch.quantity || 0);
-            const completed = Number(batch.completed_quantity || 0);
-            const left = Math.max(0, total - completed);
-
-            return (
-              <div
-                key={batch.id}
-                style={{
-                  border: "1px solid #dbeafe",
-                  borderRadius: 16,
-                  padding: 14,
-                  background: "#ffffff",
-                  display: "grid",
-                  gap: 12,
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <div>
-                    <div
-                      style={{
-                        fontSize: 18,
-                        fontWeight: 800,
-                        color: "#111827",
-                      }}
-                    >
-                      Пачка {batch.batch_number}
-                    </div>
-
-                    <div
-                      style={{
-                        fontSize: 14,
-                        color: "#64748b",
-                        marginTop: 4,
-                      }}
-                    >
-                      {operation
-                        ? `${operation.sort_order}. ${operation.operation_name}`
-                        : "Операция не найдена"}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      background: "#eff6ff",
-                      color: "#1d4ed8",
-                      borderRadius: 999,
-                      padding: "8px 12px",
-                      fontWeight: 800,
-                      height: "fit-content",
-                    }}
-                  >
-                    {getStatusLabel(batch.status)}
-                  </div>
-                </div>
-
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-                    gap: 10,
-                  }}
-                >
-                  <InfoBox
-                    label="Изделие"
-                    value={
-                      batch.product_name ||
-                      order?.product?.name ||
-                      "Без названия"
-                    }
-                  />
-                  <InfoBox
-                    label="Заказ"
-                    value={order?.order_number || order?.id.slice(0, 8) || "—"}
-                  />
-                  <InfoBox label="Всего в пачке" value={`${total} шт`} />
-                  <InfoBox label="Уже сделано" value={`${completed} шт`} />
-                  <InfoBox label="Осталось" value={`${left} шт`} />
-                  <InfoBox
-                    label="В работе"
-                    value={formatTimer(
-                      getElapsedSeconds(batch.started_at, nowTick)
-                    )}
-                  />
-                </div>
-
-                <ProgressBar value={getProgress(completed, total)} />
-
-                <div>
-                  <button
-                    onClick={() => openFinishBatch(item)}
-                    disabled={actionLoading || !operation}
-                    style={primaryGreenButtonStyle}
-                  >
-                    Закончить работу
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <ProductionActiveBatches
+          items={activeBatchItems}
+          nowTick={nowTick}
+          actionLoading={actionLoading}
+          onOpenFinishBatch={openFinishBatch}
+        />
       )}
 
       {tab === "techcards" && (
@@ -3023,6 +2732,140 @@ export default function Production({
         </div>
       )}
 
+      {defectBatch && (
+        <div onClick={() => setDefectBatch(null)} style={stackedModalOverlayStyle}>
+          <div onClick={(e) => e.stopPropagation()} style={modalBoxStyle}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div style={modalTitleStyle}>Списать брак</div>
+                <div style={{ marginTop: 4, color: "#64748b" }}>
+                  Пачка {defectBatch.batch_number}
+                </div>
+              </div>
+
+              <button
+                onClick={() => setDefectBatch(null)}
+                style={closeButtonStyle}
+              >
+                ×
+              </button>
+            </div>
+
+            <form onSubmit={handleDefectWriteOff} style={{ display: "grid", gap: 12 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                <InfoBox
+                  label="Всего в пачке"
+                  value={`${Number(defectBatch.quantity || 0)} шт`}
+                />
+                <InfoBox
+                  label="Годно на текущей операции"
+                  value={`${Number(defectBatch.completed_quantity || 0)} шт`}
+                />
+              </div>
+
+              {defectError && (
+                <div
+                  style={{
+                    padding: 12,
+                    borderRadius: 12,
+                    border: "1px solid #fecaca",
+                    background: "#fef2f2",
+                    color: "#991b1b",
+                    fontWeight: 700,
+                  }}
+                >
+                  {defectError}
+                </div>
+              )}
+
+              <Field label="Количество брака">
+                <input
+                  value={defectQuantity}
+                  onChange={(e) => {
+                    setDefectQuantity(e.target.value);
+                    setDefectError("");
+                  }}
+                  type="number"
+                  step="1"
+                  min="1"
+                  placeholder="Например: 1"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Причина брака">
+                <input
+                  value={defectReason}
+                  onChange={(e) => {
+                    setDefectReason(e.target.value);
+                    setDefectError("");
+                  }}
+                  placeholder="Например: повреждение при упаковке"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Комментарий">
+                <input
+                  value={defectComment}
+                  onChange={(e) => setDefectComment(e.target.value)}
+                  placeholder="Необязательно"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <div
+                style={{
+                  padding: 12,
+                  borderRadius: 12,
+                  border: "1px solid #fed7aa",
+                  background: "#fff7ed",
+                  color: "#9a3412",
+                  fontWeight: 700,
+                }}
+              >
+                Брак не увеличивает количество годной продукции. Если годное
+                количество вместе с браком закроют весь остаток пачки, пачка
+                будет передана дальше или завершена.
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => setDefectBatch(null)}
+                  style={secondaryBlueButtonStyle()}
+                >
+                  Отмена
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={actionLoading}
+                  style={{
+                    background: "#dc2626",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 10,
+                    padding: "12px 16px",
+                    cursor: "pointer",
+                    fontWeight: 700,
+                    opacity: actionLoading ? 0.7 : 1,
+                  }}
+                >
+                  {actionLoading ? "Списание..." : "Списать брак"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {qrHistoryOrder && (
         <div onClick={() => setQrHistoryOrder(null)} style={stackedModalOverlayStyle}>
           <div
@@ -3088,261 +2931,6 @@ export default function Production({
     </div>
   );
 }
-
-function QrCard({
-  item,
-  onPrint,
-}: {
-  item: GeneratedQr;
-  onPrint?: (item: GeneratedQr) => void;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        gap: 16,
-        flexWrap: "wrap",
-        alignItems: "center",
-      }}
-    >
-      <img
-        src={item.dataUrl}
-        alt="QR-код пачки"
-        style={{
-          width: 180,
-          height: 180,
-          background: "#ffffff",
-          borderRadius: 12,
-          border: "1px solid #dbeafe",
-        }}
-      />
-
-      <div style={{ color: "#374151", lineHeight: 1.7 }}>
-        <div style={{ fontWeight: 800, color: "#111827" }}>
-          Пачка: {item.batchNumber}
-        </div>
-
-        <div>Заказ: {item.payload.order_number}</div>
-        <div>Изделие: {item.payload.product_name}</div>
-        <div>Артикул: {item.payload.product_article || "—"}</div>
-        <div>Цвет: {item.payload.color_name || "—"}</div>
-        <div>Количество в пачке: {item.payload.quantity} шт</div>
-
-        <div
-          style={{
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginTop: 12,
-          }}
-        >
-          <a
-            href={item.dataUrl}
-            download={`${item.batchNumber}.png`}
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              background: "#2563eb",
-              color: "#fff",
-              borderRadius: 10,
-              padding: "10px 14px",
-              fontWeight: 700,
-              textDecoration: "none",
-            }}
-          >
-            Скачать QR
-          </a>
-
-          {onPrint && (
-            <button
-              onClick={() => onPrint(item)}
-              style={{
-                background: "#16a34a",
-                color: "#fff",
-                border: "none",
-                borderRadius: 10,
-                padding: "10px 14px",
-                cursor: "pointer",
-                fontWeight: 700,
-              }}
-            >
-              Печать QR
-            </button>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ display: "grid", gap: 6 }}>
-      <label style={{ fontSize: 14, fontWeight: 700, color: "#111827" }}>
-        {label}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-function InfoBox({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        background: "#eff6ff",
-        borderRadius: 12,
-        padding: 12,
-      }}
-    >
-      <div style={{ fontSize: 12, color: "#6b7280" }}>{label}</div>
-      <div style={{ marginTop: 4, fontWeight: 700, color: "#111827" }}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function tabButtonStyle(active: boolean): React.CSSProperties {
-  return {
-    background: active ? "#2563eb" : "#eff6ff",
-    color: active ? "#fff" : "#1d4ed8",
-    border: active ? "1px solid #2563eb" : "1px solid #bfdbfe",
-    borderRadius: 10,
-    padding: "10px 14px",
-    cursor: "pointer",
-    fontWeight: 700,
-  };
-}
-
-function secondaryBlueButtonStyle(): React.CSSProperties {
-  return {
-    background: "#eff6ff",
-    color: "#1d4ed8",
-    border: "1px solid #bfdbfe",
-    borderRadius: 10,
-    padding: "12px 14px",
-    cursor: "pointer",
-    fontWeight: 700,
-  };
-}
-
-const primaryBlueButtonStyle: React.CSSProperties = {
-  background: "#2563eb",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  padding: "12px 16px",
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const primaryGreenButtonStyle: React.CSSProperties = {
-  background: "#16a34a",
-  color: "#fff",
-  border: "none",
-  borderRadius: 10,
-  padding: "12px 16px",
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const dangerButtonStyle: React.CSSProperties = {
-  background: "#fef2f2",
-  color: "#dc2626",
-  border: "1px solid #fecaca",
-  borderRadius: 10,
-  padding: "12px 14px",
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-const emptyStyle: React.CSSProperties = {
-  border: "1px solid #dbeafe",
-  borderRadius: 14,
-  padding: 16,
-  color: "#64748b",
-  background: "#f8fbff",
-  fontWeight: 600,
-};
-
-const emptySmallStyle: React.CSSProperties = {
-  border: "1px solid #e5e7eb",
-  borderRadius: 12,
-  padding: 12,
-  color: "#64748b",
-  background: "#f8fafc",
-  fontWeight: 600,
-};
-
-const modalOverlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(15, 23, 42, 0.45)",
-  zIndex: 10000,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 20,
-};
-
-const stackedModalOverlayStyle: React.CSSProperties = {
-  ...modalOverlayStyle,
-  zIndex: 12000,
-  background: "rgba(15, 23, 42, 0.58)",
-};
-
-const modalBoxStyle: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 620,
-  background: "#ffffff",
-  borderRadius: 20,
-  border: "1px solid #dbeafe",
-  boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)",
-  padding: 20,
-};
-
-const modalHeaderStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  alignItems: "center",
-  marginBottom: 16,
-};
-
-const modalTitleStyle: React.CSSProperties = {
-  fontSize: 24,
-  fontWeight: 700,
-  color: "#111827",
-};
-
-const closeButtonStyle: React.CSSProperties = {
-  width: 42,
-  height: 42,
-  borderRadius: 12,
-  border: "1px solid #cbd5e1",
-  background: "#ffffff",
-  cursor: "pointer",
-  fontSize: 20,
-  color: "#0f172a",
-};
-
-const inputStyle: React.CSSProperties = {
-  height: 44,
-  borderRadius: 10,
-  border: "1px solid #cbd5e1",
-  padding: "0 12px",
-  fontSize: 15,
-  background: "#ffffff",
-  color: "#0f172a",
-  outline: "none",
-};
 
 /*
   CHANGELOG ERP PRODUCTION FIX
