@@ -96,6 +96,25 @@ type FinanceAccount = {
   current_balance: number | string;
 };
 
+type SalaryPayment = {
+  id: string;
+  employee_id: string;
+  week_start: string;
+  amount: number | string;
+  paid_at: string | null;
+  paid_by: string | null;
+  finance_account_id: string | null;
+};
+
+type SalaryPayoutEmployee = {
+  employee: Employee;
+  weekStart: string;
+  salaryAmount: number;
+  pieceAmount: number;
+  totalAmount: number;
+  unpaidShiftIds: string[];
+};
+
 
 type EmployeeTodayStats = {
   userId: string;
@@ -154,9 +173,18 @@ function formatMoney(value: number | null | undefined) {
   return `${Number(value || 0).toFixed(2)} ₽`;
 }
 
+// ТЕСТ ВЫПЛАТ: оставь null для обычной работы.
+// Чтобы проверить четверг без ожидания недели, укажи дату четверга, например "2026-09-03".
+const PAYOUT_TEST_DATE: string | null = null;
+
+function getPayoutReferenceDate() {
+  if (!PAYOUT_TEST_DATE) return new Date();
+  return new Date(`${PAYOUT_TEST_DATE}T12:00:00`);
+}
+
 
 function getNextThursdayLabel() {
-  const today = new Date();
+  const today = getPayoutReferenceDate();
   const day = today.getDay();
   const diff = day <= 4 ? 4 - day : 7 - day + 4;
 
@@ -170,9 +198,35 @@ function getNextThursdayLabel() {
   });
 }
 
+function getCurrentWeekStart() {
+  const today = getPayoutReferenceDate();
+  const day = today.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+
+  const monday = new Date(today);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(today.getDate() + diffToMonday);
+
+  const year = monday.getFullYear();
+  const month = String(monday.getMonth() + 1).padStart(2, "0");
+  const date = String(monday.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${date}`;
+}
+
+function isThursdayToday() {
+  return getPayoutReferenceDate().getDay() === 4;
+}
+
 
 function formatPaymentType(value: string | null | undefined) {
-  switch (value) {
+  const normalized = value || "";
+
+  if (normalized.includes("salary") && normalized.includes("piece")) {
+    return "Оклад + сдельно";
+  }
+
+  switch (normalized) {
     case "salary":
       return "Оклад";
     case "piece":
@@ -288,7 +342,12 @@ export default function DashboardPage({
   const [selectedEmployee, setSelectedEmployee] = useState<Employee | null>(null);
   const [selectedShiftEmployee, setSelectedShiftEmployee] = useState<EmployeeOnShiftCard | null>(null);
   const [financeAccounts, setFinanceAccounts] = useState<FinanceAccount[]>([]);
+  const [salaryPayments, setSalaryPayments] = useState<SalaryPayment[]>([]);
   const [selectedFinanceAccountId, setSelectedFinanceAccountId] = useState("");
+  const [selectedSalaryPayout, setSelectedSalaryPayout] =
+    useState<SalaryPayoutEmployee | null>(null);
+  const [salaryPayingEmployeeId, setSalaryPayingEmployeeId] =
+    useState<string | null>(null);
   const [dashboardError, setDashboardError] = useState("");
 
   useEffect(() => {
@@ -311,6 +370,7 @@ export default function DashboardPage({
         shiftsResult,
         openShiftsResult,
         financeAccountsResult,
+        salaryPaymentsResult,
       ] = await Promise.all([
           supabase
             .from("production_orders")
@@ -361,6 +421,13 @@ export default function DashboardPage({
             .select("id, name, type, currency, current_balance")
             .eq("is_active", true)
             .order("created_at", { ascending: true }),
+
+          supabase
+            .from("employee_salary_payments")
+            .select(
+              "id, employee_id, week_start, amount, paid_at, paid_by, finance_account_id"
+            )
+            .order("week_start", { ascending: false }),
         ]);
 
       if (ordersResult.error) throw ordersResult.error;
@@ -370,8 +437,10 @@ export default function DashboardPage({
       if (shiftsResult.error) throw shiftsResult.error;
       if (openShiftsResult.error) throw openShiftsResult.error;
       if (financeAccountsResult.error) throw financeAccountsResult.error;
+      if (salaryPaymentsResult.error) throw salaryPaymentsResult.error;
 
       setFinanceAccounts((financeAccountsResult.data as FinanceAccount[]) || []);
+      setSalaryPayments((salaryPaymentsResult.data as SalaryPayment[]) || []);
 
       setOrders((ordersResult.data as ProductionOrder[]) || []);
       setBatches((batchesResult.data as ProductionBatch[]) || []);
@@ -498,6 +567,208 @@ export default function DashboardPage({
       selectedPayoutEmployee,
       selectedFinanceAccountId,
     );
+  }
+
+  function employeeHasSalary(employee: Employee | null | undefined) {
+    return Boolean(
+      employee &&
+      employee.is_active !== false &&
+      employee.payment_type?.includes("salary") &&
+      Number(employee.weekly_salary_amount || 0) > 0
+    );
+  }
+
+  function employeeHasPiece(employee: Employee | null | undefined) {
+    return Boolean(employee?.payment_type?.includes("piece"));
+  }
+
+  function openSalaryPayoutModal(
+    employee: Employee,
+    pieceAmount = 0,
+    unpaidShiftIds: string[] = []
+  ) {
+    const salaryAmount = Number(employee.weekly_salary_amount || 0);
+    if (salaryAmount <= 0 && pieceAmount <= 0) return;
+
+    setSelectedSalaryPayout({
+      employee,
+      weekStart: getCurrentWeekStart(),
+      salaryAmount,
+      pieceAmount,
+      totalAmount: salaryAmount + pieceAmount,
+      unpaidShiftIds,
+    });
+    setSelectedFinanceAccountId(financeAccounts[0]?.id || "");
+  }
+
+  async function confirmSalaryPayout() {
+    if (!selectedSalaryPayout) return;
+
+    const {
+      employee,
+      weekStart,
+      salaryAmount,
+      pieceAmount,
+      totalAmount,
+      unpaidShiftIds,
+    } = selectedSalaryPayout;
+
+    let salaryPaymentId: string | null = null;
+    let financeTransactionId: string | null = null;
+    let accountWasDebited = false;
+
+    try {
+      setSalaryPayingEmployeeId(employee.id);
+      setDashboardError("");
+
+      if (!isThursdayToday()) {
+        throw new Error("Выплата оклада доступна только в четверг");
+      }
+
+      const alreadyPaid = salaryPayments.some(
+        (payment) =>
+          payment.employee_id === employee.id &&
+          payment.week_start === weekStart
+      );
+
+      if (alreadyPaid) {
+        throw new Error("Оклад за эту неделю уже выплачен");
+      }
+
+      const account = financeAccounts.find(
+        (financeAccount) => financeAccount.id === selectedFinanceAccountId
+      );
+
+      if (!account) {
+        throw new Error("Выбери финансовый счёт для выплаты");
+      }
+
+      if (totalAmount <= 0) {
+        throw new Error("Сумма выплаты должна быть больше 0");
+      }
+
+      const currentBalance = Number(account.current_balance || 0);
+
+      if (totalAmount > currentBalance) {
+        throw new Error("Недостаточно средств на выбранном счёте");
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+      if (!user) throw new Error("Администратор не найден");
+
+      const now = new Date().toISOString();
+
+      if (salaryAmount > 0) {
+        const { data: salaryPayment, error: salaryPaymentError } = await supabase
+          .from("employee_salary_payments")
+          .insert({
+            employee_id: employee.id,
+            week_start: weekStart,
+            amount: salaryAmount,
+            paid_at: now,
+            paid_by: user.id,
+            finance_account_id: selectedFinanceAccountId,
+          })
+          .select("id")
+          .single();
+
+        if (salaryPaymentError) throw salaryPaymentError;
+        salaryPaymentId = salaryPayment.id;
+      }
+
+      const { data: financeTransaction, error: transactionError } = await supabase
+        .from("finance_transactions")
+        .insert({
+          account_id: selectedFinanceAccountId,
+          type: "expense",
+          amount: totalAmount,
+          operation_date: now.slice(0, 10),
+          description:
+            pieceAmount > 0
+              ? `Выплата сотруднику ${employee.full_name || "Без имени"}: оклад + сдельно`
+              : `Оклад сотруднику ${employee.full_name || "Без имени"}`,
+          source_document_type:
+            pieceAmount > 0 ? "employee_combined_payout" : "employee_salary_payment",
+          source_document_id: salaryPaymentId || employee.id,
+          category: "employee_salary",
+          counterparty_id: employee.id,
+          comment:
+            pieceAmount > 0
+              ? `Неделя с ${weekStart}; оклад: ${salaryAmount}; сдельно: ${pieceAmount}; смены: ${unpaidShiftIds.join(", ")}`
+              : `Оклад за неделю с ${weekStart}`,
+        })
+        .select("id")
+        .single();
+
+      if (transactionError) throw transactionError;
+      financeTransactionId = financeTransaction.id;
+
+      const { error: accountError } = await supabase
+        .from("finance_accounts")
+        .update({
+          current_balance: currentBalance - totalAmount,
+          updated_at: now,
+        })
+        .eq("id", selectedFinanceAccountId);
+
+      if (accountError) throw accountError;
+      accountWasDebited = true;
+
+      if (unpaidShiftIds.length > 0) {
+        const { error: shiftsError } = await supabase
+          .from("employee_shifts")
+          .update({
+            is_paid: true,
+            paid_at: now,
+            paid_by: user.id,
+          })
+          .in("id", unpaidShiftIds);
+
+        if (shiftsError) throw shiftsError;
+      }
+
+      setSelectedSalaryPayout(null);
+      await loadDashboardData();
+    } catch (error) {
+      const account = financeAccounts.find(
+        (financeAccount) => financeAccount.id === selectedFinanceAccountId
+      );
+
+      if (accountWasDebited && account) {
+        await supabase
+          .from("finance_accounts")
+          .update({
+            current_balance: Number(account.current_balance || 0),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", selectedFinanceAccountId);
+      }
+
+      if (financeTransactionId) {
+        await supabase
+          .from("finance_transactions")
+          .delete()
+          .eq("id", financeTransactionId);
+      }
+
+      if (salaryPaymentId) {
+        await supabase
+          .from("employee_salary_payments")
+          .delete()
+          .eq("id", salaryPaymentId);
+      }
+
+      setDashboardError(
+        error instanceof Error ? error.message : "Не удалось провести выплату"
+      );
+    } finally {
+      setSalaryPayingEmployeeId(null);
+    }
   }
 
   const activeOrders = orders.filter(
@@ -702,17 +973,26 @@ export default function DashboardPage({
 
   const salaryEmployees = useMemo(() => {
     return employees
-      .filter((employee) => {
-        return (
-          employee.is_active !== false &&
-          employee.payment_type?.includes("salary") &&
-          Number(employee.weekly_salary_amount || 0) > 0
-        );
-      })
+      .filter((employee) => employeeHasSalary(employee))
       .sort((a, b) => {
         return (a.full_name || "").localeCompare(b.full_name || "", "ru");
       });
   }, [employees]);
+
+  const salaryOnlyEmployees = useMemo(() => {
+    return salaryEmployees.filter((employee) => {
+      const paymentRow = employeePaymentRows.find(
+        (row) => row.userId === employee.id
+      );
+
+      const hasUnpaidPiecework =
+        Boolean(paymentRow) &&
+        paymentRow!.unpaidShiftIds.length > 0 &&
+        paymentRow!.payableAmount > 0;
+
+      return !hasUnpaidPiecework;
+    });
+  }, [salaryEmployees, employeePaymentRows]);
 
   const problemBatches = useMemo(() => {
     return batches
@@ -778,6 +1058,22 @@ export default function DashboardPage({
           }}
         >
           Ошибка дашборда: {dashboardError}
+        </div>
+      )}
+
+      {PAYOUT_TEST_DATE && (
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 12,
+            background: "#fffbeb",
+            border: "1px solid #f59e0b",
+            color: "#92400e",
+            fontWeight: 800,
+          }}
+        >
+          ТЕСТ ВЫПЛАТ: ERP считает датой выплаты {PAYOUT_TEST_DATE}. Не забудь вернуть
+          PAYOUT_TEST_DATE = null после проверки.
         </div>
       )}
 
@@ -888,29 +1184,130 @@ export default function DashboardPage({
                       <TableCell text={`${item.unpaidShiftsCount}`} />
                       <TableCell text={`${item.payableQuantity} шт`} />
                       <TableCell text={formatMoney(item.payableAmount)} strong />
-                      {item.unpaidShiftIds.length > 0 ? (
-                        <PayableActionCell
-                          item={payableItem}
-                          disabled={payingUserId === item.userId || loading}
-                          onPay={openEmployeePayoutModal}
-                        />
-                      ) : (
-                        <td style={tableCellStyle}>
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              borderRadius: 999,
-                              padding: "8px 12px",
-                              background: "#eff6ff",
-                              color: "#1d4ed8",
-                              fontWeight: 800,
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            Нет к выплате
-                          </span>
-                        </td>
-                      )}
+                      {(() => {
+                        const employee = employees.find(
+                          (employeeItem) => employeeItem.id === item.userId
+                        );
+                        const isMixedPayment =
+                          employeeHasSalary(employee) &&
+                          item.unpaidShiftIds.length > 0 &&
+                          item.payableAmount > 0;
+                        const salaryAlreadyPaid = employee
+                          ? salaryPayments.some(
+                              (payment) =>
+                                payment.employee_id === employee.id &&
+                                payment.week_start === getCurrentWeekStart()
+                            )
+                          : false;
+
+                        if (
+                          isMixedPayment &&
+                          employee &&
+                          item.unpaidShiftIds.length > 0
+                        ) {
+                          if (salaryAlreadyPaid) {
+                            return (
+                              <PayableActionCell
+                                item={payableItem}
+                                disabled={payingUserId === item.userId || loading}
+                                onPay={openEmployeePayoutModal}
+                              />
+                            );
+                          }
+
+                          if (!isThursdayToday()) {
+                            return (
+                              <td style={tableCellStyle}>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    borderRadius: 999,
+                                    padding: "8px 12px",
+                                    background: "#fff7ed",
+                                    color: "#b45309",
+                                    fontWeight: 800,
+                                    whiteSpace: "nowrap",
+                                  }}
+                                >
+                                  В четверг: {formatMoney(
+                                    item.payableAmount +
+                                      Number(employee.weekly_salary_amount || 0)
+                                  )}
+                                </span>
+                              </td>
+                            );
+                          }
+
+                          return (
+                            <td style={tableCellStyle}>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  openSalaryPayoutModal(
+                                    employee,
+                                    item.payableAmount,
+                                    item.unpaidShiftIds
+                                  )
+                                }
+                                disabled={
+                                  salaryPayingEmployeeId === employee.id || loading
+                                }
+                                style={{
+                                  border: "none",
+                                  borderRadius: 10,
+                                  padding: "8px 10px",
+                                  background:
+                                    salaryPayingEmployeeId === employee.id || loading
+                                      ? "#94a3b8"
+                                      : "#16a34a",
+                                  color: "#ffffff",
+                                  fontWeight: 800,
+                                  cursor:
+                                    salaryPayingEmployeeId === employee.id || loading
+                                      ? "not-allowed"
+                                      : "pointer",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {salaryPayingEmployeeId === employee.id
+                                  ? "Провожу..."
+                                  : `Выплатить ${formatMoney(
+                                      item.payableAmount +
+                                        Number(employee.weekly_salary_amount || 0)
+                                    )}`}
+                              </button>
+                            </td>
+                          );
+                        }
+
+                        if (item.unpaidShiftIds.length > 0) {
+                          return (
+                            <PayableActionCell
+                              item={payableItem}
+                              disabled={payingUserId === item.userId || loading}
+                              onPay={openEmployeePayoutModal}
+                            />
+                          );
+                        }
+
+                        return (
+                          <td style={tableCellStyle}>
+                            <span
+                              style={{
+                                display: "inline-flex",
+                                borderRadius: 999,
+                                padding: "8px 12px",
+                                background: "#eff6ff",
+                                color: "#1d4ed8",
+                                fontWeight: 800,
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              Нет к выплате
+                            </span>
+                          </td>
+                        );
+                      })()}
                     </tr>
                   );
                 })}
@@ -921,7 +1318,7 @@ export default function DashboardPage({
       </Panel>
 
 
-      {salaryEmployees.length > 0 && (
+      {salaryOnlyEmployees.length > 0 && (
         <Panel title="Предстоящие выплаты по окладу">
           <div style={{ overflowX: "auto" }}>
             <table
@@ -942,40 +1339,92 @@ export default function DashboardPage({
               </thead>
 
               <tbody>
-                {salaryEmployees.map((employee) => (
-                  <tr key={employee.id}>
-                    <td style={tableCellStyle}>
-                      <button
-                        type="button"
-                        onClick={() => openEmployeeCard(employee.id)}
-                        style={employeeNameButtonStyle}
-                      >
-                        {employee.full_name || "Без имени"}
-                      </button>
-                    </td>
-                    <TableCell text={formatBankName(employee.bank_name)} />
-                    <TableCell
-                      text={formatMoney(Number(employee.weekly_salary_amount || 0))}
-                      strong
-                    />
-                    <TableCell text={getNextThursdayLabel()} />
-                    <td style={tableCellStyle}>
-                      <span
-                        style={{
-                          display: "inline-flex",
-                          borderRadius: 999,
-                          padding: "8px 12px",
-                          background: "#fff7ed",
-                          color: "#b45309",
-                          fontWeight: 800,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        Ожидает выплаты
-                      </span>
-                    </td>
-                  </tr>
-                ))}
+                {salaryOnlyEmployees.map((employee) => {
+                  const currentWeekStart = getCurrentWeekStart();
+                  const salaryPaid = salaryPayments.some(
+                    (payment) =>
+                      payment.employee_id === employee.id &&
+                      payment.week_start === currentWeekStart
+                  );
+                  const canPaySalary = isThursdayToday() && !salaryPaid;
+
+                  return (
+                    <tr key={employee.id}>
+                      <td style={tableCellStyle}>
+                        <button
+                          type="button"
+                          onClick={() => openEmployeeCard(employee.id)}
+                          style={employeeNameButtonStyle}
+                        >
+                          {employee.full_name || "Без имени"}
+                        </button>
+                      </td>
+                      <TableCell text={formatBankName(employee.bank_name)} />
+                      <TableCell
+                        text={formatMoney(Number(employee.weekly_salary_amount || 0))}
+                        strong
+                      />
+                      <TableCell text={getNextThursdayLabel()} />
+                      <td style={tableCellStyle}>
+                        {salaryPaid ? (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              borderRadius: 999,
+                              padding: "8px 12px",
+                              background: "#ecfdf5",
+                              color: "#047857",
+                              fontWeight: 800,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Выплачено
+                          </span>
+                        ) : canPaySalary ? (
+                          <button
+                            type="button"
+                            onClick={() => openSalaryPayoutModal(employee, 0, [])}
+                            disabled={salaryPayingEmployeeId === employee.id || loading}
+                            style={{
+                              border: "none",
+                              borderRadius: 10,
+                              padding: "8px 12px",
+                              background:
+                                salaryPayingEmployeeId === employee.id || loading
+                                  ? "#94a3b8"
+                                  : "#16a34a",
+                              color: "#ffffff",
+                              fontWeight: 800,
+                              cursor:
+                                salaryPayingEmployeeId === employee.id || loading
+                                  ? "not-allowed"
+                                  : "pointer",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {salaryPayingEmployeeId === employee.id
+                              ? "Провожу..."
+                              : "Выплатить"}
+                          </button>
+                        ) : (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              borderRadius: 999,
+                              padding: "8px 12px",
+                              background: "#fff7ed",
+                              color: "#b45309",
+                              fontWeight: 800,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            Ожидает выплаты
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1223,6 +1672,127 @@ export default function DashboardPage({
                 value={formatDateTime(selectedEmployee.created_at)}
               />
               <EmployeeInfoRow label="Заметки" value={selectedEmployee.notes} wide />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedSalaryPayout && (
+        <div
+          onClick={() => setSelectedSalaryPayout(null)}
+          style={payoutModalOverlayStyle}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={payoutModalStyle}
+          >
+            <div style={payoutModalHeaderStyle}>
+              <div>
+                <div style={payoutModalTitleStyle}>Выплата оклада</div>
+                <div style={payoutModalSubtitleStyle}>
+                  {selectedSalaryPayout.employee.full_name || "Без имени"}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedSalaryPayout(null)}
+                style={payoutCloseButtonStyle}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={payoutInfoGridStyle}>
+              <div style={payoutInfoCardStyle}>
+                <div style={payoutInfoLabelStyle}>Неделя с</div>
+                <div style={payoutInfoValueStyle}>
+                  {new Date(`${selectedSalaryPayout.weekStart}T00:00:00`).toLocaleDateString("ru-RU")}
+                </div>
+              </div>
+
+              <div style={payoutInfoCardStyle}>
+                <div style={payoutInfoLabelStyle}>Оклад</div>
+                <div style={payoutInfoValueStyle}>
+                  {formatMoney(selectedSalaryPayout.salaryAmount)}
+                </div>
+              </div>
+
+              {selectedSalaryPayout.pieceAmount > 0 && (
+                <div style={payoutInfoCardStyle}>
+                  <div style={payoutInfoLabelStyle}>Сдельно</div>
+                  <div style={payoutInfoValueStyle}>
+                    {formatMoney(selectedSalaryPayout.pieceAmount)}
+                  </div>
+                </div>
+              )}
+
+              <div style={payoutInfoCardStyle}>
+                <div style={payoutInfoLabelStyle}>Итого</div>
+                <div style={payoutInfoValueStyle}>
+                  {formatMoney(selectedSalaryPayout.totalAmount)}
+                </div>
+              </div>
+            </div>
+
+            <label style={payoutLabelStyle}>
+              <span style={payoutLabelTextStyle}>Счёт списания</span>
+              <select
+                value={selectedFinanceAccountId}
+                onChange={(event) =>
+                  setSelectedFinanceAccountId(event.target.value)
+                }
+                style={payoutSelectStyle}
+              >
+                <option value="">Выбери счёт</option>
+                {financeAccounts.map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.name} · {formatMoney(Number(account.current_balance || 0))}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={payoutHintStyle}>
+              {selectedSalaryPayout.pieceAmount > 0
+                ? "Оклад и накопленная сдельная оплата будут выплачены одной суммой. Смены будут отмечены выплаченными, а оклад за эту неделю повторно провести будет нельзя."
+                : "Будет создана выплата оклада за текущую неделю и расход в финансах. Повторно провести оклад этому сотруднику за ту же неделю будет нельзя."}
+            </div>
+
+            <div style={payoutActionsStyle}>
+              <button
+                type="button"
+                onClick={() => setSelectedSalaryPayout(null)}
+                style={payoutCancelButtonStyle}
+              >
+                Отмена
+              </button>
+
+              <button
+                type="button"
+                onClick={confirmSalaryPayout}
+                disabled={
+                  !selectedFinanceAccountId ||
+                  salaryPayingEmployeeId === selectedSalaryPayout.employee.id
+                }
+                style={{
+                  ...payoutConfirmButtonStyle,
+                  opacity:
+                    !selectedFinanceAccountId ||
+                    salaryPayingEmployeeId === selectedSalaryPayout.employee.id
+                      ? 0.65
+                      : 1,
+                  cursor:
+                    !selectedFinanceAccountId ||
+                    salaryPayingEmployeeId === selectedSalaryPayout.employee.id
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+              >
+                {salaryPayingEmployeeId === selectedSalaryPayout.employee.id
+                  ? "Провожу..."
+                  : `Выплатить ${formatMoney(selectedSalaryPayout.totalAmount)}`}
+              </button>
             </div>
           </div>
         </div>
