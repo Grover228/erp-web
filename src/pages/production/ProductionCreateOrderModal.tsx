@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ProductItem, TechCardItem } from "../../Production";
 
 type ProductionCreateOrderModalProps = {
@@ -30,6 +30,7 @@ export default function ProductionCreateOrderModal({
 }: ProductionCreateOrderModalProps) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const isMobile = useIsMobile();
 
   const activeTechCardProductIds = useMemo(() => {
     return new Set(
@@ -86,12 +87,12 @@ export default function ProductionCreateOrderModal({
 
 
   return (
-    <div onClick={onClose} style={modalOverlayStyle}>
-      <div onClick={(event) => event.stopPropagation()} style={modalBoxStyle}>
-        <div style={modalHeaderStyle}>
+    <div onClick={onClose} style={modalOverlayStyleFor(isMobile)}>
+      <div onClick={(event) => event.stopPropagation()} style={modalBoxStyleFor(isMobile)}>
+        <div style={modalHeaderStyleFor(isMobile)}>
           <div>
-            <div style={modalTitleStyle}>Создать производственное задание</div>
-            <div style={{ marginTop: 4, color: "#64748b" }}>
+            <div style={modalTitleStyleFor(isMobile)}>Создать производственное задание</div>
+            <div style={{ marginTop: 4, color: "#64748b", fontSize: isMobile ? 13 : 16, lineHeight: 1.45 }}>
               Выбери изделие с активной техкартой и укажи количество.
             </div>
           </div>
@@ -101,7 +102,7 @@ export default function ProductionCreateOrderModal({
           </button>
         </div>
 
-        <form onSubmit={onSubmit} style={{ display: "grid", gap: 14 }}>
+        <form onSubmit={onSubmit} style={{ display: "grid", gap: isMobile ? 11 : 14 }}>
           <Field label="Изделие">
             <div style={{ position: "relative" }}>
               <span style={searchIconStyle}>⌕</span>
@@ -116,7 +117,7 @@ export default function ProductionCreateOrderModal({
           </Field>
 
           {productCategories.length > 1 && (
-            <div style={categoryRowStyle}>
+            <div style={categoryRowStyleFor(isMobile)}>
               <button
                 type="button"
                 onClick={() => setCategoryFilter("all")}
@@ -137,7 +138,7 @@ export default function ProductionCreateOrderModal({
             </div>
           )}
 
-          <div style={productListStyle}>
+          <div style={productListStyleFor(isMobile)}>
             <div style={productListHeaderStyle}>
               <span>Изделия с активной техкартой</span>
               <span>{filteredProducts.length}</span>
@@ -161,7 +162,7 @@ export default function ProductionCreateOrderModal({
                       key={product.id}
                       type="button"
                       onClick={() => onProductChange(product.id)}
-                      style={productRowStyle(active)}
+                      style={productRowStyle(active, isMobile)}
                     >
                       <div style={{ minWidth: 0 }}>
                         <div style={productNameStyle}>{product.name}</div>
@@ -170,9 +171,11 @@ export default function ProductionCreateOrderModal({
                           {techCard ? ` · ${techCard.name}` : ""}
                         </div>
                       </div>
-                      <div style={active ? selectedMarkStyle : chooseMarkStyle}>
-                        {active ? "✓ Выбрано" : "Выбрать"}
-                      </div>
+                      {!isMobile && (
+                        <div style={active ? selectedMarkStyle : chooseMarkStyle}>
+                          {active ? "✓ Выбрано" : "Выбрать"}
+                        </div>
+                      )}
                     </button>
                   );
                 })}
@@ -187,7 +190,7 @@ export default function ProductionCreateOrderModal({
           </div>
 
           {selectedProduct && (
-            <div style={selectedProductStyle}>
+            <div style={selectedProductStyleFor(isMobile)}>
               <div>
                 <div style={{ fontSize: 12, color: "#64748b", fontWeight: 700 }}>
                   Выбрано
@@ -199,8 +202,12 @@ export default function ProductionCreateOrderModal({
                   {selectedProduct.article || "Без артикула"}
                 </div>
               </div>
-              <div style={techCardBadgeStyle}>
-                ✓ {selectedTechCard ? selectedTechCard.name : "Активная техкарта"}
+              <div style={techCardBadgeStyleFor(isMobile)}>
+                ✓ {isMobile
+                  ? "Активная техкарта"
+                  : selectedTechCard
+                    ? selectedTechCard.name
+                    : "Активная техкарта"}
               </div>
             </div>
           )}
@@ -208,8 +215,8 @@ export default function ProductionCreateOrderModal({
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "minmax(180px, 0.7fr) minmax(240px, 1.3fr)",
-              gap: 12,
+              gridTemplateColumns: isMobile ? "1fr" : "minmax(180px, 0.7fr) minmax(240px, 1.3fr)",
+              gap: isMobile ? 10 : 12,
             }}
           >
             <Field label="Количество изделий">
@@ -220,7 +227,7 @@ export default function ProductionCreateOrderModal({
                 min="1"
                 step="1"
                 placeholder="Например: 50"
-                style={inputStyle}
+                style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
               />
             </Field>
 
@@ -229,17 +236,31 @@ export default function ProductionCreateOrderModal({
                 value={comment}
                 onChange={(event) => onCommentChange(event.target.value)}
                 placeholder="Необязательно"
-                style={inputStyle}
+                style={{ ...inputStyle, width: "100%", boxSizing: "border-box" }}
               />
             </Field>
           </div>
 
-          <div style={footerStyle}>
+          <div style={footerStyleFor(isMobile)}>
             <div style={{ color: "#64748b", fontSize: 12 }}>
               Показаны только изделия с активной техкартой: {productsWithActiveTechCards.length}
             </div>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button type="button" onClick={onClose} style={secondaryBlueButtonStyle()}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 10,
+                width: isMobile ? "100%" : "auto",
+              }}
+            >
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  ...secondaryBlueButtonStyle(),
+                  flex: isMobile ? 1 : undefined,
+                }}
+              >
                 Отмена
               </button>
 
@@ -248,6 +269,7 @@ export default function ProductionCreateOrderModal({
                 disabled={creating || !selectedProductId || !quantity}
                 style={{
                   ...primaryBlueButtonStyle,
+                  flex: isMobile ? 1.4 : undefined,
                   opacity: creating || !selectedProductId || !quantity ? 0.55 : 1,
                   cursor: creating || !selectedProductId || !quantity ? "not-allowed" : "pointer",
                 }}
@@ -260,6 +282,26 @@ export default function ProductionCreateOrderModal({
       </div>
     </div>
   );
+}
+
+
+function useIsMobile() {
+  const getMatches = () =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 700px)").matches;
+
+  const [isMobile, setIsMobile] = useState(getMatches);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const media = window.matchMedia("(max-width: 700px)");
+    const handleChange = () => setIsMobile(media.matches);
+
+    media.addEventListener("change", handleChange);
+    return () => media.removeEventListener("change", handleChange);
+  });
+
+  return isMobile;
 }
 
 function Field({
@@ -301,40 +343,52 @@ const primaryBlueButtonStyle: React.CSSProperties = {
   fontWeight: 700,
 };
 
-const modalOverlayStyle: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(15, 23, 42, 0.45)",
-  zIndex: 10000,
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 20,
-};
+function modalOverlayStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15, 23, 42, 0.45)",
+    zIndex: 10000,
+    display: "flex",
+    alignItems: isMobile ? "stretch" : "center",
+    justifyContent: "center",
+    padding: isMobile ? 0 : 20,
+  };
+}
 
-const modalBoxStyle: React.CSSProperties = {
-  width: "100%",
-  maxWidth: 760,
-  background: "#ffffff",
-  borderRadius: 20,
-  border: "1px solid #dbeafe",
-  boxShadow: "0 20px 40px rgba(15, 23, 42, 0.18)",
-  padding: 20,
-};
+function modalBoxStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    width: "100%",
+    maxWidth: isMobile ? "none" : 760,
+    maxHeight: isMobile ? "100dvh" : "calc(100vh - 40px)",
+    overflowY: "auto",
+    background: "#ffffff",
+    borderRadius: isMobile ? 0 : 20,
+    border: isMobile ? "none" : "1px solid #dbeafe",
+    boxShadow: isMobile ? "none" : "0 20px 40px rgba(15, 23, 42, 0.18)",
+    padding: isMobile ? "14px 14px 20px" : 20,
+    boxSizing: "border-box",
+  };
+}
 
-const modalHeaderStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  gap: 12,
-  alignItems: "center",
-  marginBottom: 16,
-};
+function modalHeaderStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "flex-start",
+    marginBottom: isMobile ? 12 : 16,
+  };
+}
 
-const modalTitleStyle: React.CSSProperties = {
-  fontSize: 24,
-  fontWeight: 700,
-  color: "#111827",
-};
+function modalTitleStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    fontSize: isMobile ? 21 : 24,
+    lineHeight: 1.15,
+    fontWeight: 700,
+    color: "#111827",
+  };
+}
 
 const closeButtonStyle: React.CSSProperties = {
   width: 42,
@@ -356,11 +410,16 @@ const searchIconStyle: React.CSSProperties = {
   pointerEvents: "none",
 };
 
-const categoryRowStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 7,
-  flexWrap: "wrap",
-};
+function categoryRowStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    gap: 7,
+    flexWrap: isMobile ? "nowrap" : "wrap",
+    overflowX: isMobile ? "auto" : "visible",
+    paddingBottom: isMobile ? 3 : 0,
+    scrollbarWidth: "none",
+  };
+}
 
 function categoryButtonStyle(active: boolean): React.CSSProperties {
   return {
@@ -375,14 +434,16 @@ function categoryButtonStyle(active: boolean): React.CSSProperties {
   };
 }
 
-const productListStyle: React.CSSProperties = {
-  border: "1px solid #dbeafe",
-  borderRadius: 14,
-  background: "#f8fbff",
-  padding: 10,
-  maxHeight: 330,
-  overflowY: "auto",
-};
+function productListStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    border: "1px solid #dbeafe",
+    borderRadius: 14,
+    background: "#f8fbff",
+    padding: isMobile ? 8 : 10,
+    maxHeight: isMobile ? 245 : 330,
+    overflowY: "auto",
+  };
+}
 
 const productListHeaderStyle: React.CSSProperties = {
   display: "flex",
@@ -394,7 +455,7 @@ const productListHeaderStyle: React.CSSProperties = {
   padding: "2px 3px 8px",
 };
 
-function productRowStyle(active: boolean): React.CSSProperties {
+function productRowStyle(active: boolean, isMobile: boolean): React.CSSProperties {
   return {
     width: "100%",
     display: "flex",
@@ -405,7 +466,7 @@ function productRowStyle(active: boolean): React.CSSProperties {
     border: active ? "1px solid #60a5fa" : "1px solid #e2e8f0",
     borderRadius: 11,
     background: active ? "#eff6ff" : "#ffffff",
-    padding: "10px 12px",
+    padding: isMobile ? "9px 10px" : "10px 12px",
     cursor: "pointer",
     boxShadow: active ? "0 0 0 2px rgba(96, 165, 250, 0.10)" : "none",
   };
@@ -456,36 +517,46 @@ const moreHintStyle: React.CSSProperties = {
   fontSize: 12,
 };
 
-const selectedProductStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 12,
-  flexWrap: "wrap",
-  padding: 12,
-  border: "1px solid #bbf7d0",
-  borderRadius: 12,
-  background: "#f0fdf4",
-};
+function selectedProductStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: isMobile ? "flex-start" : "center",
+    gap: isMobile ? 8 : 12,
+    flexDirection: isMobile ? "column" : "row",
+    flexWrap: "wrap",
+    padding: isMobile ? 10 : 12,
+    border: "1px solid #bbf7d0",
+    borderRadius: 12,
+    background: "#f0fdf4",
+  };
+}
 
-const techCardBadgeStyle: React.CSSProperties = {
-  borderRadius: 999,
-  padding: "7px 10px",
-  background: "#dcfce7",
-  color: "#166534",
-  fontSize: 12,
-  fontWeight: 800,
-};
+function techCardBadgeStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    borderRadius: 999,
+    padding: isMobile ? "5px 8px" : "7px 10px",
+    background: "#dcfce7",
+    color: "#166534",
+    fontSize: 12,
+    fontWeight: 800,
+    maxWidth: "100%",
+    boxSizing: "border-box",
+  };
+}
 
-const footerStyle: React.CSSProperties = {
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  gap: 12,
-  flexWrap: "wrap",
-  borderTop: "1px solid #e2e8f0",
-  paddingTop: 14,
-};
+function footerStyleFor(isMobile: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    flexDirection: isMobile ? "column" : "row",
+    justifyContent: "space-between",
+    alignItems: isMobile ? "stretch" : "center",
+    gap: isMobile ? 10 : 12,
+    flexWrap: "wrap",
+    borderTop: "1px solid #e2e8f0",
+    paddingTop: isMobile ? 11 : 14,
+  };
+}
 
 const inputStyle: React.CSSProperties = {
   height: 44,
