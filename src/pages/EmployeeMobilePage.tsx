@@ -84,6 +84,7 @@ export default function EmployeeMobilePage({
   const [defectReason, setDefectReason] = useState("");
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState("");
+  const [batchesExpanded, setBatchesExpanded] = useState(true);
 
   useEffect(() => {
     initEmployeePage();
@@ -823,167 +824,208 @@ export default function EmployeeMobilePage({
 
   return (
     <div style={pageStyle}>
-      <div style={shiftSummaryCardStyle}>
-        <div style={shiftSummaryLeftStyle}>
-          <div style={{ fontSize: 16, color: "#64748b", fontWeight: 900 }}>
-            Смена открыта
-          </div>
-
-          <div
-            style={{
-              marginTop: 6,
-              fontSize: 26,
-              fontWeight: 900,
-              color: "#111827",
-              lineHeight: 1.1,
-            }}
-          >
+      <div style={employeeStripStyle}>
+        <div>
+          <div style={{ fontSize: 15, color: "#64748b", fontWeight: 800 }}>
             {employeeName}
           </div>
-
-          <div style={{ marginTop: 8, color: "#64748b", fontWeight: 900 }}>
-            В работе: {shiftDuration}
+          <div style={{ marginTop: 2, fontSize: 13, color: "#16a34a", fontWeight: 900 }}>
+            Смена открыта
           </div>
         </div>
 
-        <div style={shiftSummaryRightStyle}>
-          <div style={{ fontSize: 14, color: "#64748b", fontWeight: 900 }}>
-            Текущая операция
+        <div style={{ textAlign: "right" }}>
+          <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>
+            В работе
           </div>
-
-          <div
-            style={{
-              marginTop: 8,
-              fontSize: 20,
-              fontWeight: 900,
-              color: activeBatch ? "#1d4ed8" : "#94a3b8",
-              lineHeight: 1.2,
-            }}
-          >
-            {currentOperationText}
+          <div style={{ marginTop: 2, fontSize: 16, color: "#111827", fontWeight: 900 }}>
+            {shiftDuration}
           </div>
-
-          {activeBatch && (
-            <>
-              <div
-                style={{
-                  marginTop: 6,
-                  fontSize: 13,
-                  color: "#64748b",
-                  fontWeight: 800,
-                }}
-              >
-                Пачка {activeBatch.batch_number}
-              </div>
-
-              <button
-                onClick={() => openCloseModal(activeBatch)}
-                style={currentOperationFinishButtonStyle}
-              >
-                Закончить работу
-              </button>
-            </>
-          )}
         </div>
       </div>
 
-      <button onClick={handleOpenScanner} style={scanButtonStyle}>
-        Сканировать QR
-      </button>
+      <div style={currentOperationCardStyle}>
+        <div style={currentOperationTopRowStyle}>
+          <div>
+            <div style={{ fontSize: 13, color: "#64748b", fontWeight: 800 }}>
+              Текущая операция
+            </div>
 
-      <button onClick={togglePause} style={pauseButtonStyle}>
-        Пауза / перерыв
-      </button>
+            <div
+              style={{
+                marginTop: 4,
+                fontSize: 22,
+                fontWeight: 900,
+                color: activeBatch ? "#111827" : "#94a3b8",
+                lineHeight: 1.15,
+              }}
+            >
+              {currentOperationText}
+            </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <StatCard label="Сделано за смену" value={`${shift.total_quantity || 0} шт`} />
-        <StatCard label="Заработано" value={`${Number(shift.total_earned || 0).toFixed(0)} ₽`} />
+            {activeBatch && (
+              <div style={{ marginTop: 4, fontSize: 14, color: "#64748b", fontWeight: 800 }}>
+                Пачка {activeBatch.batch_number}
+              </div>
+            )}
+          </div>
+
+          <div style={activeBatch ? activeStatusStyle : idleStatusStyle}>
+            {activeBatch ? "В работе" : "Свободно"}
+          </div>
+        </div>
+
+        {activeBatch && (
+          <>
+            <div style={currentOperationProgressRowStyle}>
+              <span>
+                Осталось{" "}
+                <b>
+                  {Math.max(
+                    0,
+                    Number(activeBatch.quantity || 0) -
+                      Number(activeBatch.completed_quantity || 0)
+                  )}{" "}
+                  из {Number(activeBatch.quantity || 0)}
+                </b>
+              </span>
+              <span>
+                Сделано <b>{Number(activeBatch.completed_quantity || 0)}</b>
+              </span>
+            </div>
+
+            <button
+              onClick={() => openCloseModal(activeBatch)}
+              style={currentOperationFinishButtonStyle}
+            >
+              Закончить работу
+            </button>
+          </>
+        )}
+      </div>
+
+      <div style={compactStatsGridStyle}>
+        <StatCard
+          label="за смену"
+          value={`${shift.total_quantity || 0} шт`}
+          icon="▣"
+        />
+        <StatCard
+          label="заработано"
+          value={`${Number(shift.total_earned || 0).toFixed(0)} ₽`}
+          icon="₽"
+        />
+        <StatCard
+          label="в работе"
+          value={shiftDuration}
+          icon="◷"
+        />
+      </div>
+
+      <div style={quickActionsStyle}>
+        <button onClick={handleOpenScanner} style={scanButtonStyle}>
+          <span style={actionIconStyle}>▦</span>
+          <span>Сканировать QR</span>
+        </button>
+
+        <button onClick={togglePause} style={pauseButtonStyle}>
+          <span style={actionIconStyle}>Ⅱ</span>
+          <span>Пауза / перерыв</span>
+        </button>
       </div>
 
       <div style={sectionCardStyle}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 10,
-            alignItems: "center",
-          }}
+        <button
+          type="button"
+          onClick={() => setBatchesExpanded((value) => !value)}
+          style={sectionHeaderButtonStyle}
         >
-          <div style={{ fontSize: 20, fontWeight: 900, color: "#111827" }}>
+          <span style={{ fontSize: 18, fontWeight: 900, color: "#111827" }}>
             Мои пачки в работе
-          </div>
+          </span>
 
-          <button onClick={() => loadMyBatches()} style={refreshButtonStyle}>
-            Обновить
-          </button>
-        </div>
+          <span style={sectionHeaderRightStyle}>
+            <span style={countBadgeStyle}>{batches.length}</span>
+            <span style={{ fontSize: 18 }}>{batchesExpanded ? "⌃" : "⌄"}</span>
+          </span>
+        </button>
 
-        {loading && <div style={emptyBoxStyle}>Загружаю пачки...</div>}
+        {batchesExpanded && (
+          <>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
+              <button onClick={() => loadMyBatches()} style={refreshButtonStyle}>
+                Обновить
+              </button>
+            </div>
 
-        {error && (
-          <div
-            style={{
-              ...emptyBoxStyle,
-              background: "#fef2f2",
-              border: "1px solid #fecaca",
-              color: "#991b1b",
-            }}
-          >
-            {error}
-          </div>
-        )}
+            {loading && <div style={emptyBoxStyle}>Загружаю пачки...</div>}
 
-        {!loading && !error && batches.length === 0 && (
-          <div style={emptyBoxStyle}>
-            Пока нет пачек в работе. Нажми «Сканировать QR», чтобы взять пачку.
-          </div>
-        )}
+            {error && (
+              <div
+                style={{
+                  ...emptyBoxStyle,
+                  background: "#fef2f2",
+                  border: "1px solid #fecaca",
+                  color: "#991b1b",
+                }}
+              >
+                {error}
+              </div>
+            )}
 
-        {!loading && !error && batches.length > 0 && (
-          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-            {batches.map((batch) => {
-              const total = Number(batch.quantity || 0);
-              const completed = Number(batch.completed_quantity || 0);
-              const left = Math.max(0, total - completed);
+            {!loading && !error && batches.length === 0 && (
+              <div style={emptyBoxStyle}>
+                Пока нет пачек в работе. Нажми «Сканировать QR», чтобы взять пачку.
+              </div>
+            )}
 
-              return (
-                <div key={batch.id} style={batchCardStyle}>
-                  <div
-                    style={{
-                      fontSize: 20,
-                      fontWeight: 900,
-                      color: "#111827",
-                    }}
-                  >
-                    Пачка {batch.batch_number}
-                  </div>
+            {!loading && !error && batches.length > 0 && (
+              <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                {batches.map((batch) => {
+                  const total = Number(batch.quantity || 0);
+                  const completed = Number(batch.completed_quantity || 0);
+                  const left = Math.max(0, total - completed);
 
-                  <div style={{ color: "#64748b", fontWeight: 700 }}>
-                    {batch.product_name || "Изделие не указано"}
-                  </div>
+                  return (
+                    <div key={batch.id} style={batchCardStyle}>
+                      <div
+                        style={{
+                          fontSize: 18,
+                          fontWeight: 900,
+                          color: "#111827",
+                        }}
+                      >
+                        Пачка {batch.batch_number}
+                      </div>
 
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "1fr 1fr 1fr",
-                      gap: 8,
-                    }}
-                  >
-                    <MiniBox label="Всего" value={`${total}`} />
-                    <MiniBox label="Сделано" value={`${completed}`} />
-                    <MiniBox label="Осталось" value={`${left}`} />
-                  </div>
+                      <div style={{ color: "#64748b", fontWeight: 700, fontSize: 14 }}>
+                        {batch.product_name || "Изделие не указано"}
+                      </div>
 
-                  <button
-                    onClick={() => openCloseModal(batch)}
-                    style={finishButtonStyle}
-                  >
-                    Закончить работу
-                  </button>
-                </div>
-              );
-            })}
-          </div>
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "1fr 1fr 1fr",
+                          gap: 6,
+                        }}
+                      >
+                        <MiniBox label="Всего" value={`${total}`} />
+                        <MiniBox label="Сделано" value={`${completed}`} />
+                        <MiniBox label="Осталось" value={`${left}`} />
+                      </div>
+
+                      <button
+                        onClick={() => openCloseModal(batch)}
+                        style={compactFinishButtonStyle}
+                      >
+                        Закончить работу
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -1363,22 +1405,37 @@ function getShiftDuration(openedAt: string | null) {
   return `${h} ч ${m} мин`;
 }
 
-function StatCard({ label, value }: { label: string; value: string }) {
+function StatCard({
+  label,
+  value,
+  icon,
+}: {
+  label: string;
+  value: string;
+  icon?: string;
+}) {
   return (
     <div style={statCardStyle}>
-      <div style={{ fontSize: 13, color: "#64748b", lineHeight: 1.3 }}>
-        {label}
-      </div>
+      {icon && (
+        <div style={{ fontSize: 18, color: "#64748b", fontWeight: 900 }}>
+          {icon}
+        </div>
+      )}
 
       <div
         style={{
-          marginTop: 8,
-          fontSize: 22,
+          marginTop: icon ? 4 : 0,
+          fontSize: 20,
           fontWeight: 900,
           color: "#111827",
+          whiteSpace: "nowrap",
         }}
       >
         {value}
+      </div>
+
+      <div style={{ marginTop: 2, fontSize: 11, color: "#64748b", lineHeight: 1.25 }}>
+        {label}
       </div>
     </div>
   );
@@ -1396,9 +1453,9 @@ function MiniBox({ label, value }: { label: string; value: string }) {
 const pageStyle: CSSProperties = {
   minHeight: "100vh",
   background: "linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%)",
-  padding: 14,
+  padding: 12,
   display: "grid",
-  gap: 14,
+  gap: 10,
   alignContent: "start",
 };
 
@@ -1451,6 +1508,108 @@ const headerCardStyle: CSSProperties = {
   boxShadow: "0 10px 24px rgba(15, 23, 42, 0.06)",
 };
 
+const employeeStripStyle: CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 18,
+  padding: "10px 12px",
+  border: "1px solid #dbeafe",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+};
+
+const currentOperationCardStyle: CSSProperties = {
+  background: "#eff6ff",
+  borderRadius: 22,
+  padding: 14,
+  border: "1px solid #bfdbfe",
+  display: "grid",
+  gap: 10,
+};
+
+const currentOperationTopRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 12,
+  alignItems: "flex-start",
+};
+
+const currentOperationProgressRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 10,
+  color: "#64748b",
+  fontSize: 13,
+  fontWeight: 800,
+};
+
+const activeStatusStyle: CSSProperties = {
+  flexShrink: 0,
+  borderRadius: 999,
+  padding: "7px 10px",
+  background: "#dbeafe",
+  color: "#1d4ed8",
+  fontSize: 12,
+  fontWeight: 900,
+};
+
+const idleStatusStyle: CSSProperties = {
+  ...activeStatusStyle,
+  background: "#f1f5f9",
+  color: "#64748b",
+};
+
+const compactStatsGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 8,
+};
+
+const quickActionsStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "1fr 1fr",
+  gap: 8,
+};
+
+const actionIconStyle: CSSProperties = {
+  fontSize: 20,
+  lineHeight: 1,
+};
+
+const sectionHeaderButtonStyle: CSSProperties = {
+  width: "100%",
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 10,
+  cursor: "pointer",
+  textAlign: "left",
+};
+
+const sectionHeaderRightStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  color: "#64748b",
+};
+
+const countBadgeStyle: CSSProperties = {
+  minWidth: 28,
+  height: 28,
+  padding: "0 8px",
+  borderRadius: 999,
+  background: "#e2e8f0",
+  color: "#334155",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontWeight: 900,
+  fontSize: 13,
+};
+
 const shiftSummaryCardStyle: CSSProperties = {
   background: "#ffffff",
   borderRadius: 24,
@@ -1486,43 +1645,40 @@ const shiftSummaryRightStyle: CSSProperties = {
   textAlign: "right",
 };
 
-const currentOperationFinishButtonStyle: CSSProperties = {
+const scanButtonStyle: CSSProperties = {
   width: "100%",
-  minHeight: 46,
-  marginTop: 10,
+  minHeight: 66,
   border: "none",
-  borderRadius: 14,
-  background: "#16a34a",
+  borderRadius: 18,
+  background: "#2563eb",
   color: "#ffffff",
   fontSize: 16,
   fontWeight: 900,
   cursor: "pointer",
-};
-
-const scanButtonStyle: CSSProperties = {
-  width: "100%",
-  minHeight: 84,
-  border: "none",
-  borderRadius: 24,
-  background: "#2563eb",
-  color: "#ffffff",
-  fontSize: 22,
-  fontWeight: 900,
-  cursor: "pointer",
-  boxShadow: "0 14px 28px rgba(15, 23, 42, 0.18)",
+  boxShadow: "0 10px 22px rgba(37, 99, 235, 0.18)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  padding: "8px 10px",
 };
 
 const pauseButtonStyle: CSSProperties = {
   width: "100%",
-  minHeight: 70,
+  minHeight: 66,
   border: "none",
-  borderRadius: 22,
+  borderRadius: 18,
   background: "#f59e0b",
   color: "#ffffff",
-  fontSize: 21,
+  fontSize: 16,
   fontWeight: 900,
   cursor: "pointer",
-  boxShadow: "0 14px 28px rgba(245, 158, 11, 0.22)",
+  boxShadow: "0 10px 22px rgba(245, 158, 11, 0.18)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  padding: "8px 10px",
 };
 
 const pausedPageStyle: CSSProperties = {
@@ -1568,7 +1724,7 @@ const resumeButtonStyle: CSSProperties = {
 
 const closeShiftButtonStyle: CSSProperties = {
   width: "100%",
-  minHeight: 76,
+  minHeight: 64,
   border: "none",
   borderRadius: 24,
   background: "#dc2626",
@@ -1581,10 +1737,10 @@ const closeShiftButtonStyle: CSSProperties = {
 
 const sectionCardStyle: CSSProperties = {
   background: "#ffffff",
-  borderRadius: 24,
-  padding: 16,
+  borderRadius: 20,
+  padding: 12,
   border: "1px solid #dbeafe",
-  boxShadow: "0 10px 24px rgba(15, 23, 42, 0.05)",
+  boxShadow: "0 8px 18px rgba(15, 23, 42, 0.05)",
 };
 
 const refreshButtonStyle: CSSProperties = {
@@ -1599,11 +1755,11 @@ const refreshButtonStyle: CSSProperties = {
 
 const batchCardStyle: CSSProperties = {
   border: "1px solid #dbeafe",
-  borderRadius: 20,
-  padding: 14,
+  borderRadius: 18,
+  padding: 12,
   background: "#f8fbff",
   display: "grid",
-  gap: 10,
+  gap: 8,
 };
 
 const finishButtonStyle: CSSProperties = {
@@ -1614,6 +1770,18 @@ const finishButtonStyle: CSSProperties = {
   background: "#16a34a",
   color: "#ffffff",
   fontSize: 18,
+  fontWeight: 900,
+  cursor: "pointer",
+};
+
+const compactFinishButtonStyle: CSSProperties = {
+  width: "100%",
+  minHeight: 44,
+  border: "none",
+  borderRadius: 14,
+  background: "#16a34a",
+  color: "#ffffff",
+  fontSize: 15,
   fontWeight: 900,
   cursor: "pointer",
 };
@@ -1630,17 +1798,19 @@ const emptyBoxStyle: CSSProperties = {
 };
 
 const statCardStyle: CSSProperties = {
+  minWidth: 0,
   background: "#ffffff",
-  borderRadius: 20,
-  padding: 14,
+  borderRadius: 18,
+  padding: "10px 8px",
   border: "1px solid #dbeafe",
-  boxShadow: "0 8px 18px rgba(15, 23, 42, 0.04)",
+  boxShadow: "0 6px 14px rgba(15, 23, 42, 0.04)",
+  textAlign: "center",
 };
 
 const miniBoxStyle: CSSProperties = {
   background: "#ffffff",
-  borderRadius: 14,
-  padding: 10,
+  borderRadius: 12,
+  padding: 8,
   textAlign: "center",
   border: "1px solid #e5e7eb",
 };
