@@ -168,23 +168,54 @@ export default function CustomerShipmentModal({
 
       if (deleteOldMovementsError) throw deleteOldMovementsError;
 
+      const legacyProductIds = Array.from(
+        new Set(
+          shipmentItems
+            .filter((item) => item.item_type === "product" && item.product_id)
+            .map((item) => item.product_id as string),
+        ),
+      );
+      const resaleBySourceId = new Map<string, string>();
+
+      if (legacyProductIds.length > 0) {
+        const { data: migratedItems, error: migratedItemsError } = await supabase
+          .from("items")
+          .select("id, source_id")
+          .eq("item_type", "resale_product")
+          .eq("is_active", true)
+          .in("source_id", legacyProductIds);
+
+        if (migratedItemsError) throw migratedItemsError;
+        ((migratedItems || []) as Array<{ id: string; source_id: string | null }>).forEach((item) => {
+          if (item.source_id) resaleBySourceId.set(item.source_id, item.id);
+        });
+      }
+
       const { error: movementsError } = await supabase
         .from("stock_movements")
         .insert(
-          shipmentItems.map((item) => ({
-            movement_type: "outgoing",
-            source_document_type: "customer_shipment",
-            source_document_id: currentShipment.id,
-            customer_order_id: currentShipment.customer_order_id,
-            customer_shipment_id: currentShipment.id,
-            item_type: item.item_type,
-            item_id: item.item_type === "resale_product" ? item.item_id : null,
-            product_id: item.product_id,
-            material_id: item.material_id,
-            consumable_id: item.consumable_id,
-            quantity: -Math.abs(Number(item.quantity || 0)),
-            created_at: now,
-          })),
+          shipmentItems.map((item) => {
+            const migratedResaleItemId =
+              item.item_type === "product" && item.product_id
+                ? resaleBySourceId.get(item.product_id) || null
+                : null;
+            const itemType = migratedResaleItemId ? "resale_product" : item.item_type;
+
+            return {
+              movement_type: "outgoing",
+              source_document_type: "customer_shipment",
+              source_document_id: currentShipment.id,
+              customer_order_id: currentShipment.customer_order_id,
+              customer_shipment_id: currentShipment.id,
+              item_type: itemType,
+              item_id: itemType === "resale_product" ? migratedResaleItemId || item.item_id : null,
+              product_id: migratedResaleItemId ? null : item.product_id,
+              material_id: item.material_id,
+              consumable_id: item.consumable_id,
+              quantity: -Math.abs(Number(item.quantity || 0)),
+              created_at: now,
+            };
+          }),
         );
 
       if (movementsError) throw movementsError;

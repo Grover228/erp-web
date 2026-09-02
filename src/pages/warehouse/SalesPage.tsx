@@ -29,6 +29,7 @@ type ResaleProduct = {
   name: string | null;
   article: string | null;
   default_price: number | null;
+  source_id: string | null;
 };
 
 type ImportPreviewRow = {
@@ -141,13 +142,18 @@ export default function SalesPage() {
         counterpartiesResult,
         statusesResult,
       ] = await Promise.all([
-        supabase.from("products").select("*").order("name", { ascending: true }),
+        supabase
+          .from("products")
+          .select("*")
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
         supabase.from("materials").select("*").order("name", { ascending: true }),
         supabase.from("consumables").select("*").order("name", { ascending: true }),
         supabase
           .from("items")
-          .select("id, name, article, default_price")
+          .select("id, name, article, default_price, source_id")
           .eq("item_type", "resale_product")
+          .eq("is_active", true)
           .order("name", { ascending: true }),
         supabase
           .from("counterparties")
