@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../supabase";
+import ConsumablesImportModal, {
+  type ConsumableImportPayload,
+} from "./ConsumablesImportModal";
 
 type ConsumableItem = {
   id: string;
@@ -79,6 +83,8 @@ export default function ConsumablesDirectory() {
   const [transferItems, setTransferItems] = useState<ConsumableItem[]>([]);
   const [transferMode, setTransferMode] = useState<"resale" | "asset">("resale");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importSaving, setImportSaving] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [viewItemId, setViewItemId] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -767,6 +773,111 @@ export default function ConsumablesDirectory() {
 
   const viewItem = items.find((item) => item.id === viewItemId) || null;
 
+  function exportConsumablesToExcel() {
+    if (filteredItems.length === 0) {
+      setError("Нет расходников для выгрузки в Excel.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+
+    const exportRows = filteredItems.map((item) => {
+      const unit = units.find((row) => row.id === item.unit_id);
+
+      return {
+        ID: item.id,
+        Название: item.name,
+        Артикул: item.article || "",
+        Категория: getCategoryName(item.category_id) === "—"
+          ? ""
+          : getCategoryName(item.category_id),
+        Цвет: getColorName(item.color_id) === "—"
+          ? ""
+          : getColorName(item.color_id),
+        "Единица измерения": unit?.name || "",
+        "Сокращение единицы": unit?.short_name || "",
+        Состав: item.composition || "",
+        Размер: item.size || "",
+        Поставщик: item.supplier_name || "",
+        "Цена по умолчанию": item.default_price,
+        "Минимальный остаток": item.min_stock,
+        Комментарий: item.comment || "",
+        Активность: item.is_active ? "Активен" : "Неактивен",
+        "Дата создания": item.created_at
+          ? new Date(item.created_at).toLocaleString("ru-RU")
+          : "",
+      };
+    });
+
+    const worksheet = XLSX.utils.json_to_sheet(exportRows);
+
+    worksheet["!cols"] = [
+      { wch: 38 },
+      { wch: 34 },
+      { wch: 22 },
+      { wch: 24 },
+      { wch: 20 },
+      { wch: 24 },
+      { wch: 22 },
+      { wch: 24 },
+      { wch: 18 },
+      { wch: 26 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 36 },
+      { wch: 16 },
+      { wch: 22 },
+    ];
+
+    worksheet["!autofilter"] = {
+      ref: worksheet["!ref"] || "A1:O1",
+    };
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Расходники");
+
+    const date = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(workbook, `Расходники_${date}.xlsx`);
+  }
+
+  async function handleImportApply(rows: ConsumableImportPayload[]) {
+    if (rows.length === 0 || importSaving) return;
+
+    try {
+      setImportSaving(true);
+      setError("");
+      setMessage("");
+
+      const { data, error } = await supabase
+        .from("consumables")
+        .insert(rows)
+        .select("*");
+
+      if (error) throw error;
+
+      const insertedItems = (data as ConsumableItem[]) || [];
+
+      setIsImportOpen(false);
+      await loadItems();
+
+      if (insertedItems[0]?.id) {
+        setSelectedItemId(insertedItems[0].id);
+      }
+
+      setMessage(`Добавлено расходников: ${insertedItems.length}.`);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось импортировать расходники",
+      );
+      throw error;
+    } finally {
+      setImportSaving(false);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={sectionStyle}>
@@ -806,6 +917,28 @@ export default function ConsumablesDirectory() {
               style={primaryButtonStyle}
             >
               Добавить новый расходник
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setError("");
+                setMessage("");
+                setIsImportOpen(true);
+              }}
+              style={importButtonStyle}
+              disabled={loading}
+            >
+              📥 Импортировать Excel
+            </button>
+
+            <button
+              type="button"
+              onClick={exportConsumablesToExcel}
+              style={exportButtonStyle}
+              disabled={loading || filteredItems.length === 0}
+            >
+              📤 Выгрузить Excel
             </button>
 
             <input
@@ -1797,6 +1930,17 @@ export default function ConsumablesDirectory() {
           </div>
         </div>
       )}
+
+      <ConsumablesImportModal
+        open={isImportOpen}
+        items={items}
+        categories={categories}
+        colors={colors}
+        units={units}
+        saving={importSaving}
+        onClose={() => setIsImportOpen(false)}
+        onApply={handleImportApply}
+      />
     </div>
   );
 }
@@ -2095,6 +2239,26 @@ const secondaryButtonStyle: React.CSSProperties = {
   cursor: "pointer",
   fontWeight: 600,
   color: "#0f172a",
+};
+
+const exportButtonStyle: React.CSSProperties = {
+  border: "1px solid #86efac",
+  background: "#f0fdf4",
+  color: "#15803d",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const importButtonStyle: React.CSSProperties = {
+  border: "1px solid #93c5fd",
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
 };
 
 const linkButtonStyle: React.CSSProperties = {
