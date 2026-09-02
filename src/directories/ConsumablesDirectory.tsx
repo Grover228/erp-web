@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabase";
+import ConsumablesImportModal, {
+  type ConsumableImportPayload,
+} from "./ConsumablesImportModal";
 
 type ConsumableItem = {
   id: string;
@@ -80,6 +83,8 @@ export default function ConsumablesDirectory() {
   const [transferItems, setTransferItems] = useState<ConsumableItem[]>([]);
   const [transferMode, setTransferMode] = useState<"resale" | "asset">("resale");
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [importSaving, setImportSaving] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [viewItemId, setViewItemId] = useState<string | null>(null);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -836,6 +841,43 @@ export default function ConsumablesDirectory() {
     XLSX.writeFile(workbook, `Расходники_${date}.xlsx`);
   }
 
+  async function handleImportApply(rows: ConsumableImportPayload[]) {
+    if (rows.length === 0 || importSaving) return;
+
+    try {
+      setImportSaving(true);
+      setError("");
+      setMessage("");
+
+      const { data, error } = await supabase
+        .from("consumables")
+        .insert(rows)
+        .select("*");
+
+      if (error) throw error;
+
+      const insertedItems = (data as ConsumableItem[]) || [];
+
+      setIsImportOpen(false);
+      await loadItems();
+
+      if (insertedItems[0]?.id) {
+        setSelectedItemId(insertedItems[0].id);
+      }
+
+      setMessage(`Добавлено расходников: ${insertedItems.length}.`);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Не удалось импортировать расходники",
+      );
+      throw error;
+    } finally {
+      setImportSaving(false);
+    }
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <div style={sectionStyle}>
@@ -875,6 +917,19 @@ export default function ConsumablesDirectory() {
               style={primaryButtonStyle}
             >
               Добавить новый расходник
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setError("");
+                setMessage("");
+                setIsImportOpen(true);
+              }}
+              style={importButtonStyle}
+              disabled={loading}
+            >
+              📥 Импортировать Excel
             </button>
 
             <button
@@ -1875,6 +1930,17 @@ export default function ConsumablesDirectory() {
           </div>
         </div>
       )}
+
+      <ConsumablesImportModal
+        open={isImportOpen}
+        items={items}
+        categories={categories}
+        colors={colors}
+        units={units}
+        saving={importSaving}
+        onClose={() => setIsImportOpen(false)}
+        onApply={handleImportApply}
+      />
     </div>
   );
 }
@@ -2179,6 +2245,16 @@ const exportButtonStyle: React.CSSProperties = {
   border: "1px solid #86efac",
   background: "#f0fdf4",
   color: "#15803d",
+  borderRadius: 12,
+  padding: "11px 14px",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const importButtonStyle: React.CSSProperties = {
+  border: "1px solid #93c5fd",
+  background: "#eff6ff",
+  color: "#1d4ed8",
   borderRadius: 12,
   padding: "11px 14px",
   cursor: "pointer",
