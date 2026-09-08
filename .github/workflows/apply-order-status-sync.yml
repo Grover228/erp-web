@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Apply exact status sync patch
+      - name: Apply exact customer-order status sync patch
         run: node scripts/fix-order-status-sync.cjs
       - name: Verify build
         run: npm ci && npm run build
