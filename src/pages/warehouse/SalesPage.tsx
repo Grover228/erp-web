@@ -339,13 +339,18 @@ export default function SalesPage() {
           const { data: legacyProducts, error: legacyProductsError } = await supabase
             .from("products")
             .select("id, name, article, is_active")
-            .eq("is_active", true)
-            .in("article", missingArticles);
+            .eq("is_active", true);
 
           if (legacyProductsError) throw legacyProductsError;
 
+          const missingArticleKeys = new Set(
+            missingArticles.map((article) => article.trim().toLowerCase()),
+          );
+
           ((legacyProducts || []) as any[]).forEach((product) => {
             const key = String(product.article ?? "").trim().toLowerCase();
+            if (!key || !missingArticleKeys.has(key)) return;
+
             const list = foundByArticle.get(key) || [];
             list.push({
               id: product.id,
