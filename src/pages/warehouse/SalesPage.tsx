@@ -331,23 +331,14 @@ export default function SalesPage() {
           foundByArticle.set(key, list);
         });
 
-        const missingArticles = articles.filter(
-          (article) => !foundByArticle.has(article.trim().toLowerCase()),
+        const missingArticleKeys = new Set(
+          articles
+            .map((article) => article.trim().toLowerCase())
+            .filter((article) => !foundByArticle.has(article)),
         );
 
-        if (missingArticles.length > 0) {
-          const { data: legacyProducts, error: legacyProductsError } = await supabase
-            .from("products")
-            .select("id, name, article, is_active")
-            .eq("is_active", true);
-
-          if (legacyProductsError) throw legacyProductsError;
-
-          const missingArticleKeys = new Set(
-            missingArticles.map((article) => article.trim().toLowerCase()),
-          );
-
-          ((legacyProducts || []) as any[]).forEach((product) => {
+        if (missingArticleKeys.size > 0) {
+          products.forEach((product) => {
             const key = String(product.article ?? "").trim().toLowerCase();
             if (!key || !missingArticleKeys.has(key)) return;
 
@@ -357,7 +348,6 @@ export default function SalesPage() {
               item_type: "product",
               name: product.name,
               article: product.article,
-              is_active: product.is_active,
               source_table: "products",
               source_id: product.id,
             });
