@@ -15,11 +15,20 @@ const oldPost = `      if (currentShipment.customer_order_id) {
       }`;
 
 const newPost = `      if (currentShipment.customer_order_id) {
+        const { data: orderStatusCategory, error: orderStatusCategoryError } = await supabase
+          .from("status_categories")
+          .select("id")
+          .eq("code", "customer_orders")
+          .single();
+
+        if (orderStatusCategoryError) throw orderStatusCategoryError;
+
         const { data: completedStatus, error: completedStatusError } = await supabase
           .from("statuses")
           .select("id")
+          .eq("category_id", orderStatusCategory.id)
           .eq("code", "completed")
-          .maybeSingle();
+          .single();
 
         if (completedStatusError) throw completedStatusError;
 
@@ -27,7 +36,7 @@ const newPost = `      if (currentShipment.customer_order_id) {
           .from("customer_orders")
           .update({
             status: "completed",
-            status_id: completedStatus?.id || null,
+            status_id: completedStatus.id,
             updated_at: now,
           })
           .eq("id", currentShipment.customer_order_id);
@@ -48,19 +57,28 @@ const oldUnpost = `      if (currentShipment.customer_order_id) {
       }`;
 
 const newUnpost = `      if (currentShipment.customer_order_id) {
-        const { data: orderedStatus, error: orderedStatusError } = await supabase
+        const { data: orderStatusCategory, error: orderStatusCategoryError } = await supabase
+          .from("status_categories")
+          .select("id")
+          .eq("code", "customer_orders")
+          .single();
+
+        if (orderStatusCategoryError) throw orderStatusCategoryError;
+
+        const { data: draftStatus, error: draftStatusError } = await supabase
           .from("statuses")
           .select("id")
-          .eq("code", "ordered")
-          .maybeSingle();
+          .eq("category_id", orderStatusCategory.id)
+          .eq("code", "draft")
+          .single();
 
-        if (orderedStatusError) throw orderedStatusError;
+        if (draftStatusError) throw draftStatusError;
 
         const { error: orderUpdateError } = await supabase
           .from("customer_orders")
           .update({
-            status: "ordered",
-            status_id: orderedStatus?.id || null,
+            status: "draft",
+            status_id: draftStatus.id,
             updated_at: now,
           })
           .eq("id", currentShipment.customer_order_id);
@@ -75,4 +93,4 @@ for (const [label, oldBlock, newBlock] of [['post', oldPost, newPost], ['unpost'
 }
 
 fs.writeFileSync(file, text, 'utf8');
-console.log('Customer order status/status_id sync patched.');
+console.log('Customer order status/status_id sync patched with customer_orders category.');
