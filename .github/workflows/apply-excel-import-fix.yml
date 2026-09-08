@@ -1,4 +1,4 @@
-name: Apply Excel import normalized fallback fix
+name: Apply Excel import local directory fallback fix
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Apply exact normalized patch
+      - name: Apply exact local-directory patch
         run: node scripts/fix-excel-import-product-fallback.cjs
       - name: Verify build
         run: npm ci && npm run build
@@ -28,5 +28,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add src/pages/warehouse/SalesPage.tsx
-          git commit -m "fix: normalize Excel legacy product matching" || exit 0
+          git commit -m "fix: use loaded products for Excel import fallback" || exit 0
           git push origin main
