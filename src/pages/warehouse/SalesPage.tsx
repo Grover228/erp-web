@@ -331,6 +331,35 @@ export default function SalesPage() {
           foundByArticle.set(key, list);
         });
 
+        const missingArticles = articles.filter(
+          (article) => !foundByArticle.has(article.trim().toLowerCase()),
+        );
+
+        if (missingArticles.length > 0) {
+          const { data: legacyProducts, error: legacyProductsError } = await supabase
+            .from("products")
+            .select("id, name, article, is_active")
+            .eq("is_active", true)
+            .in("article", missingArticles);
+
+          if (legacyProductsError) throw legacyProductsError;
+
+          ((legacyProducts || []) as any[]).forEach((product) => {
+            const key = String(product.article ?? "").trim().toLowerCase();
+            const list = foundByArticle.get(key) || [];
+            list.push({
+              id: product.id,
+              item_type: "product",
+              name: product.name,
+              article: product.article,
+              is_active: product.is_active,
+              source_table: "products",
+              source_id: product.id,
+            });
+            foundByArticle.set(key, list);
+          });
+        }
+
         rows.forEach((row) => {
           if (row.status === "error") return;
 
