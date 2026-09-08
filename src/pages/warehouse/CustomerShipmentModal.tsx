@@ -245,10 +245,19 @@ export default function CustomerShipmentModal({
       if (shipmentUpdateError) throw shipmentUpdateError;
 
       if (currentShipment.customer_order_id) {
+        const { data: completedStatus, error: completedStatusError } = await supabase
+          .from("statuses")
+          .select("id")
+          .eq("code", "completed")
+          .maybeSingle();
+
+        if (completedStatusError) throw completedStatusError;
+
         const { error: orderUpdateError } = await supabase
           .from("customer_orders")
           .update({
             status: "completed",
+            status_id: completedStatus?.id || null,
             updated_at: now,
           })
           .eq("id", currentShipment.customer_order_id);
@@ -304,10 +313,19 @@ export default function CustomerShipmentModal({
       if (shipmentUpdateError) throw shipmentUpdateError;
 
       if (currentShipment.customer_order_id) {
+        const { data: orderedStatus, error: orderedStatusError } = await supabase
+          .from("statuses")
+          .select("id")
+          .eq("code", "ordered")
+          .maybeSingle();
+
+        if (orderedStatusError) throw orderedStatusError;
+
         const { error: orderUpdateError } = await supabase
           .from("customer_orders")
           .update({
             status: "ordered",
+            status_id: orderedStatus?.id || null,
             updated_at: now,
           })
           .eq("id", currentShipment.customer_order_id);
