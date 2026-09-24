@@ -523,6 +523,12 @@ export default function Production({
         }
 
         if (allAccounted) {
+          const goodQuantity = orderBatches.reduce(
+            (sum, batch) => sum + Number(batch.completed_quantity || 0),
+            0,
+          );
+          await assertProductionOrderStockReceived(order.id, goodQuantity);
+
           const { error: closeOrderError } = await supabase
             .from("production_orders")
             .update({ status: "done" })
@@ -1641,6 +1647,30 @@ export default function Production({
     if (movementsError) throw movementsError;
   }
 
+  async function assertProductionOrderStockReceived(
+    orderId: string,
+    goodQuantity: number,
+  ) {
+    const { data: receipts, error: receiptsError } = await supabase
+      .from("stock_movements")
+      .select("quantity")
+      .eq("production_order_id", orderId)
+      .eq("movement_type", "production_receipt")
+      .eq("item_type", "product");
+
+    if (receiptsError) throw receiptsError;
+
+    const receivedQuantity = (receipts || []).reduce(
+      (sum, movement) => sum + Number(movement.quantity || 0),
+      0,
+    );
+    if (receivedQuantity !== goodQuantity) {
+      throw new Error(
+        `Заказ не закрыт: на склад поступило ${receivedQuantity} из ${goodQuantity} годных изделий. Проверь движения по завершённым QR-пачкам.`,
+      );
+    }
+  }
+
   async function isProductionOrderFullyDone(orderId: string, orderQuantity: number) {
     const { data: freshOperations, error: freshOperationsError } = await supabase
       .from("production_order_operations")
@@ -2142,6 +2172,12 @@ export default function Production({
       }
 
       if (allBatchesDone) {
+        const goodQuantity = refreshedBatches.reduce(
+          (sum, item) => sum + Number(item.completed_quantity || 0),
+          0,
+        );
+        await assertProductionOrderStockReceived(order.id, goodQuantity);
+
         const { error: doneOrderError } = await supabase
           .from("production_orders")
           .update({

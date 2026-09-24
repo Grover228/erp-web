@@ -1,0 +1,32 @@
+name: Apply customer order status sync fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-order-status-sync.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply exact customer-order status sync patch
+        run: node scripts/fix-order-status-sync.cjs
+      - name: Verify build
+        run: npm ci && npm run build
+      - name: Commit source fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pages/warehouse/CustomerShipmentModal.tsx
+          git commit -m "fix: keep customer order status fields in sync" || exit 0
+          git push origin main
