@@ -146,6 +146,26 @@ export default function CustomerShipmentModal({
     })} ₽`;
   }
 
+  async function getCustomerOrderStatusId(code: "shipped" | "draft") {
+    const { data: category, error: categoryError } = await supabase
+      .from("status_categories")
+      .select("id")
+      .eq("code", "customer_orders")
+      .single();
+
+    if (categoryError) throw categoryError;
+
+    const { data: status, error: statusError } = await supabase
+      .from("statuses")
+      .select("id")
+      .eq("category_id", category.id)
+      .eq("code", code)
+      .single();
+
+    if (statusError) throw statusError;
+    return status.id;
+  }
+
   async function postShipment() {
     if (currentShipment.status === "posted") return;
 
@@ -159,6 +179,9 @@ export default function CustomerShipmentModal({
       setError("");
 
       const now = new Date().toISOString();
+      const orderStatusId = currentShipment.customer_order_id
+        ? await getCustomerOrderStatusId("shipped")
+        : null;
 
       const { error: deleteOldMovementsError } = await supabase
         .from("stock_movements")
@@ -245,19 +268,11 @@ export default function CustomerShipmentModal({
       if (shipmentUpdateError) throw shipmentUpdateError;
 
       if (currentShipment.customer_order_id) {
-        const { data: completedStatus, error: completedStatusError } = await supabase
-          .from("statuses")
-          .select("id")
-          .eq("code", "completed")
-          .maybeSingle();
-
-        if (completedStatusError) throw completedStatusError;
-
         const { error: orderUpdateError } = await supabase
           .from("customer_orders")
           .update({
-            status: "completed",
-            status_id: completedStatus?.id || null,
+            status: "shipped",
+            status_id: orderStatusId,
             updated_at: now,
           })
           .eq("id", currentShipment.customer_order_id);
@@ -268,7 +283,13 @@ export default function CustomerShipmentModal({
       setCurrentShipment((prev) => ({ ...prev, status: "posted" }));
       onSaved?.();
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Ошибка проведения отгрузки");
+      setError(
+        error instanceof Error
+          ? error.message
+          : typeof error === "object" && error !== null && "message" in error
+            ? String(error.message)
+            : "Ошибка проведения отгрузки",
+      );
     } finally {
       setPosting(false);
     }
@@ -293,6 +314,9 @@ export default function CustomerShipmentModal({
       setError("");
 
       const now = new Date().toISOString();
+      const orderStatusId = currentShipment.customer_order_id
+        ? await getCustomerOrderStatusId("draft")
+        : null;
 
       const { error: movementsError } = await supabase
         .from("stock_movements")
@@ -313,19 +337,11 @@ export default function CustomerShipmentModal({
       if (shipmentUpdateError) throw shipmentUpdateError;
 
       if (currentShipment.customer_order_id) {
-        const { data: orderedStatus, error: orderedStatusError } = await supabase
-          .from("statuses")
-          .select("id")
-          .eq("code", "ordered")
-          .maybeSingle();
-
-        if (orderedStatusError) throw orderedStatusError;
-
         const { error: orderUpdateError } = await supabase
           .from("customer_orders")
           .update({
-            status: "ordered",
-            status_id: orderedStatus?.id || null,
+            status: "draft",
+            status_id: orderStatusId,
             updated_at: now,
           })
           .eq("id", currentShipment.customer_order_id);
