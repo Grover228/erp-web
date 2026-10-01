@@ -211,10 +211,10 @@ class WakeWordService : Service(), RecognitionListener {
                 .setPackage(packageName)
         )
 
-        if (shellConfig.wakeTarget == PwaConfig.TARGET_SYSTEM_ASSISTANT) {
-            handOffToSystemAssistant(shellConfig)
-        } else {
-            runPwaWake(shellConfig)
+        when (shellConfig.wakeTarget) {
+            PwaConfig.TARGET_CHATGPT_DIRECT -> handOffToChatGptDirect(shellConfig)
+            PwaConfig.TARGET_SYSTEM_ASSISTANT -> handOffToSystemAssistant(shellConfig)
+            else -> runPwaWake(shellConfig)
         }
 
         // Подтягиваем актуальную удалённую конфигурацию уже для следующего пробуждения.
@@ -249,7 +249,7 @@ class WakeWordService : Service(), RecognitionListener {
         )
     }
 
-    private fun handOffToSystemAssistant(shellConfig: ShellConfig) {
+    private fun prepareAssistantHandoff(message: String) {
         assistantHandoffActive = true
         assistantRecordingSeen = false
         assistantSilentPolls = 0
@@ -258,12 +258,47 @@ class WakeWordService : Service(), RecognitionListener {
         tts?.stop()
         stopWakeDetector()
 
-        updateNotification("Передаю микрофон ChatGPT…")
-        sendStateBroadcast(STATE_HANDOFF, "Открываю ChatGPT Voice")
+        updateNotification("Освобождаю микрофон для ChatGPT…")
+        sendStateBroadcast(STATE_HANDOFF, message)
+    }
+
+    private fun handOffToChatGptDirect(shellConfig: ShellConfig) {
+        prepareAssistantHandoff("Открываю ChatGPT Voice напрямую")
+
+        handler.postDelayed(
+            { launchChatGptVoice(shellConfig) },
+            ASSISTANT_LAUNCH_DELAY_MS
+        )
+    }
+
+    private fun handOffToSystemAssistant(shellConfig: ShellConfig) {
+        prepareAssistantHandoff("Открываю системный голосовой помощник")
 
         handler.postDelayed(
             { launchSystemAssistantVoiceCommand() },
             ASSISTANT_LAUNCH_DELAY_MS
+        )
+    }
+
+    private fun launchChatGptVoice(shellConfig: ShellConfig) {
+        val result = ChatGptLauncher.launch(this, shellConfig)
+
+        if (!result.success) {
+            updateNotification("ChatGPT Voice не удалось открыть")
+            sendStateBroadcast(
+                STATE_ERROR,
+                "Не удалось открыть ChatGPT Voice: " + result.detail
+            )
+            finishAssistantHandoff()
+            return
+        }
+
+        updateNotification(
+            if (result.usedFallback) {
+                "ChatGPT Voice • fallback deeplink"
+            } else {
+                "ChatGPT Voice • прямой запуск"
+            }
         )
 
         handler.postDelayed(
@@ -296,6 +331,10 @@ class WakeWordService : Service(), RecognitionListener {
         try {
             startActivity(voiceIntent)
             updateNotification("Команда передана системному помощнику")
+            handler.postDelayed(
+                { monitorAssistantMicrophone() },
+                ASSISTANT_FIRST_CHECK_DELAY_MS
+            )
         } catch (_: Throwable) {
             updateNotification("Системный помощник не запустился")
             sendStateBroadcast(
@@ -483,7 +522,7 @@ class WakeWordService : Service(), RecognitionListener {
         private const val SAMPLE_RATE = 16000.0f
         private const val WAKE_DEBOUNCE_MS = 3000L
 
-        private const val ASSISTANT_LAUNCH_DELAY_MS = 300L
+        private const val ASSISTANT_LAUNCH_DELAY_MS = 450L
         private const val ASSISTANT_FIRST_CHECK_DELAY_MS = 3500L
         private const val ASSISTANT_POLL_INTERVAL_MS = 1500L
         private const val ASSISTANT_RECORDING_START_TIMEOUT_MS = 15000L
