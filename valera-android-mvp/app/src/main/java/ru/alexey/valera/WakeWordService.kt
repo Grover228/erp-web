@@ -99,7 +99,7 @@ class WakeWordService : Service(), RecognitionListener {
         if (modelLoading || model != null) return
 
         modelLoading = true
-        LibVosk.setLogLevel(LogLevel.WARN)
+        LibVosk.setLogLevel(LogLevel.INFO)
         updateNotification("Готовлю офлайн-модель…")
 
         StorageService.unpack(
