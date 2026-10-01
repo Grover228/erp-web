@@ -49,6 +49,14 @@ class MainActivity : Activity() {
                             refreshButton()
                         }
 
+                        WakeWordService.STATE_HANDOFF -> {
+                            orb.setState(ValeraOrbView.State.AWAKE)
+                            status.text = intent.getStringExtra(
+                                WakeWordService.EXTRA_MESSAGE
+                            ) ?: "Открываю ChatGPT Voice"
+                            modeText.text = "Микрофон передан системному помощнику"
+                        }
+
                         WakeWordService.STATE_ERROR -> {
                             orb.setState(ValeraOrbView.State.WAITING)
                             status.text = intent.getStringExtra(
@@ -83,7 +91,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.4.0 • локальный wake-word • PWA shell"
+            text = "Версия 0.5.0 • локальный wake-word • системный помощник"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -191,7 +199,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.4.0 • локальный wake-word • PWA shell"
+        modeText.text = "Версия 0.5.0 • локальный wake-word • системный помощник"
         refreshButton()
     }
 
@@ -201,18 +209,24 @@ class MainActivity : Activity() {
 
     private fun refreshFromStoredState() {
         val shell = PwaConfig.cached(this)
-        val pwaState =
-            if (!shell.assistantUrl.isNullOrBlank()) "PWA привязано"
-            else "PWA ждёт адрес"
+
+        val targetState =
+            if (shell.wakeTarget == PwaConfig.TARGET_SYSTEM_ASSISTANT) {
+                "ChatGPT • системный помощник"
+            } else if (!shell.assistantUrl.isNullOrBlank()) {
+                "ERP PWA"
+            } else {
+                "PWA ждёт адрес"
+            }
 
         if (isServiceMarkedRunning()) {
             orb.setState(ValeraOrbView.State.LISTENING)
             status.text = "Скажи «Валера»"
-            modeText.text = "Локальный wake-word • " + pwaState
+            modeText.text = "Локальный wake-word • " + targetState
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.4.0 • " + pwaState
+            modeText.text = "Версия 0.5.0 • " + targetState
         }
         refreshButton()
     }
