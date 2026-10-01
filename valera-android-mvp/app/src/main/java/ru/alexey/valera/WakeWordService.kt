@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
@@ -31,6 +32,11 @@ class WakeWordService : Service(), RecognitionListener {
     private var modelLoading = false
     private var lastWakeAt = 0L
 
+    private var assistantHandoffActive = false
+    private var assistantRecordingSeen = false
+    private var assistantSilentPolls = 0
+    private var assistantHandoffStartedAt = 0L
+
     override fun onCreate() {
         super.onCreate()
 
@@ -53,7 +59,11 @@ class WakeWordService : Service(), RecognitionListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (model == null && !modelLoading) {
             initOfflineWakeWord()
-        } else if (model != null && speechService == null) {
+        } else if (
+            model != null &&
+            speechService == null &&
+            !assistantHandoffActive
+        ) {
             startContinuousListening()
         }
         return START_STICKY
@@ -62,9 +72,7 @@ class WakeWordService : Service(), RecognitionListener {
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
 
-        speechService?.stop()
-        speechService?.shutdown()
-        speechService = null
+        stopWakeDetector()
 
         model?.close()
         model = null
@@ -111,7 +119,10 @@ class WakeWordService : Service(), RecognitionListener {
             { unpackedModel ->
                 modelLoading = false
                 model = unpackedModel
-                startContinuousListening()
+
+                if (!assistantHandoffActive) {
+                    startContinuousListening()
+                }
             },
             { exception ->
                 modelLoading = false
@@ -126,7 +137,7 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun startContinuousListening() {
-        if (speechService != null) return
+        if (speechService != null || assistantHandoffActive) return
 
         val currentModel = model ?: return
 
@@ -153,8 +164,14 @@ class WakeWordService : Service(), RecognitionListener {
         }
     }
 
+    private fun stopWakeDetector() {
+        speechService?.stop()
+        speechService?.shutdown()
+        speechService = null
+    }
+
     private fun inspectHypothesis(hypothesis: String?) {
-        if (hypothesis.isNullOrBlank()) return
+        if (hypothesis.isNullOrBlank() || assistantHandoffActive) return
 
         val phrase = try {
             val json = JSONObject(hypothesis)
@@ -179,22 +196,38 @@ class WakeWordService : Service(), RecognitionListener {
 
     private fun onWakeDetected() {
         val now = System.currentTimeMillis()
-        if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
-        lastWakeAt = now
+        if (
+            assistantHandoffActive ||
+            now - lastWakeAt < WAKE_DEBOUNCE_MS
+        ) {
+            return
+        }
 
+        lastWakeAt = now
         val shellConfig = PwaConfig.cached(this)
 
+        sendBroadcast(
+            Intent(ACTION_WAKE_DETECTED)
+                .setPackage(packageName)
+        )
+
+        if (shellConfig.wakeTarget == PwaConfig.TARGET_SYSTEM_ASSISTANT) {
+            handOffToSystemAssistant(shellConfig)
+        } else {
+            runPwaWake(shellConfig)
+        }
+
+        // Подтягиваем актуальную удалённую конфигурацию уже для следующего пробуждения.
+        PwaConfig.refresh(this)
+    }
+
+    private fun runPwaWake(shellConfig: ShellConfig) {
         updateNotification(
             if (shellConfig.openPwaOnWake && !shellConfig.assistantUrl.isNullOrBlank()) {
                 "Открываю Валеру в ERP…"
             } else {
                 "Услышал «Валера»"
             }
-        )
-
-        sendBroadcast(
-            Intent(ACTION_WAKE_DETECTED)
-                .setPackage(packageName)
         )
 
         if (shellConfig.speakOnWake) {
@@ -213,6 +246,112 @@ class WakeWordService : Service(), RecognitionListener {
         handler.postDelayed(
             { updateNotification("Офлайн • жду «Валера»") },
             2200L
+        )
+    }
+
+    private fun handOffToSystemAssistant(shellConfig: ShellConfig) {
+        assistantHandoffActive = true
+        assistantRecordingSeen = false
+        assistantSilentPolls = 0
+        assistantHandoffStartedAt = System.currentTimeMillis()
+
+        tts?.stop()
+        stopWakeDetector()
+
+        updateNotification("Передаю микрофон ChatGPT…")
+        sendStateBroadcast(STATE_HANDOFF, "Открываю ChatGPT Voice")
+
+        handler.postDelayed(
+            { launchSystemAssistant(shellConfig) },
+            ASSISTANT_LAUNCH_DELAY_MS
+        )
+
+        handler.postDelayed(
+            { monitorAssistantMicrophone(shellConfig) },
+            ASSISTANT_FIRST_CHECK_DELAY_MS
+        )
+    }
+
+    private fun launchSystemAssistant(shellConfig: ShellConfig) {
+        try {
+            startActivity(
+                Intent(Intent.ACTION_ASSIST).apply {
+                    addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or
+                            Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    )
+                }
+            )
+            updateNotification("ChatGPT запущен • Валера ждёт")
+        } catch (_: Throwable) {
+            if (
+                shellConfig.openPwaOnWake &&
+                !shellConfig.assistantUrl.isNullOrBlank()
+            ) {
+                updateNotification("Помощник не открылся • открываю ERP")
+                launchAssistantPwa(shellConfig.assistantUrl)
+            } else {
+                updateNotification("Не удалось открыть системного помощника")
+            }
+        }
+    }
+
+    private fun monitorAssistantMicrophone(shellConfig: ShellConfig) {
+        if (!assistantHandoffActive) return
+
+        val elapsed = System.currentTimeMillis() - assistantHandoffStartedAt
+        val assistantRecording = isAnotherRecordingActive()
+
+        if (assistantRecording) {
+            assistantRecordingSeen = true
+            assistantSilentPolls = 0
+            updateNotification("ChatGPT слушает • Валера ждёт")
+        } else if (assistantRecordingSeen) {
+            assistantSilentPolls += 1
+
+            if (assistantSilentPolls >= ASSISTANT_SILENT_POLLS_TO_RESUME) {
+                finishAssistantHandoff()
+                return
+            }
+        } else if (elapsed >= ASSISTANT_RECORDING_START_TIMEOUT_MS) {
+            if (
+                shellConfig.openPwaOnWake &&
+                !shellConfig.assistantUrl.isNullOrBlank()
+            ) {
+                updateNotification("ChatGPT не занял микрофон • открываю ERP")
+                launchAssistantPwa(shellConfig.assistantUrl)
+            }
+
+            finishAssistantHandoff()
+            return
+        }
+
+        handler.postDelayed(
+            { monitorAssistantMicrophone(shellConfig) },
+            ASSISTANT_POLL_INTERVAL_MS
+        )
+    }
+
+    private fun isAnotherRecordingActive(): Boolean {
+        return try {
+            val audioManager = getSystemService(AudioManager::class.java)
+            audioManager.activeRecordingConfigurations.isNotEmpty()
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun finishAssistantHandoff() {
+        assistantHandoffActive = false
+        assistantRecordingSeen = false
+        assistantSilentPolls = 0
+        assistantHandoffStartedAt = 0L
+
+        updateNotification("Возвращаю локальный wake-word…")
+
+        handler.postDelayed(
+            { startContinuousListening() },
+            WAKE_RESUME_DELAY_MS
         )
     }
 
@@ -304,9 +443,11 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onError(exception: Exception?) {
-        speechService?.stop()
-        speechService?.shutdown()
-        speechService = null
+        stopWakeDetector()
+
+        if (assistantHandoffActive) {
+            return
+        }
 
         updateNotification("Перезапускаю локальный детектор…")
         handler.postDelayed({ startContinuousListening() }, 1200L)
@@ -324,6 +465,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         const val STATE_LISTENING = "listening"
         const val STATE_ERROR = "error"
+        const val STATE_HANDOFF = "handoff"
 
         const val PREFS = "valera"
         const val KEY_RUNNING = "wake_service_running"
@@ -333,5 +475,12 @@ class WakeWordService : Service(), RecognitionListener {
         private const val WAKE_WORD = "валера"
         private const val SAMPLE_RATE = 16000.0f
         private const val WAKE_DEBOUNCE_MS = 3000L
+
+        private const val ASSISTANT_LAUNCH_DELAY_MS = 300L
+        private const val ASSISTANT_FIRST_CHECK_DELAY_MS = 3500L
+        private const val ASSISTANT_POLL_INTERVAL_MS = 1500L
+        private const val ASSISTANT_RECORDING_START_TIMEOUT_MS = 15000L
+        private const val ASSISTANT_SILENT_POLLS_TO_RESUME = 5
+        private const val WAKE_RESUME_DELAY_MS = 1200L
     }
 }
