@@ -18,19 +18,47 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 
 class MainActivity : Activity() {
+
     private lateinit var status: TextView
     private lateinit var orb: ValeraOrbView
-    private lateinit var startButton: Button
+    private lateinit var toggleButton: Button
+    private lateinit var modeText: TextView
 
-    private val wakeReceiver = object : BroadcastReceiver() {
+    private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action != WakeWordService.ACTION_WAKE_DETECTED) return
-            orb.setState(ValeraOrbView.State.AWAKE)
-            status.text = "Да, Алексей. Слушаю."
-            orb.postDelayed({
-                orb.setState(ValeraOrbView.State.LISTENING)
-                status.text = "Скажи «Валера»"
-            }, 1800)
+            when (intent?.action) {
+                WakeWordService.ACTION_WAKE_DETECTED -> {
+                    orb.setState(ValeraOrbView.State.AWAKE)
+                    status.text = "Да, Алексей. Слушаю."
+                    orb.postDelayed({
+                        if (isServiceMarkedRunning()) {
+                            orb.setState(ValeraOrbView.State.LISTENING)
+                            status.text = "Скажи «Валера»"
+                        }
+                    }, 1800L)
+                }
+
+                WakeWordService.ACTION_SERVICE_STATE -> {
+                    when (intent.getStringExtra(WakeWordService.EXTRA_STATE)) {
+                        WakeWordService.STATE_LISTENING -> {
+                            orb.setState(ValeraOrbView.State.LISTENING)
+                            status.text = intent.getStringExtra(
+                                WakeWordService.EXTRA_MESSAGE
+                            ) ?: "Скажи «Валера»"
+                            modeText.text = "Локальный офлайн-детектор активен"
+                            refreshButton()
+                        }
+
+                        WakeWordService.STATE_ERROR -> {
+                            orb.setState(ValeraOrbView.State.WAITING)
+                            status.text = intent.getStringExtra(
+                                WakeWordService.EXTRA_MESSAGE
+                            ) ?: "Ошибка"
+                            modeText.text = "Локальный детектор не запущен"
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -51,20 +79,25 @@ class MainActivity : Activity() {
             textSize = 22f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            setPadding(24, 24, 24, 24)
+            setPadding(24, 24, 24, 12)
         }
 
-        val hint = TextView(this).apply {
-            text = "После запуска можно свернуть приложение и сказать «Валера»."
-            textSize = 15f
-            setTextColor(Color.rgb(170, 180, 205))
+        modeText = TextView(this).apply {
+            text = "Версия 0.3.0 • локальный wake-word"
+            textSize = 14f
+            setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
-            setPadding(24, 0, 24, 28)
+            setPadding(24, 0, 24, 24)
         }
 
-        startButton = Button(this).apply {
-            text = "Включить Валеру"
-            setOnClickListener { ensurePermissionsAndStart() }
+        toggleButton = Button(this).apply {
+            setOnClickListener {
+                if (isServiceMarkedRunning()) {
+                    stopValera()
+                } else {
+                    ensurePermissionsAndStart()
+                }
+            }
         }
 
         val root = LinearLayout(this).apply {
@@ -74,9 +107,9 @@ class MainActivity : Activity() {
             setPadding(32, 48, 32, 40)
             addView(orb)
             addView(status)
-            addView(hint)
+            addView(modeText)
             addView(
-                startButton,
+                toggleButton,
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -85,35 +118,30 @@ class MainActivity : Activity() {
         }
 
         setContentView(root)
-        handleWakeIntent(intent)
+        refreshFromStoredState()
     }
 
     override fun onStart() {
         super.onStart()
+
+        val filter = IntentFilter().apply {
+            addAction(WakeWordService.ACTION_WAKE_DETECTED)
+            addAction(WakeWordService.ACTION_SERVICE_STATE)
+        }
+
         ContextCompat.registerReceiver(
             this,
-            wakeReceiver,
-            IntentFilter(WakeWordService.ACTION_WAKE_DETECTED),
+            receiver,
+            filter,
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
+
+        refreshFromStoredState()
     }
 
     override fun onStop() {
-        unregisterReceiver(wakeReceiver)
+        unregisterReceiver(receiver)
         super.onStop()
-    }
-
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleWakeIntent(intent)
-    }
-
-    private fun handleWakeIntent(intent: Intent?) {
-        if (intent?.getBooleanExtra(WakeWordService.EXTRA_WAKE_DETECTED, false) == true) {
-            orb.setState(ValeraOrbView.State.AWAKE)
-            status.text = "Да, Алексей. Слушаю."
-        }
     }
 
     private fun ensurePermissionsAndStart() {
@@ -139,14 +167,52 @@ class MainActivity : Activity() {
     }
 
     private fun startValera() {
+        status.text = "Готовлю локальный детектор…"
+        modeText.text = "Первый запуск может занять несколько секунд"
+
         ContextCompat.startForegroundService(
             this,
             Intent(this, WakeWordService::class.java)
         )
-        orb.setState(ValeraOrbView.State.LISTENING)
-        status.text = "Скажи «Валера»"
-        startButton.text = "Валера включён"
-        startButton.isEnabled = false
+
+        toggleButton.text = "Отключить Валеру"
+    }
+
+    private fun stopValera() {
+        stopService(Intent(this, WakeWordService::class.java))
+
+        getSharedPreferences(WakeWordService.PREFS, MODE_PRIVATE)
+            .edit()
+            .putBoolean(WakeWordService.KEY_RUNNING, false)
+            .apply()
+
+        orb.setState(ValeraOrbView.State.WAITING)
+        status.text = "Валера отключён"
+        modeText.text = "Версия 0.3.0 • локальный wake-word"
+        refreshButton()
+    }
+
+    private fun isServiceMarkedRunning(): Boolean =
+        getSharedPreferences(WakeWordService.PREFS, MODE_PRIVATE)
+            .getBoolean(WakeWordService.KEY_RUNNING, false)
+
+    private fun refreshFromStoredState() {
+        if (isServiceMarkedRunning()) {
+            orb.setState(ValeraOrbView.State.LISTENING)
+            status.text = "Скажи «Валера»"
+            modeText.text = "Локальный офлайн-детектор активен"
+        } else {
+            orb.setState(ValeraOrbView.State.WAITING)
+            status.text = "Нажми «Включить Валеру»"
+            modeText.text = "Версия 0.3.0 • локальный wake-word"
+        }
+        refreshButton()
+    }
+
+    private fun refreshButton() {
+        toggleButton.text =
+            if (isServiceMarkedRunning()) "Отключить Валеру"
+            else "Включить Валеру"
     }
 
     override fun onRequestPermissionsResult(
@@ -155,6 +221,7 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+
         if (
             requestCode == 100 &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
