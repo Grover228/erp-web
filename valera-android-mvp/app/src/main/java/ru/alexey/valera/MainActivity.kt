@@ -54,7 +54,7 @@ class MainActivity : Activity() {
                             status.text = intent.getStringExtra(
                                 WakeWordService.EXTRA_MESSAGE
                             ) ?: "Открываю ChatGPT Voice"
-                            modeText.text = "Микрофон передан системному помощнику"
+                            modeText.text = "Проверяю запуск ChatGPT Voice"
                         }
 
                         WakeWordService.STATE_ERROR -> {
@@ -91,7 +91,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.5.0 • локальный wake-word • системный помощник"
+            text = "Версия 0.6.0 • локальный wake-word • Android VOICE_COMMAND"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -199,7 +199,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.5.0 • локальный wake-word • системный помощник"
+        modeText.text = "Версия 0.6.0 • локальный wake-word • системный помощник"
         refreshButton()
     }
 
@@ -212,7 +212,7 @@ class MainActivity : Activity() {
 
         val targetState =
             if (shell.wakeTarget == PwaConfig.TARGET_SYSTEM_ASSISTANT) {
-                "ChatGPT • системный помощник"
+                "ChatGPT • Android VOICE_COMMAND"
             } else if (!shell.assistantUrl.isNullOrBlank()) {
                 "ERP PWA"
             } else {
@@ -226,7 +226,7 @@ class MainActivity : Activity() {
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.5.0 • " + targetState
+            modeText.text = "Версия 0.6.0 • " + targetState
         }
         refreshButton()
     }
