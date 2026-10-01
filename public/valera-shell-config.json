@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
   "assistant_url": "",
+  "open_pwa_on_wake": true,
+  "speak_on_wake": true,
   "config_note": "Set assistant_url to the production ERP PWA URL with ?valera=1&source=android",
   "updated_at": "2026-10-01"
 }
