@@ -18,17 +18,17 @@ object ChatGptLauncher {
     fun launch(context: Context, config: ShellConfig): ChatGptLaunchResult {
         val packageName = config.chatGptPackage
         val activityName = config.chatGptVoiceActivity
-        val component = ComponentName(packageName, activityName)
+        val targetComponent = ComponentName(packageName, activityName)
 
         val activityInfo = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 context.packageManager.getActivityInfo(
-                    component,
+                    targetComponent,
                     PackageManager.ComponentInfoFlags.of(0)
                 )
             } else {
                 @Suppress("DEPRECATION")
-                context.packageManager.getActivityInfo(component, 0)
+                context.packageManager.getActivityInfo(targetComponent, 0)
             }
         } catch (_: PackageManager.NameNotFoundException) {
             null
@@ -47,7 +47,7 @@ object ChatGptLauncher {
                 try {
                     context.startActivity(
                         Intent().apply {
-                            component = component
+                            this.component = targetComponent
                             addFlags(
                                 Intent.FLAG_ACTIVITY_NEW_TASK or
                                     Intent.FLAG_ACTIVITY_CLEAR_TOP
