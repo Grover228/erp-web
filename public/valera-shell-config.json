@@ -1,8 +1,9 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "assistant_url": "https://streetstream.ru/?valera=1&source=android&profile=work",
+  "wake_target": "system_assistant",
   "open_pwa_on_wake": true,
-  "speak_on_wake": true,
-  "config_note": "Production ERP PWA entry point for the Android wake-word shell",
+  "speak_on_wake": false,
+  "config_note": "Primary wake target is the Android default digital assistant. ERP PWA is kept as fallback.",
   "updated_at": "2026-10-01"
 }
