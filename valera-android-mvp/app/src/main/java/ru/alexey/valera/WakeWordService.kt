@@ -262,41 +262,51 @@ class WakeWordService : Service(), RecognitionListener {
         sendStateBroadcast(STATE_HANDOFF, "Открываю ChatGPT Voice")
 
         handler.postDelayed(
-            { launchSystemAssistant(shellConfig) },
+            { launchSystemAssistantVoiceCommand() },
             ASSISTANT_LAUNCH_DELAY_MS
         )
 
         handler.postDelayed(
-            { monitorAssistantMicrophone(shellConfig) },
+            { monitorAssistantMicrophone() },
             ASSISTANT_FIRST_CHECK_DELAY_MS
         )
     }
 
-    private fun launchSystemAssistant(shellConfig: ShellConfig) {
-        try {
-            startActivity(
-                Intent(Intent.ACTION_ASSIST).apply {
-                    addFlags(
-                        Intent.FLAG_ACTIVITY_NEW_TASK or
-                            Intent.FLAG_ACTIVITY_CLEAR_TOP
-                    )
-                }
+    private fun launchSystemAssistantVoiceCommand() {
+        val voiceIntent = Intent(Intent.ACTION_VOICE_COMMAND).apply {
+            addCategory(Intent.CATEGORY_DEFAULT)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
             )
-            updateNotification("ChatGPT запущен • Валера ждёт")
+        }
+
+        val resolved = voiceIntent.resolveActivity(packageManager)
+
+        if (resolved == null) {
+            updateNotification("VOICE_COMMAND не поддержан • жду «Валера»")
+            sendStateBroadcast(
+                STATE_ERROR,
+                "Android не нашёл обработчик голосового помощника"
+            )
+            finishAssistantHandoff()
+            return
+        }
+
+        try {
+            startActivity(voiceIntent)
+            updateNotification("Команда передана системному помощнику")
         } catch (_: Throwable) {
-            if (
-                shellConfig.openPwaOnWake &&
-                !shellConfig.assistantUrl.isNullOrBlank()
-            ) {
-                updateNotification("Помощник не открылся • открываю ERP")
-                launchAssistantPwa(shellConfig.assistantUrl)
-            } else {
-                updateNotification("Не удалось открыть системного помощника")
-            }
+            updateNotification("Системный помощник не запустился")
+            sendStateBroadcast(
+                STATE_ERROR,
+                "Не удалось запустить Android VOICE_COMMAND"
+            )
+            finishAssistantHandoff()
         }
     }
 
-    private fun monitorAssistantMicrophone(shellConfig: ShellConfig) {
+    private fun monitorAssistantMicrophone() {
         if (!assistantHandoffActive) return
 
         val elapsed = System.currentTimeMillis() - assistantHandoffStartedAt
@@ -314,20 +324,17 @@ class WakeWordService : Service(), RecognitionListener {
                 return
             }
         } else if (elapsed >= ASSISTANT_RECORDING_START_TIMEOUT_MS) {
-            if (
-                shellConfig.openPwaOnWake &&
-                !shellConfig.assistantUrl.isNullOrBlank()
-            ) {
-                updateNotification("ChatGPT не занял микрофон • открываю ERP")
-                launchAssistantPwa(shellConfig.assistantUrl)
-            }
-
+            updateNotification("ChatGPT Voice не стартовал • жду «Валера»")
+            sendStateBroadcast(
+                STATE_ERROR,
+                "Голосовой помощник не занял микрофон"
+            )
             finishAssistantHandoff()
             return
         }
 
         handler.postDelayed(
-            { monitorAssistantMicrophone(shellConfig) },
+            { monitorAssistantMicrophone() },
             ASSISTANT_POLL_INTERVAL_MS
         )
     }
