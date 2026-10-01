@@ -83,7 +83,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.3.0 • локальный wake-word"
+            text = "Версия 0.4.0 • локальный wake-word • PWA shell"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -119,6 +119,9 @@ class MainActivity : Activity() {
 
         setContentView(root)
         refreshFromStoredState()
+        PwaConfig.refresh(this) {
+            refreshFromStoredState()
+        }
     }
 
     override fun onStart() {
@@ -188,7 +191,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.3.0 • локальный wake-word"
+        modeText.text = "Версия 0.4.0 • локальный wake-word • PWA shell"
         refreshButton()
     }
 
@@ -197,14 +200,19 @@ class MainActivity : Activity() {
             .getBoolean(WakeWordService.KEY_RUNNING, false)
 
     private fun refreshFromStoredState() {
+        val shell = PwaConfig.cached(this)
+        val pwaState =
+            if (!shell.assistantUrl.isNullOrBlank()) "PWA привязано"
+            else "PWA ждёт адрес"
+
         if (isServiceMarkedRunning()) {
             orb.setState(ValeraOrbView.State.LISTENING)
             status.text = "Скажи «Валера»"
-            modeText.text = "Локальный офлайн-детектор активен"
+            modeText.text = "Локальный wake-word • " + pwaState
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.3.0 • локальный wake-word"
+            modeText.text = "Версия 0.4.0 • " + pwaState
         }
         refreshButton()
     }
