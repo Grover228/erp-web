@@ -21,6 +21,8 @@ import ResaleProductsDirectory from "./directories/ResaleProductsDirectory";
 import AssetsDirectory from "./directories/AssetsDirectory";
 import { supabase } from "./supabase";
 import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
+import ValeraPage from "./valera/ValeraPage";
+import { shouldOpenValera } from "./valera/bridge";
 
 type Screen =
   | "dashboard"
@@ -29,6 +31,7 @@ type Screen =
   | "warehouse"
   | "finance"
   | "scanner"
+  | "valera"
   | "employee-home"
   | "directories"
   | "directory-employees"
@@ -68,7 +71,9 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
-  const [currentScreen, setCurrentScreen] = useState<Screen>("dashboard");
+  const [currentScreen, setCurrentScreen] = useState<Screen>(() =>
+    shouldOpenValera() ? "valera" : "dashboard"
+  );
   const [productionInitialTab, setProductionInitialTab] =
     useState<ProductionTab>("jobs");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -123,6 +128,7 @@ function App() {
     },
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
+    { key: "valera" as Screen, label: "Валера ✦" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
     canManageDirectories && {
       key: "directories" as Screen,
@@ -132,7 +138,9 @@ function App() {
   ].filter(Boolean) as { key: Screen; label: string }[];
 
   const pageTitle =
-    currentScreen === "employee-home"
+    currentScreen === "valera"
+      ? "Валера"
+      : currentScreen === "employee-home"
       ? "Моя смена"
       : currentScreen === "dashboard"
       ? "Дашборд"
@@ -177,7 +185,9 @@ function App() {
       : "Сканер QR";
 
   const pageSubtitle =
-    currentScreen === "employee-home"
+    currentScreen === "valera"
+      ? "Голосовой помощник, навыки и маршрутизация команд"
+      : currentScreen === "employee-home"
       ? "Рабочий экран сотрудника"
       : currentScreen === "dashboard"
       ? "Главный экран ERP"
@@ -284,6 +294,7 @@ function App() {
     if (!session || currentEmployeeLoading) return;
     if (!currentEmployee) return;
 
+    if (currentScreen === "valera") return;
     if (currentScreen === "employee-home") return;
 
     if (currentScreen === "scanner") {
@@ -701,6 +712,24 @@ function App() {
       );
     }
 
+    if (currentScreen === "valera") {
+      return (
+        <ValeraPage
+          userName={currentEmployee.full_name}
+          roleCode={currentRoleCode}
+          access={{
+            isAdmin,
+            isManager,
+            canViewDashboard,
+            canManageProduction,
+            canViewWarehouse,
+            canViewFinance,
+            canUseScanner,
+          }}
+        />
+      );
+    }
+
     if (currentScreen === "employee-home") {
       return (
         <EmployeeMobilePage
@@ -1012,6 +1041,7 @@ function App() {
                   (item.key === "warehouse" &&
                     currentScreen === "warehouse") ||
                   (item.key === "finance" && currentScreen === "finance") ||
+                  (item.key === "valera" && currentScreen === "valera") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -1052,6 +1082,9 @@ function App() {
                           break;
                         case "finance":
                           setCurrentScreen("finance");
+                          break;
+                        case "valera":
+                          setCurrentScreen("valera");
                           break;
                         case "directories":
                           setCurrentScreen("directories");
