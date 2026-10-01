@@ -36,6 +36,19 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
+      - name: Download Russian offline wake-word model
+        run: |
+          rm -rf app/src/main/assets/model-ru
+          mkdir -p app/src/main/assets/model-ru
+          curl -L --fail --retry 3             -o /tmp/vosk-model-small-ru-0.22.zip             https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip
+          rm -rf /tmp/vosk-ru
+          mkdir -p /tmp/vosk-ru
+          unzip -q /tmp/vosk-model-small-ru-0.22.zip -d /tmp/vosk-ru
+          cp -R /tmp/vosk-ru/vosk-model-small-ru-0.22/. app/src/main/assets/model-ru/
+          printf "valera-vosk-small-ru-0.22-v1" > app/src/main/assets/model-ru/uuid
+          test -f app/src/main/assets/model-ru/conf/model.conf
+          du -sh app/src/main/assets/model-ru
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -47,6 +60,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: valera-debug-apk
+          name: valera-0.3.0-apk
           path: valera-android-mvp/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
