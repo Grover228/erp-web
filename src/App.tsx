@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Production, { type ProductionTab } from "./Production";
+import ProductionPlanningPage from "./pages/ProductionPlanningPage";
 import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -24,6 +25,7 @@ import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
 type Screen =
   | "dashboard"
   | "production"
+  | "production-planning"
   | "warehouse"
   | "finance"
   | "scanner"
@@ -115,6 +117,10 @@ function App() {
       key: "production" as Screen,
       label: "Производство 🏭",
     },
+    canManageProduction && {
+      key: "production-planning" as Screen,
+      label: "План производства 📅",
+    },
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
@@ -132,6 +138,8 @@ function App() {
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
+      : currentScreen === "production-planning"
+      ? "План производства"
       : currentScreen === "warehouse"
       ? "Склад"
       : currentScreen === "finance"
@@ -175,6 +183,8 @@ function App() {
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
+      : currentScreen === "production-planning"
+      ? "Сезонный план, прогресс и календарь производства"
       : currentScreen === "warehouse"
       ? "Закупки, поступления, остатки и отгрузки"
       : currentScreen === "finance"
@@ -286,7 +296,11 @@ function App() {
       return;
     }
 
-    if (currentScreen === "production" && !canManageProduction) {
+    if (
+      (currentScreen === "production" ||
+        currentScreen === "production-planning") &&
+      !canManageProduction
+    ) {
       setCurrentScreen("employee-home");
       return;
     }
@@ -504,6 +518,11 @@ function App() {
       return;
     }
 
+    if (currentScreen === "production-planning") {
+      setCurrentScreen(getDefaultScreen());
+      return;
+    }
+
     if (currentScreen === "warehouse" || currentScreen === "finance") {
       setCurrentScreen(getDefaultScreen());
       return;
@@ -711,6 +730,12 @@ function App() {
       if (!canManageProduction) return renderAccessDenied();
 
       return <Production initialTab={productionInitialTab} />;
+    }
+
+    if (currentScreen === "production-planning") {
+      if (!canManageProduction) return renderAccessDenied();
+
+      return <ProductionPlanningPage />;
     }
 
     if (currentScreen === "warehouse") {
@@ -982,6 +1007,8 @@ function App() {
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
                   (item.key === "production" &&
                     currentScreen === "production") ||
+                  (item.key === "production-planning" &&
+                    currentScreen === "production-planning") ||
                   (item.key === "warehouse" &&
                     currentScreen === "warehouse") ||
                   (item.key === "finance" && currentScreen === "finance") ||
@@ -1016,6 +1043,9 @@ function App() {
                         case "production":
                           setProductionInitialTab("jobs");
                           setCurrentScreen("production");
+                          break;
+                        case "production-planning":
+                          setCurrentScreen("production-planning");
                           break;
                         case "warehouse":
                           setCurrentScreen("warehouse");
