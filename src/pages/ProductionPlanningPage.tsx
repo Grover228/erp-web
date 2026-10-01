@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
+import type { TechCardItem } from "./production/productionTypes";
+import { createProductionOrder } from "./production/createProductionOrder";
 
 type ProductionSeason = {
   id: string;
@@ -33,6 +35,7 @@ type PlanItem = {
 type ProductionOrder = {
   id: string;
   product_id: string;
+  production_plan_item_id: string | null;
   order_number: string;
   quantity: number;
   status: string;
@@ -190,6 +193,7 @@ export default function ProductionPlanningPage() {
   const [selectedSeasonId, setSelectedSeasonId] = useState("");
   const [planItems, setPlanItems] = useState<PlanItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [techCards, setTechCards] = useState<TechCardItem[]>([]);
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [operations, setOperations] = useState<ProductionOperation[]>([]);
 
@@ -205,6 +209,11 @@ export default function ProductionPlanningPage() {
   const [newPlanQuantity, setNewPlanQuantity] = useState("");
   const [newStartDate, setNewStartDate] = useState("");
   const [newEndDate, setNewEndDate] = useState("");
+
+  const [launchItem, setLaunchItem] = useState<PlanItem | null>(null);
+  const [launchQuantity, setLaunchQuantity] = useState("");
+  const [launchComment, setLaunchComment] = useState("");
+  const [launching, setLaunching] = useState(false);
 
   useEffect(() => {
     loadInitial();
@@ -249,6 +258,15 @@ export default function ProductionPlanningPage() {
       setSeasons(safeSeasons);
       setProducts((productsResult.data as Product[]) || []);
 
+      const { data: techCardsData, error: techCardsError } = await supabase
+        .from("tech_cards")
+        .select("id, product_id, name, version, is_active")
+        .eq("is_active", true)
+        .order("version", { ascending: false });
+
+      if (techCardsError) throw techCardsError;
+      setTechCards((techCardsData as TechCardItem[]) || []);
+
       if (safeSeasons.length > 0) {
         setSelectedSeasonId((current) => current || safeSeasons[0].id);
       }
@@ -271,39 +289,38 @@ export default function ProductionPlanningPage() {
       setLoading(true);
       setError("");
 
-      let ordersQuery = supabase
+      const { data: itemsData, error: itemsError } = await supabase
+        .from("production_plan_items")
+        .select(
+          "id, season_id, product_id, plan_quantity, sort_order, planned_start_date, planned_end_date, comment, product:products(id, name, article)",
+        )
+        .eq("season_id", seasonId)
+        .order("sort_order", { ascending: true });
+
+      if (itemsError) throw itemsError;
+
+      const safeItems = ((itemsData || []) as unknown as PlanItem[]) || [];
+      setPlanItems(safeItems);
+
+      const planItemIds = safeItems.map((item) => item.id);
+      if (planItemIds.length === 0) {
+        setOrders([]);
+        setOperations([]);
+        return;
+      }
+
+      const { data: ordersData, error: ordersError } = await supabase
         .from("production_orders")
-        .select("id, product_id, order_number, quantity, status, created_at")
-        .gte("created_at", `${season.start_date}T00:00:00`)
+        .select(
+          "id, product_id, production_plan_item_id, order_number, quantity, status, created_at",
+        )
+        .in("production_plan_item_id", planItemIds)
         .neq("status", "cancelled")
         .order("created_at", { ascending: true });
 
-      if (season.end_date) {
-        ordersQuery = ordersQuery.lte(
-          "created_at",
-          `${season.end_date}T23:59:59.999`,
-        );
-      }
+      if (ordersError) throw ordersError;
 
-      const [itemsResult, ordersResult] = await Promise.all([
-        supabase
-          .from("production_plan_items")
-          .select(
-            "id, season_id, product_id, plan_quantity, sort_order, planned_start_date, planned_end_date, comment, product:products(id, name, article)",
-          )
-          .eq("season_id", seasonId)
-          .order("sort_order", { ascending: true }),
-
-        ordersQuery,
-      ]);
-
-      if (itemsResult.error) throw itemsResult.error;
-      if (ordersResult.error) throw ordersResult.error;
-
-      const safeItems = ((itemsResult.data || []) as unknown as PlanItem[]) || [];
-      const safeOrders = (ordersResult.data as ProductionOrder[]) || [];
-
-      setPlanItems(safeItems);
+      const safeOrders = (ordersData as ProductionOrder[]) || [];
       setOrders(safeOrders);
 
       const orderIds = safeOrders.map((order) => order.id);
@@ -623,6 +640,87 @@ export default function ProductionPlanningPage() {
     }
   }
 
+  function openLaunchModal(item: PlanItem) {
+    const stats = statsByProduct.get(item.product_id) || {
+      ordered: 0,
+      completed: 0,
+      stages: [],
+    };
+    const remaining = Math.max(
+      0,
+      toNumber(item.plan_quantity) - toNumber(stats.ordered),
+    );
+
+    setLaunchItem(item);
+    setLaunchQuantity(String(remaining > 0 ? remaining : 1));
+    setLaunchComment(
+      selectedSeason
+        ? `${selectedSeason.code} · запуск из плана производства`
+        : "Запуск из плана производства",
+    );
+    setError("");
+    setMessage("");
+  }
+
+  async function handleLaunchProduction() {
+    if (!launchItem || !selectedSeason) return;
+
+    const quantity = Number(launchQuantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      setError("Укажи количество больше 0");
+      return;
+    }
+
+    if (!launchItem.product) {
+      setError("У строки плана не найдено изделие");
+      return;
+    }
+
+    const techCard =
+      techCards.find(
+        (item) =>
+          item.product_id === launchItem.product_id && item.is_active,
+      ) || null;
+
+    if (!techCard) {
+      setError(
+        `У ${launchItem.product.article || launchItem.product.name} нет активной техкарты`,
+      );
+      return;
+    }
+
+    try {
+      setLaunching(true);
+      setError("");
+      setMessage("");
+
+      const { orderNumber } = await createProductionOrder({
+        product: launchItem.product,
+        techCard,
+        quantity,
+        comment: launchComment,
+        productionPlanItemId: launchItem.id,
+      });
+
+      setMessage(
+        `Производственный заказ ${orderNumber} создан из плана ${selectedSeason.code}. Материалы зарезервированы.`,
+      );
+      setLaunchItem(null);
+      setLaunchQuantity("");
+      setLaunchComment("");
+
+      await loadSeasonData(selectedSeason.id);
+    } catch (launchError) {
+      setError(
+        launchError instanceof Error
+          ? launchError.message
+          : "Не удалось запустить производство из плана",
+      );
+    } finally {
+      setLaunching(false);
+    }
+  }
+
   function updateLocalItem(
     itemId: string,
     patch: Partial<Pick<PlanItem, "plan_quantity" | "planned_start_date" | "planned_end_date">>,
@@ -936,7 +1034,17 @@ export default function ProductionPlanningPage() {
                       />
                     </Field>
 
-                    <div style={{ display: "flex", gap: 8 }}>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => openLaunchModal(item)}
+                        style={{
+                          ...primaryButtonStyle,
+                          background: "#059669",
+                        }}
+                      >
+                        Запустить в производство
+                      </button>
                       <button
                         type="button"
                         onClick={() => savePlanItem(item)}
@@ -1154,6 +1262,142 @@ export default function ProductionPlanningPage() {
           </div>
         </>
       )}
+
+      {launchItem && (() => {
+        const stats = statsByProduct.get(launchItem.product_id) || {
+          ordered: 0,
+          completed: 0,
+          stages: [],
+        };
+        const itemPlan = toNumber(launchItem.plan_quantity);
+        const quantity = Math.max(0, Number(launchQuantity) || 0);
+        const projectedOrdered = toNumber(stats.ordered) + quantity;
+        const overPlan = Math.max(0, projectedOrdered - itemPlan);
+
+        return (
+          <div
+            onClick={() => !launching && setLaunchItem(null)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              zIndex: 1000,
+              background: "rgba(15, 23, 42, 0.48)",
+              display: "grid",
+              placeItems: "center",
+              padding: 16,
+            }}
+          >
+            <div
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                width: "min(560px, 100%)",
+                background: "#ffffff",
+                borderRadius: 18,
+                padding: 20,
+                boxShadow: "0 24px 70px rgba(15, 23, 42, 0.24)",
+                display: "grid",
+                gap: 16,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 20, fontWeight: 900, color: "#0f172a" }}>
+                  Запустить в производство
+                </div>
+                <div style={{ marginTop: 5, color: "#64748b", fontSize: 13 }}>
+                  {launchItem.product?.article || launchItem.product?.name || "Изделие"}
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gap: 10,
+                }}
+              >
+                <KpiCard title="План" value={itemPlan} hint="шт." />
+                <KpiCard
+                  title="Запущено"
+                  value={stats.ordered}
+                  hint="уже в заказах"
+                />
+                <KpiCard
+                  title="К запуску"
+                  value={Math.max(0, itemPlan - stats.ordered)}
+                  hint="до плана"
+                />
+              </div>
+
+              <Field label="Количество запуска, шт.">
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={launchQuantity}
+                  onChange={(event) => setLaunchQuantity(event.target.value)}
+                  style={inputStyle}
+                  autoFocus
+                />
+              </Field>
+
+              <Field label="Комментарий">
+                <input
+                  value={launchComment}
+                  onChange={(event) => setLaunchComment(event.target.value)}
+                  style={inputStyle}
+                />
+              </Field>
+
+              {overPlan > 0 && (
+                <div
+                  style={{
+                    border: "1px solid #fde68a",
+                    background: "#fffbeb",
+                    color: "#92400e",
+                    borderRadius: 12,
+                    padding: "10px 12px",
+                    fontSize: 13,
+                    fontWeight: 700,
+                  }}
+                >
+                  После запуска перевыполнение плана составит +{formatQty(overPlan)} шт.
+                  Запуск не блокируется.
+                </div>
+              )}
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setLaunchItem(null)}
+                  disabled={launching}
+                  style={secondaryButtonStyle}
+                >
+                  Отмена
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLaunchProduction}
+                  disabled={launching || quantity <= 0}
+                  style={{
+                    ...primaryButtonStyle,
+                    background: "#059669",
+                    opacity: launching || quantity <= 0 ? 0.55 : 1,
+                  }}
+                >
+                  {launching ? "Создаю заказ..." : "Создать производственный заказ"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
