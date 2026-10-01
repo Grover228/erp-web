@@ -1011,31 +1011,34 @@ export default function Production({
     }
   }
 
+  async function waitForPrintJob(jobId: string, timeoutMs = 12000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const { data, error: jobError } = await supabase
+        .from("print_jobs")
+        .select("status, error")
+        .eq("id", jobId)
+        .single();
+
+      if (jobError) throw jobError;
+
+      if (data.status === "printed" || data.status === "failed") {
+        return data as { status: "printed" | "failed"; error: string | null };
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 600);
+      });
+    }
+
+    return null;
+  }
+
   async function printQrLabel(item: GeneratedQr) {
     try {
       setMessage("");
       setError("");
-
-      const response = await fetch("http://localhost:3001/print-qr", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          printerName: "Xprinter XP-365B",
-          batchNumber: item.batchNumber,
-          productName: item.payload.product_name,
-          article: item.payload.product_article || "",
-          quantity: item.payload.quantity,
-          qrDataUrl: item.dataUrl,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Ошибка печати QR");
-      }
 
       const batch =
         batches.find((itemBatch) => itemBatch.batch_number === item.batchNumber) ||
@@ -1043,7 +1046,7 @@ export default function Production({
 
       if (!batch) {
         throw new Error(
-          `QR отправлен на принтер, но пачка ${item.batchNumber} не найдена для записи журнала печати`,
+          `Пачка ${item.batchNumber} не найдена, задание на печать не создано`,
         );
       }
 
@@ -1053,26 +1056,45 @@ export default function Production({
       } = await supabase.auth.getUser();
 
       if (userError) throw userError;
+      if (!user) throw new Error("Для печати нужно войти в ERP");
 
-      const { error: printLogError } = await supabase
-        .from("production_qr_print_logs")
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
         .insert({
-          batch_id: batch.id,
-          production_order_id: batch.production_order_id,
-          printed_by: user?.id || null,
-          printer_name: "Xprinter XP-365B",
-          batch_number: batch.batch_number,
-          quantity: Number(batch.quantity || 0),
-        });
+          printer_code: "xprinter-main",
+          job_type: "qr",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber: item.batchNumber,
+            productName: item.payload.product_name,
+            article: item.payload.product_article || "",
+            quantity: item.payload.quantity,
+            qrDataUrl: item.dataUrl,
+            batchId: batch.id,
+            productionOrderId: batch.production_order_id,
+          },
+        })
+        .select("id, status")
+        .single();
 
-      if (printLogError) {
-        throw new Error(
-          `QR напечатан, но не удалось записать факт печати: ${printLogError.message}`,
-        );
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать задание печати");
+
+      const result = await waitForPrintJob(job.id);
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Принтер не смог выполнить задание");
       }
 
-      setMessage(`QR пачки ${item.batchNumber} отправлен на печать и записан в журнал`);
-      await loadProductionOrders();
+      if (result?.status === "printed") {
+        setMessage(`QR пачки ${item.batchNumber} напечатан и записан в журнал`);
+        await loadProductionOrders();
+        return;
+      }
+
+      setMessage(
+        `QR пачки ${item.batchNumber} поставлен в очередь. Ноутбук распечатает его автоматически`,
+      );
     } catch (error) {
       setError(
         error instanceof Error
@@ -1108,39 +1130,49 @@ export default function Production({
 
   async function handleTestPrint() {
     try {
-    setMessage("");
-    setError("");
+      setMessage("");
+      setError("");
 
-    const response = await fetch("http://localhost:3001/print-test", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        printerName: "Xprinter XP-365B",
-        batchNumber: "PK-TEST-001",
-        productName: "Шапка бини",
-        article: "bini-black-52",
-        quantity: 15,
-        operation: "Стачивание",
-      }),
-    });
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
+        .insert({
+          printer_code: "xprinter-main",
+          job_type: "test",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber: "PK-TEST-001",
+            productName: "Шапка бини",
+            article: "bini-black-52",
+            quantity: 15,
+            operation: "Стачивание",
+          },
+        })
+        .select("id, status")
+        .single();
 
-    const result = await response.json();
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать тестовое задание печати");
 
-    if (!response.ok) {
-      throw new Error(result.error || "Ошибка печати");
+      const result = await waitForPrintJob(job.id);
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Ошибка тестовой печати");
+      }
+
+      if (result?.status === "printed") {
+        setMessage("Тестовая этикетка напечатана");
+        return;
+      }
+
+      setMessage("Тестовая этикетка поставлена в очередь печати");
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка тестовой печати"
+      );
     }
-
-    setMessage("Тестовая этикетка отправлена на принтер");
-  } catch (error) {
-    setError(
-      error instanceof Error
-        ? error.message
-        : "Ошибка тестовой печати"
-    );
   }
-}
   async function makeQrFromPayload(payload: GeneratedQr["payload"]) {
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
       width: 600,
