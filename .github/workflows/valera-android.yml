@@ -60,6 +60,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: valera-0.4.0-apk
+          name: valera-0.5.0-apk
           path: valera-android-mvp/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
