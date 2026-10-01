@@ -8,7 +8,9 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
@@ -23,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var orb: ValeraOrbView
     private lateinit var toggleButton: Button
     private lateinit var modeText: TextView
+    private var waitingForOverlayPermission = false
 
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -54,7 +57,7 @@ class MainActivity : Activity() {
                             status.text = intent.getStringExtra(
                                 WakeWordService.EXTRA_MESSAGE
                             ) ?: "Открываю ChatGPT Voice"
-                            modeText.text = "Проверяю запуск ChatGPT Voice"
+                            modeText.text = "Микрофон освобождён • запускаю ChatGPT Voice"
                         }
 
                         WakeWordService.STATE_ERROR -> {
@@ -91,7 +94,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.6.0 • локальный wake-word • Android VOICE_COMMAND"
+            text = "Версия 0.7.0 • локальный wake-word • ChatGPT Voice direct"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -155,6 +158,21 @@ class MainActivity : Activity() {
         super.onStop()
     }
 
+    override fun onResume() {
+        super.onResume()
+
+        if (
+            waitingForOverlayPermission &&
+            Settings.canDrawOverlays(this)
+        ) {
+            waitingForOverlayPermission = false
+            ensurePermissionsAndStart()
+        } else if (waitingForOverlayPermission) {
+            status.text = "Разреши «Поверх других приложений»"
+            modeText.text = "Без этого Android блокирует запуск ChatGPT из фона"
+        }
+    }
+
     private fun ensurePermissionsAndStart() {
         val permissions = mutableListOf<String>()
 
@@ -171,6 +189,20 @@ class MainActivity : Activity() {
 
         if (permissions.isNotEmpty()) {
             requestPermissions(permissions.toTypedArray(), 100)
+            return
+        }
+
+        if (!Settings.canDrawOverlays(this)) {
+            waitingForOverlayPermission = true
+            status.text = "Нужно разрешение «Поверх других приложений»"
+            modeText.text = "Открою системную настройку для Валеры"
+
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
             return
         }
 
@@ -199,7 +231,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.6.0 • локальный wake-word • системный помощник"
+        modeText.text = "Версия 0.7.0 • локальный wake-word • системный помощник"
         refreshButton()
     }
 
@@ -211,22 +243,28 @@ class MainActivity : Activity() {
         val shell = PwaConfig.cached(this)
 
         val targetState =
-            if (shell.wakeTarget == PwaConfig.TARGET_SYSTEM_ASSISTANT) {
-                "ChatGPT • Android VOICE_COMMAND"
-            } else if (!shell.assistantUrl.isNullOrBlank()) {
-                "ERP PWA"
-            } else {
-                "PWA ждёт адрес"
+            when (shell.wakeTarget) {
+                PwaConfig.TARGET_CHATGPT_DIRECT -> "ChatGPT Voice • прямой запуск"
+                PwaConfig.TARGET_SYSTEM_ASSISTANT -> "ChatGPT • системный помощник"
+                else -> if (!shell.assistantUrl.isNullOrBlank()) {
+                    "ERP PWA"
+                } else {
+                    "PWA ждёт адрес"
+                }
             }
 
-        if (isServiceMarkedRunning()) {
+        if (!Settings.canDrawOverlays(this)) {
+            orb.setState(ValeraOrbView.State.WAITING)
+            status.text = "Нужно разрешение «Поверх других приложений»"
+            modeText.text = "Нажми «Включить Валеру», чтобы открыть настройку"
+        } else if (isServiceMarkedRunning()) {
             orb.setState(ValeraOrbView.State.LISTENING)
             status.text = "Скажи «Валера»"
             modeText.text = "Локальный wake-word • " + targetState
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.6.0 • " + targetState
+            modeText.text = "Версия 0.7.0 • " + targetState
         }
         refreshButton()
     }
@@ -248,7 +286,7 @@ class MainActivity : Activity() {
             requestCode == 100 &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         ) {
-            startValera()
+            ensurePermissionsAndStart()
         } else if (requestCode == 100) {
             status.text = "Нужен доступ к микрофону"
         }
