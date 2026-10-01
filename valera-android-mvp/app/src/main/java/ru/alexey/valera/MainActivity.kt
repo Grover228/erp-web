@@ -231,7 +231,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.7.0 • локальный wake-word • системный помощник"
+        modeText.text = "Версия 0.7.0 • локальный wake-word • ChatGPT Voice direct"
         refreshButton()
     }
 
