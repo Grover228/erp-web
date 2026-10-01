@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
+import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -45,6 +46,7 @@ class WakeWordService : Service(), RecognitionListener {
             .apply()
 
         initTts()
+        PwaConfig.refresh(this)
         initOfflineWakeWord()
     }
 
@@ -180,23 +182,71 @@ class WakeWordService : Service(), RecognitionListener {
         if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
         lastWakeAt = now
 
-        updateNotification("Услышал «Валера»")
+        val shellConfig = PwaConfig.cached(this)
+
+        updateNotification(
+            if (shellConfig.openPwaOnWake && !shellConfig.assistantUrl.isNullOrBlank()) {
+                "Открываю Валеру в ERP…"
+            } else {
+                "Услышал «Валера»"
+            }
+        )
+
         sendBroadcast(
             Intent(ACTION_WAKE_DETECTED)
                 .setPackage(packageName)
         )
 
-        tts?.speak(
-            "Да, Алексей. Слушаю.",
-            TextToSpeech.QUEUE_FLUSH,
-            null,
-            "valera-wake"
-        )
+        if (shellConfig.speakOnWake) {
+            tts?.speak(
+                "Да, Алексей. Слушаю.",
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                "valera-wake"
+            )
+        }
+
+        if (shellConfig.openPwaOnWake) {
+            openAssistantPwa(shellConfig.assistantUrl)
+        }
 
         handler.postDelayed(
             { updateNotification("Офлайн • жду «Валера»") },
-            1800L
+            2200L
         )
+    }
+
+    private fun openAssistantPwa(cachedUrl: String?) {
+        if (!cachedUrl.isNullOrBlank()) {
+            launchAssistantPwa(cachedUrl)
+            return
+        }
+
+        PwaConfig.refresh(this) { refreshed ->
+            if (
+                refreshed.openPwaOnWake &&
+                !refreshed.assistantUrl.isNullOrBlank()
+            ) {
+                launchAssistantPwa(refreshed.assistantUrl)
+            }
+        }
+    }
+
+    private fun launchAssistantPwa(url: String) {
+        handler.post {
+            try {
+                startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                        addFlags(
+                            Intent.FLAG_ACTIVITY_NEW_TASK or
+                                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        )
+                    }
+                )
+            } catch (_: Throwable) {
+                updateNotification("PWA не открылось • жду «Валера»")
+            }
+        }
     }
 
     private fun sendStateBroadcast(state: String, message: String) {
