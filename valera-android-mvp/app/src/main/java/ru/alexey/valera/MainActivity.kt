@@ -24,6 +24,7 @@ class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var orb: ValeraOrbView
     private lateinit var toggleButton: Button
+    private lateinit var lightButton: Button
     private lateinit var modeText: TextView
     private var waitingForOverlayPermission = false
 
@@ -94,7 +95,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.7.0 • локальный wake-word • ChatGPT Voice direct"
+            text = "Версия 0.8.0 • локальный wake-word • ChatGPT Voice direct"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -108,6 +109,18 @@ class MainActivity : Activity() {
                 } else {
                     ensurePermissionsAndStart()
                 }
+            }
+        }
+
+        lightButton = Button(this).apply {
+            text = "СВЕТ • BLE"
+            setOnClickListener {
+                startActivity(
+                    Intent(
+                        this@MainActivity,
+                        LightControlActivity::class.java
+                    )
+                )
             }
         }
 
@@ -125,6 +138,15 @@ class MainActivity : Activity() {
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 )
+            )
+            addView(
+                lightButton,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = 12
+                }
             )
         }
 
@@ -231,7 +253,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.7.0 • локальный wake-word • ChatGPT Voice direct"
+        modeText.text = "Версия 0.8.0 • локальный wake-word • ChatGPT Voice direct"
         refreshButton()
     }
 
@@ -264,7 +286,7 @@ class MainActivity : Activity() {
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.7.0 • " + targetState
+            modeText.text = "Версия 0.8.0 • " + targetState
         }
         refreshButton()
     }
