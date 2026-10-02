@@ -311,6 +311,15 @@ class WakeWordService : Service(), RecognitionListener {
             return
         }
 
+        if (LOCAL_COMMANDS_ONLY) {
+            assistantResponseComplete = true
+            assistantStreamBuffer = ""
+            updateNotification("Локальный режим • жду команду")
+            enqueueAssistantSpeech("Эта команда пока не запрограммирована.")
+            finishNativeAssistantIfDone()
+            return
+        }
+
         updateNotification("Думаю…")
         assistantStreamBuffer = ""
         assistantResponseComplete = false
@@ -988,6 +997,8 @@ class WakeWordService : Service(), RecognitionListener {
         const val PREFS = "valera"
         const val KEY_RUNNING = "wake_service_running"
 
+        // Temporary: retain ChatGPT streaming code, but do not send microphone speech to it.
+        private const val LOCAL_COMMANDS_ONLY = true
         private const val CHANNEL_ID = "valera"
         private const val NOTIFICATION_ID = 1
         private const val WAKE_WORD = "валера"
