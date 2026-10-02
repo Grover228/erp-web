@@ -22,14 +22,21 @@
 
     <queries>
         <package android:name="com.openai.chatgpt" />
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
     </queries>
 
     <application
         android:label="Валера"
-        android:icon="@drawable/valera_logo"
-        android:roundIcon="@drawable/valera_logo"
-        android:logo="@drawable/valera_logo"
+        android:icon="@mipmap/ic_launcher_valera"
+        android:roundIcon="@mipmap/ic_launcher_valera_round"
+        android:logo="@mipmap/ic_launcher_valera"
         android:theme="@style/AppTheme">
+        <activity
+            android:name=".VoiceSetupActivity"
+            android:exported="false" />
+
         <activity
             android:name=".LightControlActivity"
             android:exported="false" />
