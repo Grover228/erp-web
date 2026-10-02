@@ -11,8 +11,8 @@ android {
         applicationId = "ru.alexey.valera"
         minSdk = 28
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.0.1"
+        versionCode = 13
+        versionName = "1.0.2"
     }
 
     compileOptions {
@@ -36,4 +36,6 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("net.java.dev.jna:jna:5.18.1@aar")
     implementation("com.alphacephei:vosk-android:0.3.75@aar")
+    implementation("com.auth0:java-jwt:4.5.0")
+    implementation("com.auth0:jwks-rsa:0.23.0")
 }
