@@ -34,6 +34,10 @@
         android:logo="@mipmap/ic_launcher_valera"
         android:theme="@style/AppTheme">
         <activity
+            android:name=".ErpLoginActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".VoiceSetupActivity"
             android:exported="false" />
 
