@@ -108,17 +108,49 @@ class WakeWordService : Service(), RecognitionListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun initTts() {
-        tts = TextToSpeech(this) { status ->
+        initialiseTtsEngine(VoicePreferences.enginePackage(this))
+    }
+
+    private fun initialiseTtsEngine(enginePackage: String?) {
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+
+        val listener = TextToSpeech.OnInitListener { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale("ru", "RU")
-                tts?.setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
+                applySelectedVoice()
+            } else if (!enginePackage.isNullOrBlank()) {
+                handler.post {
+                    initialiseTtsEngine(null)
+                }
             }
         }
+
+        tts =
+            if (enginePackage.isNullOrBlank()) {
+                TextToSpeech(this, listener)
+            } else {
+                TextToSpeech(this, listener, enginePackage)
+            }
+    }
+
+    private fun applySelectedVoice() {
+        val current = tts ?: return
+
+        current.language = Locale("ru", "RU")
+
+        VoicePreferences.voiceName(this)?.let { voiceName ->
+            current.voices
+                ?.firstOrNull { it.name == voiceName }
+                ?.let { current.voice = it }
+        }
+
+        current.setAudioAttributes(
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        )
     }
 
     private fun initOfflineWakeWord() {
