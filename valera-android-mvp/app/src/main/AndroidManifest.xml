@@ -22,6 +22,7 @@
 
     <queries>
         <package android:name="com.openai.chatgpt" />
+        <package android:name="com.infoshell.recradio" />
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
