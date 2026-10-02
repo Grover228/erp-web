@@ -163,6 +163,7 @@ object LightVoiceCommands {
 
         colors.forEach { color ->
             color.aliases.forEach { alias ->
+                phrases += "валера $alias"
                 phrases += "валера сделай свет $alias"
                 phrases += "валера свет $alias"
                 phrases += "валера поставь $alias"
@@ -178,7 +179,7 @@ object LightVoiceCommands {
         }
 
         for (minutes in 1..120) {
-            val words = numberToWords(minutes)
+            val words = numberToWordsForMinutes(minutes)
             val minuteWord = minuteForm(minutes)
 
             phrases += "валера выключи свет через $words $minuteWord"
@@ -313,6 +314,21 @@ object LightVoiceCommands {
         }
 
         return parts.joinToString(" ")
+    }
+
+    private fun numberToWordsForMinutes(value: Int): String {
+        val base = numberToWords(value)
+
+        return when {
+            value % 100 in 11..14 -> base
+            value % 10 == 1 ->
+                base.substringBeforeLast("один", base) +
+                    if (base.endsWith("один")) "одну" else ""
+            value % 10 == 2 ->
+                base.substringBeforeLast("два", base) +
+                    if (base.endsWith("два")) "две" else ""
+            else -> base
+        }.trim()
     }
 
     private fun minuteForm(value: Int): String {
