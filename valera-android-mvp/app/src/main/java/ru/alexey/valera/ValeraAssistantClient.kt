@@ -6,7 +6,8 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
-class ValeraAssistantClient {
+class ValeraAssistantClient(context: android.content.Context) {
+    private val auth = ChatGptAuthManager(context.applicationContext)
     @Volatile private var cancelled = false
 
     fun cancel() { cancelled = true }
@@ -23,6 +24,7 @@ class ValeraAssistantClient {
         Thread {
             var connection: HttpURLConnection? = null
             try {
+                val accessToken = auth.accessToken()
                 connection = (URL(ENDPOINT).openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 10_000
@@ -30,11 +32,14 @@ class ValeraAssistantClient {
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json")
                     setRequestProperty("Accept", "text/event-stream")
-                    setRequestProperty("apikey", SUPABASE_ANON_KEY)
-                    setRequestProperty("Authorization", "Bearer " + SUPABASE_ANON_KEY)
+                    setRequestProperty("Authorization", "Bearer " + accessToken)
                 }
 
-                val request = JSONObject().put("text", text)
+                val request = JSONObject()
+                    .put("model", "gpt-6.1-sol")
+                    .put("store", false)
+                    .put("stream", true)
+                    .put("input", text)
                 if (!previousResponseId.isNullOrBlank()) {
                     request.put("previous_response_id", previousResponseId)
                 }
@@ -49,7 +54,7 @@ class ValeraAssistantClient {
                         ?.bufferedReader(Charsets.UTF_8)
                         ?.use { it.readText() }
                         .orEmpty()
-                    onError("HTTP " + status + ": " + body.take(500))
+                    onError(if (status == 401 || status == 403) "Нужно снова подключить ChatGPT в приложении Валеры." else "ChatGPT временно недоступен (HTTP " + status + ").")
                     return@Thread
                 }
 
@@ -91,8 +96,6 @@ class ValeraAssistantClient {
 
     companion object {
         private const val ENDPOINT =
-            "https://jjwmaibsqdaofilxuvaw.supabase.co/functions/v1/valera-assistant"
-        private const val SUPABASE_ANON_KEY =
-            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Impqd21haWJzcWRhb2ZpbHh1dmF3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY3ODg4NzMsImV4cCI6MjA5MjM2NDg3M30.43GlOumDk0tE2dRnE1Bsm9HsKkQFWbYCAbiFQ1HpCYI"
+            "https://api.openai.com/v1/responses"
     }
 }
