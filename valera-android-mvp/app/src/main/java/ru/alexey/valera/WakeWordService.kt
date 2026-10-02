@@ -32,7 +32,7 @@ class WakeWordService : Service(), RecognitionListener {
     private var tts: TextToSpeech? = null
     private val assistantSpeechQueue = ArrayDeque<String>()
     private var assistantSpeechBusy = false
-    private val assistantClient = ValeraAssistantClient()
+    private lateinit var assistantClient: ValeraAssistantClient
     private var assistantQueryListening = false
     private var assistantStreamBuffer = ""
     private var assistantResponseComplete = false
@@ -70,6 +70,7 @@ class WakeWordService : Service(), RecognitionListener {
     override fun onCreate() {
         super.onCreate()
 
+        assistantClient = ValeraAssistantClient(this)
         createChannel()
         startForeground(
             NOTIFICATION_ID,
