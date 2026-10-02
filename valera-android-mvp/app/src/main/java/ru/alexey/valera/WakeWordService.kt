@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import org.json.JSONObject
 import org.vosk.LibVosk
 import org.vosk.LogLevel
@@ -29,6 +30,8 @@ class WakeWordService : Service(), RecognitionListener {
     private var model: Model? = null
     private var speechService: SpeechService? = null
     private var tts: TextToSpeech? = null
+    private val assistantSpeechQueue = ArrayDeque<String>()
+    private var assistantSpeechBusy = false
     private lateinit var lightExecutor: LightVoiceExecutor
     private var modelLoading = false
     private var lastWakeAt = 0L
@@ -119,6 +122,7 @@ class WakeWordService : Service(), RecognitionListener {
         val listener = TextToSpeech.OnInitListener { status ->
             if (status == TextToSpeech.SUCCESS) {
                 applySelectedVoice()
+                installTtsProgressListener()
             } else if (!enginePackage.isNullOrBlank()) {
                 handler.post {
                     initialiseTtsEngine(null)
@@ -153,6 +157,69 @@ class WakeWordService : Service(), RecognitionListener {
         )
     }
 
+    private fun installTtsProgressListener() {
+        tts?.setOnUtteranceProgressListener(
+            object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+
+                override fun onDone(utteranceId: String?) {
+                    if (utteranceId?.startsWith(ASSISTANT_UTTERANCE_PREFIX) == true) {
+                        handler.post {
+                            assistantSpeechBusy = false
+                            speakNextAssistantPhrase()
+                        }
+                    }
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onError(utteranceId: String?) {
+                    if (utteranceId?.startsWith(ASSISTANT_UTTERANCE_PREFIX) == true) {
+                        handler.post {
+                            assistantSpeechBusy = false
+                            speakNextAssistantPhrase()
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    private fun enqueueAssistantSpeech(textChunk: String) {
+        splitForSpeech(textChunk).forEach(assistantSpeechQueue::addLast)
+        speakNextAssistantPhrase()
+    }
+
+    private fun speakNextAssistantPhrase() {
+        if (assistantSpeechBusy) return
+        val phrase = assistantSpeechQueue.removeFirstOrNull() ?: return
+        assistantSpeechBusy = true
+
+        tts?.speak(
+            phrase,
+            TextToSpeech.QUEUE_ADD,
+            null,
+            "$ASSISTANT_UTTERANCE_PREFIX${System.nanoTime()}"
+        ) ?: run {
+            assistantSpeechBusy = false
+        }
+    }
+
+    private fun splitForSpeech(text: String): List<String> {
+        val normalized = text.replace(Regex("""\s+"""), " ").trim()
+        if (normalized.isBlank()) return emptyList()
+
+        return Regex("""(?<=[.!?…])\s+""")
+            .split(normalized)
+            .flatMap { sentence ->
+                if (sentence.length <= ASSISTANT_SPEECH_CHUNK_CHARS) {
+                    listOf(sentence)
+                } else {
+                    sentence.chunked(ASSISTANT_SPEECH_CHUNK_CHARS)
+                }
+            }
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+    }
     private fun initOfflineWakeWord() {
         if (modelLoading || model != null) return
 
@@ -791,5 +858,7 @@ class WakeWordService : Service(), RecognitionListener {
         private const val ASSISTANT_RECORDING_START_TIMEOUT_MS = 15000L
         private const val ASSISTANT_SILENT_POLLS_TO_RESUME = 5
         private const val WAKE_RESUME_DELAY_MS = 1200L
+        private const val ASSISTANT_UTTERANCE_PREFIX = "valera-assistant-"
+        private const val ASSISTANT_SPEECH_CHUNK_CHARS = 180
     }
 }
