@@ -122,7 +122,7 @@ class LightControlActivity : Activity() {
         root.addView(
             TextView(this).apply {
                 text =
-                    "Тестер BLEDDM / ELK-BLEDOM. Сначала найдём контроллер и проверим команды."
+                    "BLEDDM / ELK-BLEDOM. После выбора ленты работают голосовые команды: «Валера, включи свет», цвета, яркость и таймер."
                 textSize = 14f
                 setTextColor(Color.rgb(160, 175, 205))
                 setPadding(0, 8, 0, 22)
