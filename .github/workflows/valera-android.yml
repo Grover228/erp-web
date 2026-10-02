@@ -9,6 +9,8 @@ on:
       - ".github/workflows/valera-android.yml"
   workflow_dispatch:
 
+# build trigger: Valera 1.0.4 ERP voice integration
+
 jobs:
   build:
     runs-on: ubuntu-latest
