@@ -39,6 +39,7 @@ class WakeWordService : Service(), RecognitionListener {
     private var previousResponseId: String? = null
     private lateinit var lightExecutor: LightVoiceExecutor
     private lateinit var erpExecutor: ErpVoiceExecutor
+    private lateinit var musicExecutor: MusicVoiceExecutor
     private var modelLoading = false
     private var lastWakeAt = 0L
     private var wakeDecisionPending = false
@@ -86,6 +87,7 @@ class WakeWordService : Service(), RecognitionListener {
         initTts()
         lightExecutor = LightVoiceExecutor(this)
         erpExecutor = ErpVoiceExecutor(this)
+        musicExecutor = MusicVoiceExecutor(this)
         restoreLightTimer()
         PwaConfig.refresh(this)
         initOfflineWakeWord()
@@ -473,6 +475,15 @@ class WakeWordService : Service(), RecognitionListener {
         val normalized = normalize(phrase)
         if (!normalized.contains(WAKE_WORD)) return
 
+        val musicCommand = MusicVoiceCommands.parse(normalized)
+        if (musicCommand != null) {
+            handler.removeCallbacks(wakeDecisionRunnable)
+            wakeDecisionPending = false
+            lastWakeHypothesis = ""
+            handleMusicCommand(musicCommand)
+            return
+        }
+
         val localCommand = LightVoiceCommands.parse(normalized)
         if (localCommand != null) {
             handler.removeCallbacks(wakeDecisionRunnable)
@@ -545,6 +556,19 @@ class WakeWordService : Service(), RecognitionListener {
 
         // Подтягиваем актуальную удалённую конфигурацию уже для следующего пробуждения.
         PwaConfig.refresh(this)
+    }
+
+    private fun handleMusicCommand(command: MusicVoiceCommand) {
+        val now = System.currentTimeMillis()
+        if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
+        lastWakeAt = now
+
+        sendBroadcast(Intent(ACTION_WAKE_DETECTED).setPackage(packageName))
+        val result = musicExecutor.execute(command)
+        val reply = result.getOrElse { it.message ?: "Не удалось открыть Радио Рекорд." }
+        updateNotification(reply)
+        enqueueAssistantSpeech(reply)
+        handler.postDelayed({ startContinuousListening() }, WAKE_RESUME_DELAY_MS)
     }
 
     private fun handleLightCommand(command: LightVoiceCommand) {
