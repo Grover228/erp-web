@@ -186,6 +186,15 @@ class MainActivity : Activity() {
                     topMargin = 12
                 }
             )
+            addView(
+                chatGptButton,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = 12
+                }
+            )
         }
 
         setContentView(root)
