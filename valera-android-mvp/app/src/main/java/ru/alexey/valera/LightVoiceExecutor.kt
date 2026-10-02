@@ -85,21 +85,24 @@ class LightVoiceExecutor(
         }
 
         led = BleLedController(context) { state ->
-            if (finished) return@BleLedController
+            if (!finished) {
+                if (state.ready && !commandSent) {
+                    commandSent = true
+                    val queued = performCommand(led, command)
 
-            if (state.ready && !commandSent) {
-                commandSent = true
-                val queued = performCommand(led, command)
-
-                if (queued) {
-                    finish(true, LightVoiceCommands.describe(command))
-                } else {
-                    finish(false, "Команда света не отправилась")
-                }
-            } else if (!state.connected && !state.ready && commandSent.not()) {
-                if (
-                    state.message.contains("разорвано", ignoreCase = true) ||
-                    state.message.contains("ошиб", ignoreCase = true)
+                    if (queued) {
+                        finish(true, LightVoiceCommands.describe(command))
+                    } else {
+                        finish(false, "Команда света не отправилась")
+                    }
+                } else if (
+                    !state.connected &&
+                    !state.ready &&
+                    commandSent.not() &&
+                    (
+                        state.message.contains("разорвано", ignoreCase = true) ||
+                        state.message.contains("ошиб", ignoreCase = true)
+                    )
                 ) {
                     finish(false, state.message)
                 }
