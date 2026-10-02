@@ -29,8 +29,21 @@ class WakeWordService : Service(), RecognitionListener {
     private var model: Model? = null
     private var speechService: SpeechService? = null
     private var tts: TextToSpeech? = null
+    private lateinit var lightExecutor: LightVoiceExecutor
     private var modelLoading = false
     private var lastWakeAt = 0L
+    private var wakeDecisionPending = false
+    private var lastWakeHypothesis = ""
+
+    private val wakeDecisionRunnable = Runnable {
+        wakeDecisionPending = false
+        lastWakeHypothesis = ""
+        onWakeDetected()
+    }
+
+    private val lightTimerRunnable = Runnable {
+        runLightTimerNow()
+    }
 
     private var assistantHandoffActive = false
     private var assistantRecordingSeen = false
@@ -52,6 +65,8 @@ class WakeWordService : Service(), RecognitionListener {
             .apply()
 
         initTts()
+        lightExecutor = LightVoiceExecutor(this)
+        restoreLightTimer()
         PwaConfig.refresh(this)
         initOfflineWakeWord()
     }
@@ -73,6 +88,7 @@ class WakeWordService : Service(), RecognitionListener {
         handler.removeCallbacksAndMessages(null)
 
         stopWakeDetector()
+        lightExecutor.closeActive()
 
         model?.close()
         model = null
@@ -145,7 +161,7 @@ class WakeWordService : Service(), RecognitionListener {
             val recognizer = Recognizer(
                 currentModel,
                 SAMPLE_RATE,
-                "[\"валера\", \"[unk]\"]"
+                LightVoiceCommands.grammarJson()
             )
 
             speechService = SpeechService(recognizer, SAMPLE_RATE).also {
@@ -184,9 +200,45 @@ class WakeWordService : Service(), RecognitionListener {
             hypothesis
         }
 
-        if (normalize(phrase).contains(WAKE_WORD)) {
-            onWakeDetected()
+        val normalized = normalize(phrase)
+        if (!normalized.contains(WAKE_WORD)) return
+
+        val localCommand = LightVoiceCommands.parse(normalized)
+        if (localCommand != null) {
+            handler.removeCallbacks(wakeDecisionRunnable)
+            wakeDecisionPending = false
+            lastWakeHypothesis = ""
+            handleLightCommand(localCommand)
+            return
         }
+
+        scheduleWakeDecision(normalized)
+    }
+
+    private fun scheduleWakeDecision(normalized: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
+
+        if (normalized == lastWakeHypothesis && wakeDecisionPending) {
+            return
+        }
+
+        lastWakeHypothesis = normalized
+        handler.removeCallbacks(wakeDecisionRunnable)
+        wakeDecisionPending = true
+
+        val hasLightHint = LIGHT_COMMAND_HINTS.any { hint ->
+            normalized.contains(hint)
+        }
+
+        handler.postDelayed(
+            wakeDecisionRunnable,
+            if (hasLightHint) {
+                LIGHT_COMMAND_WAIT_MS
+            } else {
+                WAKE_ONLY_WAIT_MS
+            }
+        )
     }
 
     private fun normalize(value: String): String =
@@ -202,6 +254,10 @@ class WakeWordService : Service(), RecognitionListener {
         ) {
             return
         }
+
+        handler.removeCallbacks(wakeDecisionRunnable)
+        wakeDecisionPending = false
+        lastWakeHypothesis = ""
 
         lastWakeAt = now
         val shellConfig = PwaConfig.cached(this)
@@ -219,6 +275,157 @@ class WakeWordService : Service(), RecognitionListener {
 
         // Подтягиваем актуальную удалённую конфигурацию уже для следующего пробуждения.
         PwaConfig.refresh(this)
+    }
+
+    private fun handleLightCommand(command: LightVoiceCommand) {
+        val now = System.currentTimeMillis()
+        if (now - lastWakeAt < WAKE_DEBOUNCE_MS) return
+
+        lastWakeAt = now
+
+        sendBroadcast(
+            Intent(ACTION_WAKE_DETECTED)
+                .setPackage(packageName)
+        )
+
+        when (command) {
+            LightVoiceCommand.CancelTimer -> {
+                cancelLightTimer()
+                announceLocalLightResult(
+                    true,
+                    LightVoiceCommands.describe(command)
+                )
+            }
+
+            is LightVoiceCommand.TimerOff -> {
+                scheduleLightOff(command.minutes)
+                announceLocalLightResult(
+                    true,
+                    LightVoiceCommands.describe(command)
+                )
+            }
+
+            is LightVoiceCommand.PowerForMinutes -> {
+                lightExecutor.execute(
+                    LightVoiceCommand.Power(true)
+                ) { success, message ->
+                    handler.post {
+                        if (success) {
+                            scheduleLightOff(command.minutes)
+                            announceLocalLightResult(
+                                true,
+                                LightVoiceCommands.describe(command)
+                            )
+                        } else {
+                            announceLocalLightResult(false, message)
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                lightExecutor.execute(command) { success, message ->
+                    handler.post {
+                        announceLocalLightResult(success, message)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun announceLocalLightResult(
+        success: Boolean,
+        message: String
+    ) {
+        updateNotification(
+            if (success) {
+                "Свет • $message"
+            } else {
+                "Свет • ошибка"
+            }
+        )
+
+        tts?.speak(
+            message,
+            TextToSpeech.QUEUE_FLUSH,
+            null,
+            "valera-light"
+        )
+
+        handler.postDelayed(
+            {
+                if (!assistantHandoffActive) {
+                    updateNotification("Офлайн • жду «Валера»")
+                    sendStateBroadcast(
+                        STATE_LISTENING,
+                        "Скажи «Валера»"
+                    )
+                }
+            },
+            2500L
+        )
+    }
+
+    private fun scheduleLightOff(minutes: Int) {
+        val dueAt =
+            System.currentTimeMillis() +
+                minutes.coerceAtLeast(1) * 60_000L
+
+        getSharedPreferences(LIGHT_PREFS, MODE_PRIVATE)
+            .edit()
+            .putLong(KEY_LIGHT_TIMER_DUE_AT, dueAt)
+            .apply()
+
+        armLightTimer(dueAt)
+    }
+
+    private fun restoreLightTimer() {
+        val dueAt = getSharedPreferences(LIGHT_PREFS, MODE_PRIVATE)
+            .getLong(KEY_LIGHT_TIMER_DUE_AT, 0L)
+
+        if (dueAt > 0L) {
+            armLightTimer(dueAt)
+        }
+    }
+
+    private fun armLightTimer(dueAt: Long) {
+        handler.removeCallbacks(lightTimerRunnable)
+
+        val delay = dueAt - System.currentTimeMillis()
+
+        if (delay <= 0L) {
+            handler.post(lightTimerRunnable)
+        } else {
+            handler.postDelayed(lightTimerRunnable, delay)
+        }
+    }
+
+    private fun cancelLightTimer() {
+        handler.removeCallbacks(lightTimerRunnable)
+
+        getSharedPreferences(LIGHT_PREFS, MODE_PRIVATE)
+            .edit()
+            .remove(KEY_LIGHT_TIMER_DUE_AT)
+            .apply()
+    }
+
+    private fun runLightTimerNow() {
+        cancelLightTimer()
+
+        lightExecutor.execute(
+            LightVoiceCommand.Power(false)
+        ) { success, message ->
+            handler.post {
+                if (success) {
+                    announceLocalLightResult(
+                        true,
+                        "Таймер. Выключаю свет"
+                    )
+                } else {
+                    announceLocalLightResult(false, message)
+                }
+            }
+        }
     }
 
     private fun runPwaWake(shellConfig: ShellConfig) {
@@ -521,6 +728,30 @@ class WakeWordService : Service(), RecognitionListener {
         private const val WAKE_WORD = "валера"
         private const val SAMPLE_RATE = 16000.0f
         private const val WAKE_DEBOUNCE_MS = 3000L
+        private const val WAKE_ONLY_WAIT_MS = 1200L
+        private const val LIGHT_COMMAND_WAIT_MS = 1800L
+
+        private val LIGHT_COMMAND_HINTS = listOf(
+            "свет",
+            "лент",
+            "ярк",
+            "таймер",
+            "включ",
+            "выключ",
+            "красн",
+            "зелен",
+            "син",
+            "бел",
+            "фиолет",
+            "желт",
+            "оранж",
+            "розов",
+            "голуб",
+            "бирюз"
+        )
+
+        private const val LIGHT_PREFS = "valera-light"
+        private const val KEY_LIGHT_TIMER_DUE_AT = "voice_timer_due_at"
 
         private const val ASSISTANT_LAUNCH_DELAY_MS = 450L
         private const val ASSISTANT_FIRST_CHECK_DELAY_MS = 3500L
