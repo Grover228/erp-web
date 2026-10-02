@@ -95,7 +95,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.9.0 • локальный wake-word • ChatGPT Voice direct"
+            text = "Версия 0.10.0 • локальный wake-word • ChatGPT Voice direct"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -253,7 +253,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.9.0 • локальный wake-word • ChatGPT Voice direct"
+        modeText.text = "Версия 0.10.0 • локальный wake-word • ChatGPT Voice direct"
         refreshButton()
     }
 
@@ -286,7 +286,7 @@ class MainActivity : Activity() {
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.9.0 • " + targetState
+            modeText.text = "Версия 0.10.0 • " + targetState
         }
         refreshButton()
     }
