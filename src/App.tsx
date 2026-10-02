@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Production, { type ProductionTab } from "./Production";
+import ProductionPlanningPage from "./pages/ProductionPlanningPage";
 import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -20,13 +21,17 @@ import ResaleProductsDirectory from "./directories/ResaleProductsDirectory";
 import AssetsDirectory from "./directories/AssetsDirectory";
 import { supabase } from "./supabase";
 import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
+import ValeraPage from "./valera/ValeraPage";
+import { shouldOpenValera } from "./valera/bridge";
 
 type Screen =
   | "dashboard"
   | "production"
+  | "production-planning"
   | "warehouse"
   | "finance"
   | "scanner"
+  | "valera"
   | "employee-home"
   | "directories"
   | "directory-employees"
@@ -66,7 +71,9 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
-  const [currentScreen, setCurrentScreen] = useState<Screen>("dashboard");
+  const [currentScreen, setCurrentScreen] = useState<Screen>(() =>
+    shouldOpenValera() ? "valera" : "dashboard"
+  );
   const [productionInitialTab, setProductionInitialTab] =
     useState<ProductionTab>("jobs");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -115,8 +122,13 @@ function App() {
       key: "production" as Screen,
       label: "Производство 🏭",
     },
+    canManageProduction && {
+      key: "production-planning" as Screen,
+      label: "План производства 📅",
+    },
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
+    { key: "valera" as Screen, label: "Валера ✦" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
     canManageDirectories && {
       key: "directories" as Screen,
@@ -126,12 +138,16 @@ function App() {
   ].filter(Boolean) as { key: Screen; label: string }[];
 
   const pageTitle =
-    currentScreen === "employee-home"
+    currentScreen === "valera"
+      ? "Валера"
+      : currentScreen === "employee-home"
       ? "Моя смена"
       : currentScreen === "dashboard"
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
+      : currentScreen === "production-planning"
+      ? "План производства"
       : currentScreen === "warehouse"
       ? "Склад"
       : currentScreen === "finance"
@@ -169,12 +185,16 @@ function App() {
       : "Сканер QR";
 
   const pageSubtitle =
-    currentScreen === "employee-home"
+    currentScreen === "valera"
+      ? "Голосовой помощник, навыки и маршрутизация команд"
+      : currentScreen === "employee-home"
       ? "Рабочий экран сотрудника"
       : currentScreen === "dashboard"
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
+      : currentScreen === "production-planning"
+      ? "Сезонный план, прогресс и календарь производства"
       : currentScreen === "warehouse"
       ? "Закупки, поступления, остатки и отгрузки"
       : currentScreen === "finance"
@@ -274,6 +294,7 @@ function App() {
     if (!session || currentEmployeeLoading) return;
     if (!currentEmployee) return;
 
+    if (currentScreen === "valera") return;
     if (currentScreen === "employee-home") return;
 
     if (currentScreen === "scanner") {
@@ -286,7 +307,11 @@ function App() {
       return;
     }
 
-    if (currentScreen === "production" && !canManageProduction) {
+    if (
+      (currentScreen === "production" ||
+        currentScreen === "production-planning") &&
+      !canManageProduction
+    ) {
       setCurrentScreen("employee-home");
       return;
     }
@@ -504,6 +529,11 @@ function App() {
       return;
     }
 
+    if (currentScreen === "production-planning") {
+      setCurrentScreen(getDefaultScreen());
+      return;
+    }
+
     if (currentScreen === "warehouse" || currentScreen === "finance") {
       setCurrentScreen(getDefaultScreen());
       return;
@@ -682,6 +712,24 @@ function App() {
       );
     }
 
+    if (currentScreen === "valera") {
+      return (
+        <ValeraPage
+          userName={currentEmployee.full_name}
+          roleCode={currentRoleCode}
+          access={{
+            isAdmin,
+            isManager,
+            canViewDashboard,
+            canManageProduction,
+            canViewWarehouse,
+            canViewFinance,
+            canUseScanner,
+          }}
+        />
+      );
+    }
+
     if (currentScreen === "employee-home") {
       return (
         <EmployeeMobilePage
@@ -711,6 +759,12 @@ function App() {
       if (!canManageProduction) return renderAccessDenied();
 
       return <Production initialTab={productionInitialTab} />;
+    }
+
+    if (currentScreen === "production-planning") {
+      if (!canManageProduction) return renderAccessDenied();
+
+      return <ProductionPlanningPage />;
     }
 
     if (currentScreen === "warehouse") {
@@ -982,9 +1036,12 @@ function App() {
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
                   (item.key === "production" &&
                     currentScreen === "production") ||
+                  (item.key === "production-planning" &&
+                    currentScreen === "production-planning") ||
                   (item.key === "warehouse" &&
                     currentScreen === "warehouse") ||
                   (item.key === "finance" && currentScreen === "finance") ||
+                  (item.key === "valera" && currentScreen === "valera") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -1017,11 +1074,17 @@ function App() {
                           setProductionInitialTab("jobs");
                           setCurrentScreen("production");
                           break;
+                        case "production-planning":
+                          setCurrentScreen("production-planning");
+                          break;
                         case "warehouse":
                           setCurrentScreen("warehouse");
                           break;
                         case "finance":
                           setCurrentScreen("finance");
+                          break;
+                        case "valera":
+                          setCurrentScreen("valera");
                           break;
                         case "directories":
                           setCurrentScreen("directories");
