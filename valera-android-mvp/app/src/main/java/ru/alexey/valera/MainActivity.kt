@@ -25,6 +25,7 @@ class MainActivity : Activity() {
     private lateinit var orb: ValeraOrbView
     private lateinit var toggleButton: Button
     private lateinit var lightButton: Button
+    private lateinit var voiceButton: Button
     private lateinit var modeText: TextView
     private var waitingForOverlayPermission = false
 
@@ -95,7 +96,7 @@ class MainActivity : Activity() {
         }
 
         modeText = TextView(this).apply {
-            text = "Версия 0.10.0 • локальный wake-word • ChatGPT Voice direct"
+            text = "Версия 1.0 • локальный wake-word • ChatGPT Voice direct"
             textSize = 14f
             setTextColor(Color.rgb(160, 175, 205))
             gravity = Gravity.CENTER
@@ -124,6 +125,13 @@ class MainActivity : Activity() {
             }
         }
 
+        voiceButton = Button(this).apply {
+            text = "ГОЛОС И ЗВУК"
+            setOnClickListener {
+                openVoiceSetup()
+            }
+        }
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
@@ -148,10 +156,24 @@ class MainActivity : Activity() {
                     topMargin = 12
                 }
             )
+            addView(
+                voiceButton,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    topMargin = 12
+                }
+            )
         }
 
         setContentView(root)
         refreshFromStoredState()
+
+        if (!VoicePreferences.isConfigured(this)) {
+            openVoiceSetup()
+        }
+
         PwaConfig.refresh(this) {
             refreshFromStoredState()
         }
@@ -253,7 +275,7 @@ class MainActivity : Activity() {
 
         orb.setState(ValeraOrbView.State.WAITING)
         status.text = "Валера отключён"
-        modeText.text = "Версия 0.10.0 • локальный wake-word • ChatGPT Voice direct"
+        modeText.text = "Версия 1.0 • локальный wake-word • ChatGPT Voice direct"
         refreshButton()
     }
 
@@ -286,7 +308,7 @@ class MainActivity : Activity() {
         } else {
             orb.setState(ValeraOrbView.State.WAITING)
             status.text = "Нажми «Включить Валеру»"
-            modeText.text = "Версия 0.10.0 • " + targetState
+            modeText.text = "Версия 1.0 • " + targetState
         }
         refreshButton()
     }
@@ -295,6 +317,47 @@ class MainActivity : Activity() {
         toggleButton.text =
             if (isServiceMarkedRunning()) "Отключить Валеру"
             else "Включить Валеру"
+    }
+
+    private fun openVoiceSetup() {
+        startActivityForResult(
+            Intent(this, VoiceSetupActivity::class.java),
+            REQUEST_VOICE_SETUP
+        )
+    }
+
+    @Deprecated("Deprecated in Android API")
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (
+            requestCode == REQUEST_VOICE_SETUP &&
+            resultCode == RESULT_OK
+        ) {
+            val wasRunning = isServiceMarkedRunning()
+
+            if (wasRunning) {
+                stopService(Intent(this, WakeWordService::class.java))
+                getSharedPreferences(
+                    WakeWordService.PREFS,
+                    MODE_PRIVATE
+                )
+                    .edit()
+                    .putBoolean(WakeWordService.KEY_RUNNING, false)
+                    .apply()
+
+                ContextCompat.startForegroundService(
+                    this,
+                    Intent(this, WakeWordService::class.java)
+                )
+            }
+
+            refreshFromStoredState()
+        }
     }
 
     override fun onRequestPermissionsResult(
@@ -312,5 +375,9 @@ class MainActivity : Activity() {
         } else if (requestCode == 100) {
             status.text = "Нужен доступ к микрофону"
         }
+    }
+
+    companion object {
+        private const val REQUEST_VOICE_SETUP = 210
     }
 }
