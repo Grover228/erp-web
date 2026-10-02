@@ -26,6 +26,9 @@
 
     <application
         android:label="Валера"
+        android:icon="@drawable/valera_logo"
+        android:roundIcon="@drawable/valera_logo"
+        android:logo="@drawable/valera_logo"
         android:theme="@style/AppTheme">
         <activity
             android:name=".LightControlActivity"
