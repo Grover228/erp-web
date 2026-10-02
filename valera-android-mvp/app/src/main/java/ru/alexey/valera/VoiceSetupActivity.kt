@@ -37,6 +37,7 @@ class VoiceSetupActivity : Activity() {
     private var voiceOptions: List<Voice?> = emptyList()
     private var selectedEnginePackage: String? = null
     private var selectedVoiceName: String? = null
+    private var selectedEngineLabel: String = "системный"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -239,6 +240,7 @@ class VoiceSetupActivity : Activity() {
         tts = null
 
         selectedEnginePackage = packageName
+        selectedEngineLabel = engines.firstOrNull { it.packageName == packageName }?.label ?: "системный"
         selectedVoiceName = null
         saveButton.isEnabled = false
         voicesContainer.removeAllViews()
@@ -306,9 +308,14 @@ class VoiceSetupActivity : Activity() {
 
         statusText.text =
             if (russianVoices.isNotEmpty()) {
-                "Нашёл вариантов: ${russianVoices.size}. Показываю первые ${voiceOptions.size}."
+                val sileroHint = if (selectedEngineLabel.contains("RuVoice", ignoreCase = true)) {
+                    " • Silero офлайн"
+                } else {
+                    ""
+                }
+                "$selectedEngineLabel$sileroHint • найдено голосов: ${russianVoices.size}. Показываю ${voiceOptions.size}."
             } else {
-                "Отдельные русские голоса движок не сообщил. Доступен его голос по умолчанию."
+                "$selectedEngineLabel • отдельные русские голоса не объявлены. Доступен голос движка по умолчанию."
             }
 
         saveButton.isEnabled = true
@@ -334,7 +341,7 @@ class VoiceSetupActivity : Activity() {
                             "офлайн"
                         }
 
-                    "Вариант ${index + 1} • ${voice.locale.language}$country • $mode"
+                    "${voiceDisplayName(voice)} • ${voice.locale.language}$country • $mode"
                 }
 
             val button = Button(this).apply {
@@ -354,6 +361,17 @@ class VoiceSetupActivity : Activity() {
             }
 
             addWithTopMargin(voicesContainer, button, 8)
+        }
+    }
+
+    private fun voiceDisplayName(voice: Voice): String {
+        val name = voice.name
+        val knownSilero = listOf("aidar", "baya", "kseniya", "xenia", "eugene")
+            .firstOrNull { name.contains(it, ignoreCase = true) }
+        return if (knownSilero != null) {
+            "Silero • $knownSilero"
+        } else {
+            name
         }
     }
 
