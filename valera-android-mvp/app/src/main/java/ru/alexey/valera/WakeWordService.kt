@@ -38,6 +38,7 @@ class WakeWordService : Service(), RecognitionListener {
     private var assistantResponseComplete = false
     private var previousResponseId: String? = null
     private lateinit var lightExecutor: LightVoiceExecutor
+    private lateinit var erpExecutor: ErpVoiceExecutor
     private var modelLoading = false
     private var lastWakeAt = 0L
     private var wakeDecisionPending = false
@@ -84,6 +85,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         initTts()
         lightExecutor = LightVoiceExecutor(this)
+        erpExecutor = ErpVoiceExecutor(this)
         restoreLightTimer()
         PwaConfig.refresh(this)
         initOfflineWakeWord()
@@ -291,6 +293,24 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun sendAssistantQuery(text: String) {
+        val erpCommand = ErpVoiceCommands.parse(text)
+        if (erpCommand != null) {
+            updateNotification("Выполняю команду ERP…")
+            assistantStreamBuffer = ""
+            assistantResponseComplete = false
+            Thread {
+                val result = erpExecutor.execute(erpCommand)
+                handler.post {
+                    val reply = result.getOrElse { it.message ?: "Не удалось выполнить команду ERP." }
+                    assistantResponseComplete = true
+                    updateNotification(reply)
+                    enqueueAssistantSpeech(reply)
+                    finishNativeAssistantIfDone()
+                }
+            }.start()
+            return
+        }
+
         updateNotification("Думаю…")
         assistantStreamBuffer = ""
         assistantResponseComplete = false
