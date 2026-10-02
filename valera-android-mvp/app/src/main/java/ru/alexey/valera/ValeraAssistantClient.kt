@@ -35,14 +35,21 @@ class ValeraAssistantClient(context: android.content.Context) {
                     setRequestProperty("Authorization", "Bearer " + accessToken)
                 }
 
+                val inputItem = JSONObject()
+                    .put("role", "user")
+                    .put(
+                        "content",
+                        org.json.JSONArray().put(
+                            JSONObject()
+                                .put("type", "input_text")
+                                .put("text", text)
+                        )
+                    )
                 val request = JSONObject()
                     .put("model", "gpt-6.1-sol")
                     .put("store", false)
                     .put("stream", true)
-                    .put("input", text)
-                if (!previousResponseId.isNullOrBlank()) {
-                    request.put("previous_response_id", previousResponseId)
-                }
+                    .put("input", org.json.JSONArray().put(inputItem))
 
                 connection.outputStream.use {
                     it.write(request.toString().toByteArray(Charsets.UTF_8))
@@ -54,7 +61,13 @@ class ValeraAssistantClient(context: android.content.Context) {
                         ?.bufferedReader(Charsets.UTF_8)
                         ?.use { it.readText() }
                         .orEmpty()
-                    onError(if (status == 401 || status == 403) "Нужно снова подключить ChatGPT в приложении Валеры." else "ChatGPT временно недоступен (HTTP " + status + ").")
+                    onError(
+                        when (status) {
+                            401, 403 -> "Нужно снова подключить ChatGPT в приложении Валеры."
+                            429 -> "Лимит ChatGPT сейчас исчерпан. Попробуй позже."
+                            else -> "ChatGPT временно недоступен (HTTP " + status + ")."
+                        }
+                    )
                     return@Thread
                 }
 
