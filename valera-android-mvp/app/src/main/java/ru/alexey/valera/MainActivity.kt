@@ -26,6 +26,8 @@ class MainActivity : Activity() {
     private lateinit var toggleButton: Button
     private lateinit var lightButton: Button
     private lateinit var voiceButton: Button
+    private lateinit var chatGptButton: Button
+    private lateinit var chatGptAuth: ChatGptAuthManager
     private lateinit var modeText: TextView
     private var waitingForOverlayPermission = false
 
@@ -64,10 +66,8 @@ class MainActivity : Activity() {
 
                         WakeWordService.STATE_ERROR -> {
                             orb.setState(ValeraOrbView.State.WAITING)
-                            status.text = intent.getStringExtra(
-                                WakeWordService.EXTRA_MESSAGE
-                            ) ?: "Ошибка"
-                            modeText.text = "Локальный детектор не запущен"
+                            status.text = "Ошибка подключения к Валере"
+                            modeText.text = intent.getStringExtra(WakeWordService.EXTRA_MESSAGE) ?: "Проверь подключение ChatGPT"
                         }
                     }
                 }
@@ -77,6 +77,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        chatGptAuth = ChatGptAuthManager(this)
 
         orb = ValeraOrbView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -129,6 +131,25 @@ class MainActivity : Activity() {
             text = "ГОЛОС И ЗВУК"
             setOnClickListener {
                 openVoiceSetup()
+            }
+        }
+
+        chatGptButton = Button(this).apply {
+            text = if (chatGptAuth.isConnected()) "CHATGPT ПОДКЛЮЧЁН" else "ПРОДОЛЖИТЬ С CHATGPT"
+            setOnClickListener {
+                isEnabled = false
+                status.text = "Открываю вход в ChatGPT…"
+                chatGptAuth.beginSignIn(
+                    onStatus = { message -> runOnUiThread { status.text = message } },
+                    onDone = { ok, message ->
+                        runOnUiThread {
+                            status.text = message
+                            isEnabled = true
+                            text = if (ok) "CHATGPT ПОДКЛЮЧЁН" else "ПРОДОЛЖИТЬ С CHATGPT"
+                            if (ok) modeText.text = "ChatGPT Plus • подключено"
+                        }
+                    }
+                )
             }
         }
 
