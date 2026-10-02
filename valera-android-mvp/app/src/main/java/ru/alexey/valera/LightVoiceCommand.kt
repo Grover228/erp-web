@@ -171,8 +171,9 @@ object LightVoiceCommands {
             }
         }
 
-        for (value in 0..100 step 5) {
+        for (value in 0..100) {
             val words = numberToWords(value)
+            phrases += "валера яркость $words"
             phrases += "валера яркость $words процентов"
             phrases += "валера сделай яркость $words процентов"
             phrases += "валера свет $words процентов"
