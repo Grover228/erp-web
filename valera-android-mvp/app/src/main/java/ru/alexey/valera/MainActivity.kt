@@ -27,6 +27,7 @@ class MainActivity : Activity() {
     private lateinit var lightButton: Button
     private lateinit var voiceButton: Button
     private lateinit var chatGptButton: Button
+    private lateinit var erpButton: Button
     private lateinit var chatGptAuth: ChatGptAuthManager
     private lateinit var modeText: TextView
     private var waitingForOverlayPermission = false
@@ -134,6 +135,13 @@ class MainActivity : Activity() {
             }
         }
 
+        erpButton = Button(this).apply {
+            text = if (ErpAuthManager(this@MainActivity).isConnected()) "ERP ПОДКЛЮЧЕНА" else "ПОДКЛЮЧИТЬ ERP"
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, ErpLoginActivity::class.java))
+            }
+        }
+
         chatGptButton = Button(this).apply {
             text = if (chatGptAuth.isConnected()) "CHATGPT ПОДКЛЮЧЁН" else "ПРОДОЛЖИТЬ С CHATGPT"
             setOnClickListener {
@@ -187,6 +195,13 @@ class MainActivity : Activity() {
                 }
             )
             addView(
+                erpButton,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = 12 }
+            )
+            addView(
                 chatGptButton,
                 LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -225,6 +240,9 @@ class MainActivity : Activity() {
         )
 
         refreshFromStoredState()
+        if (::erpButton.isInitialized) {
+            erpButton.text = if (ErpAuthManager(this).isConnected()) "ERP ПОДКЛЮЧЕНА" else "ПОДКЛЮЧИТЬ ERP"
+        }
     }
 
     override fun onStop() {
