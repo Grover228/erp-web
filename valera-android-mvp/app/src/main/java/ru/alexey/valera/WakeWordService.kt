@@ -32,6 +32,11 @@ class WakeWordService : Service(), RecognitionListener {
     private var tts: TextToSpeech? = null
     private val assistantSpeechQueue = ArrayDeque<String>()
     private var assistantSpeechBusy = false
+    private val assistantClient = ValeraAssistantClient()
+    private var assistantQueryListening = false
+    private var assistantStreamBuffer = ""
+    private var assistantResponseComplete = false
+    private var previousResponseId: String? = null
     private lateinit var lightExecutor: LightVoiceExecutor
     private var modelLoading = false
     private var lastWakeAt = 0L
@@ -46,6 +51,15 @@ class WakeWordService : Service(), RecognitionListener {
 
     private val lightTimerRunnable = Runnable {
         runLightTimerNow()
+    }
+
+    private val assistantQueryTimeoutRunnable = Runnable {
+        if (assistantQueryListening) {
+            assistantQueryListening = false
+            stopWakeDetector()
+            updateNotification("Не расслышал вопрос • жду «Валера»")
+            finishAssistantHandoff()
+        }
     }
 
     private var assistantHandoffActive = false
@@ -89,6 +103,7 @@ class WakeWordService : Service(), RecognitionListener {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        assistantClient.cancel()
 
         stopWakeDetector()
         lightExecutor.closeActive()
@@ -167,6 +182,8 @@ class WakeWordService : Service(), RecognitionListener {
                         handler.post {
                             assistantSpeechBusy = false
                             speakNextAssistantPhrase()
+                            finishNativeAssistantIfDone()
+                            finishNativeAssistantIfDone()
                         }
                     }
                 }
@@ -220,6 +237,130 @@ class WakeWordService : Service(), RecognitionListener {
             .map(String::trim)
             .filter(String::isNotEmpty)
     }
+    private fun startNativeAssistantConversation() {
+        assistantHandoffActive = true
+        assistantResponseComplete = false
+        assistantStreamBuffer = ""
+        assistantSpeechQueue.clear()
+        assistantSpeechBusy = false
+        stopWakeDetector()
+        updateNotification("Валера слушает вопрос…")
+        sendStateBroadcast(STATE_HANDOFF, "Слушаю вопрос")
+
+        handler.postDelayed({
+            val currentModel = model
+            if (currentModel == null) {
+                finishAssistantHandoff()
+                return@postDelayed
+            }
+
+            try {
+                val recognizer = Recognizer(currentModel, SAMPLE_RATE)
+                assistantQueryListening = true
+                speechService = SpeechService(recognizer, SAMPLE_RATE).also {
+                    it.startListening(this)
+                }
+                handler.removeCallbacks(assistantQueryTimeoutRunnable)
+                handler.postDelayed(assistantQueryTimeoutRunnable, ASSISTANT_QUERY_TIMEOUT_MS)
+            } catch (exception: Throwable) {
+                updateNotification("Не удалось слушать вопрос")
+                sendStateBroadcast(STATE_ERROR, exception.message ?: "Ошибка микрофона")
+                finishAssistantHandoff()
+            }
+        }, ASSISTANT_QUERY_START_DELAY_MS)
+    }
+
+    private fun inspectAssistantQuery(hypothesis: String?): Boolean {
+        if (!assistantQueryListening || hypothesis.isNullOrBlank()) return false
+
+        val text = try {
+            val json = JSONObject(hypothesis)
+            json.optString("text").trim()
+        } catch (_: Throwable) {
+            hypothesis.trim()
+        }
+
+        if (text.isBlank()) return true
+
+        assistantQueryListening = false
+        handler.removeCallbacks(assistantQueryTimeoutRunnable)
+        stopWakeDetector()
+        sendAssistantQuery(text)
+        return true
+    }
+
+    private fun sendAssistantQuery(text: String) {
+        updateNotification("Думаю…")
+        assistantStreamBuffer = ""
+        assistantResponseComplete = false
+
+        assistantClient.stream(
+            text = text,
+            previousResponseId = previousResponseId,
+            onDelta = { delta ->
+                handler.post { appendAssistantDelta(delta) }
+            },
+            onResponseId = { responseId ->
+                handler.post { previousResponseId = responseId }
+            },
+            onDone = {
+                handler.post {
+                    flushAssistantStreamBuffer()
+                    assistantResponseComplete = true
+                    finishNativeAssistantIfDone()
+                }
+            },
+            onError = { error ->
+                handler.post {
+                    assistantResponseComplete = true
+                    assistantStreamBuffer = ""
+                    updateNotification("Ошибка Валеры")
+                    sendStateBroadcast(STATE_ERROR, error)
+                    enqueueAssistantSpeech("Не получилось получить ответ.")
+                    finishNativeAssistantIfDone()
+                }
+            }
+        )
+    }
+
+    private fun appendAssistantDelta(delta: String) {
+        assistantStreamBuffer += delta
+        while (true) {
+            val boundary = assistantStreamBuffer.indexOfFirst { it == '.' || it == '!' || it == '?' || it == '…' }
+            if (boundary < 0) break
+
+            val phrase = assistantStreamBuffer.substring(0, boundary + 1).trim()
+            assistantStreamBuffer = assistantStreamBuffer.substring(boundary + 1).trimStart()
+            if (phrase.isNotBlank()) enqueueAssistantSpeech(phrase)
+        }
+
+        if (assistantStreamBuffer.length >= ASSISTANT_SPEECH_CHUNK_CHARS) {
+            val splitAt = assistantStreamBuffer.lastIndexOf(' ', ASSISTANT_SPEECH_CHUNK_CHARS)
+                .takeIf { it > 40 } ?: ASSISTANT_SPEECH_CHUNK_CHARS
+            val phrase = assistantStreamBuffer.substring(0, splitAt).trim()
+            assistantStreamBuffer = assistantStreamBuffer.substring(splitAt).trimStart()
+            if (phrase.isNotBlank()) enqueueAssistantSpeech(phrase)
+        }
+    }
+
+    private fun flushAssistantStreamBuffer() {
+        val tail = assistantStreamBuffer.trim()
+        assistantStreamBuffer = ""
+        if (tail.isNotBlank()) enqueueAssistantSpeech(tail)
+    }
+
+    private fun finishNativeAssistantIfDone() {
+        if (
+            assistantHandoffActive &&
+            !assistantQueryListening &&
+            assistantResponseComplete &&
+            !assistantSpeechBusy &&
+            assistantSpeechQueue.isEmpty()
+        ) {
+            finishAssistantHandoff()
+        }
+    }
+
     private fun initOfflineWakeWord() {
         if (modelLoading || model != null) return
 
@@ -367,7 +508,7 @@ class WakeWordService : Service(), RecognitionListener {
         )
 
         when (shellConfig.wakeTarget) {
-            PwaConfig.TARGET_CHATGPT_DIRECT -> handOffToChatGptDirect(shellConfig)
+            PwaConfig.TARGET_CHATGPT_DIRECT -> startNativeAssistantConversation()
             PwaConfig.TARGET_SYSTEM_ASSISTANT -> handOffToSystemAssistant(shellConfig)
             else -> runPwaWake(shellConfig)
         }
@@ -695,6 +836,10 @@ class WakeWordService : Service(), RecognitionListener {
 
     private fun finishAssistantHandoff() {
         assistantHandoffActive = false
+        assistantQueryListening = false
+        assistantResponseComplete = false
+        assistantStreamBuffer = ""
+        handler.removeCallbacks(assistantQueryTimeoutRunnable)
         assistantRecordingSeen = false
         assistantSilentPolls = 0
         assistantHandoffStartedAt = 0L
@@ -783,15 +928,15 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onPartialResult(hypothesis: String?) {
-        inspectHypothesis(hypothesis)
+        if (!assistantQueryListening) inspectHypothesis(hypothesis)
     }
 
     override fun onResult(hypothesis: String?) {
-        inspectHypothesis(hypothesis)
+        if (!inspectAssistantQuery(hypothesis)) inspectHypothesis(hypothesis)
     }
 
     override fun onFinalResult(hypothesis: String?) {
-        inspectHypothesis(hypothesis)
+        if (!inspectAssistantQuery(hypothesis)) inspectHypothesis(hypothesis)
     }
 
     override fun onError(exception: Exception?) {
@@ -860,5 +1005,7 @@ class WakeWordService : Service(), RecognitionListener {
         private const val WAKE_RESUME_DELAY_MS = 1200L
         private const val ASSISTANT_UTTERANCE_PREFIX = "valera-assistant-"
         private const val ASSISTANT_SPEECH_CHUNK_CHARS = 180
+        private const val ASSISTANT_QUERY_START_DELAY_MS = 250L
+        private const val ASSISTANT_QUERY_TIMEOUT_MS = 12_000L
     }
 }
