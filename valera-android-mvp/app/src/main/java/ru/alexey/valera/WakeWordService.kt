@@ -112,6 +112,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         stopWakeDetector()
         lightExecutor.closeActive()
+        musicExecutor.release()
 
         model?.close()
         model = null
