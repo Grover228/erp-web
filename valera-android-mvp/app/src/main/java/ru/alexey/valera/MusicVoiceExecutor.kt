@@ -3,6 +3,7 @@ package ru.alexey.valera
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.AudioManager
 
 class MusicVoiceExecutor(private val context: Context) {
     private var player: MediaPlayer? = null
@@ -29,10 +30,13 @@ class MusicVoiceExecutor(private val context: Context) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                 .build()
         )
+        @Suppress("DEPRECATION")
+        newPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC)
         newPlayer.setDataSource(station.streamUrl)
         pendingStation = station
         newPlayer.setOnPreparedListener {
             it.start()
+            it.setVolume(1.0f, 1.0f)
             pendingStation = null
         }
         newPlayer.setOnErrorListener { _, _, _ ->
