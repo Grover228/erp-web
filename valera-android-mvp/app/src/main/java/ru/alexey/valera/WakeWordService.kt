@@ -13,7 +13,6 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.speech.tts.TextToSpeech
-import android.media.AudioManager
 import android.media.ToneGenerator
 import android.speech.tts.UtteranceProgressListener
 import org.json.JSONObject
