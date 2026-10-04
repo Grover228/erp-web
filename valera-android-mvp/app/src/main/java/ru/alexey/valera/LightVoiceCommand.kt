@@ -118,7 +118,7 @@ object LightVoiceCommands {
             }
         }
 
-        if ("ярк" in afterWake) {
+        if ("ярк" in afterWake || "процент" in afterWake || "свет на" in afterWake) {
             val value = extractNumber(afterWake)
             if (value != null) {
                 return LightVoiceCommand.Brightness(value.coerceIn(0, 100))
@@ -137,14 +137,14 @@ object LightVoiceCommands {
         }
 
         if (
-            ("выключ" in afterWake || "погаси" in afterWake) &&
+            ("выключ" in afterWake || "погаси" in afterWake || "убери" in afterWake) &&
             ("свет" in afterWake || "лент" in afterWake)
         ) {
             return LightVoiceCommand.Power(false)
         }
 
         if (
-            ("включ" in afterWake || "зажги" in afterWake) &&
+            ("включ" in afterWake || "зажги" in afterWake || "сделай" in afterWake) &&
             ("свет" in afterWake || "лент" in afterWake)
         ) {
             return LightVoiceCommand.Power(true)
@@ -165,6 +165,10 @@ object LightVoiceCommands {
             "валера выключи ленту",
             "валера зажги свет",
             "валера погаси свет",
+            "валера свет включи",
+            "валера свет выключи",
+            "валера сделай свет ярче",
+            "валера сделай свет тусклее",
             "валера отмени таймер",
             "валера сбрось таймер света",
             "валера включи музыку",
