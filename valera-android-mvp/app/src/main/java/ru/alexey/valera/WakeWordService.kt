@@ -304,6 +304,30 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun sendAssistantQuery(text: String) {
+        // Commands spoken after the separate wake word ("Валера" -> chime -> command)
+        // arrive here without the wake word, so parse local commands again here.
+        MusicVoiceCommands.parse("валера " + text)?.let { command ->
+            assistantResponseComplete = true
+            assistantStreamBuffer = ""
+            stopWakeDetector()
+            val result = musicExecutor.execute(command)
+            updateNotification(result.getOrElse { it.message ?: "Не удалось включить радио." })
+            finishAssistantHandoff()
+            return
+        }
+
+        LightVoiceCommands.parse("валера " + text)?.let { command ->
+            assistantResponseComplete = true
+            assistantStreamBuffer = ""
+            lightExecutor.execute(command) { success, message ->
+                handler.post {
+                    announceLocalLightResult(success, message)
+                    finishAssistantHandoff()
+                }
+            }
+            return
+        }
+
         val erpCommand = ErpVoiceCommands.parse(text)
         if (erpCommand != null) {
             updateNotification("Выполняю команду ERP…")
