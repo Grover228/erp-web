@@ -7,6 +7,7 @@ import android.media.MediaPlayer
 class MusicVoiceExecutor(private val context: Context) {
     private var player: MediaPlayer? = null
     private var currentStation: RadioStation? = null
+    private var pendingStation: RadioStation? = null
 
     fun execute(command: MusicVoiceCommand): Result<String> = runCatching {
         when (command) {
@@ -29,9 +30,18 @@ class MusicVoiceExecutor(private val context: Context) {
                 .build()
         )
         newPlayer.setDataSource(station.streamUrl)
-        newPlayer.setOnPreparedListener { it.start() }
+        pendingStation = station
+        newPlayer.setOnPreparedListener {
+            it.start()
+            pendingStation = null
+        }
+        newPlayer.setOnErrorListener { _, _, _ ->
+            pendingStation = null
+            releasePlayer()
+            true
+        }
         newPlayer.prepareAsync()
-        return "Включаю " + station.name + "."
+        return "Подключаю " + station.name + "."
     }
 
     private fun stop(): String {
@@ -64,5 +74,6 @@ class MusicVoiceExecutor(private val context: Context) {
         try { player?.release() } catch (_: Exception) {}
         player = null
         currentStation = null
+        pendingStation = null
     }
 }
