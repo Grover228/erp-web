@@ -289,11 +289,17 @@ class WakeWordService : Service(), RecognitionListener {
 
         val text = try {
             val json = JSONObject(hypothesis)
-            json.optString("text").trim()
+            when {
+                json.has("text") -> json.optString("text").trim()
+                json.has("partial") -> json.optString("partial").trim()
+                else -> ""
+            }
         } catch (_: Throwable) {
             hypothesis.trim()
         }
 
+        // A blank Vosk result is not a command. Keep listening until timeout
+        // instead of routing an empty phrase to the local-only fallback.
         if (text.isBlank()) return true
 
         assistantQueryListening = false
@@ -1015,6 +1021,8 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onPartialResult(hypothesis: String?) {
+        // During the second-stage command capture, partial hypotheses must not be
+        // treated as wake-word input. Wait for a final/result hypothesis instead.
         if (!assistantQueryListening) inspectHypothesis(hypothesis)
     }
 
