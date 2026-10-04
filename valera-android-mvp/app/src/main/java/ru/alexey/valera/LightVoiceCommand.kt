@@ -35,7 +35,11 @@ object LightVoiceCommands {
         NamedColor("розовый", listOf("розовый", "розовым"), 255, 40, 140),
         NamedColor("голубой", listOf("голубой", "голубым"), 0, 180, 255),
         NamedColor("бирюзовый", listOf("бирюзовый", "бирюзовым"), 0, 255, 190),
-        NamedColor("тёплый белый", listOf("теплый белый"), 255, 150, 55)
+        NamedColor("тёплый белый", listOf("теплый белый", "теплый"), 255, 150, 55),
+        NamedColor("нежно-жёлтый", listOf("нежный желтый", "нежно желтый"), 255, 205, 110),
+        NamedColor("персиковый", listOf("персиковый", "персиковым"), 255, 120, 65),
+        NamedColor("мятный", listOf("мятный", "мятным"), 90, 255, 180),
+        NamedColor("лавандовый", listOf("лавандовый", "лавандовым"), 175, 120, 255)
     )
 
     private val units = mapOf(
@@ -84,6 +88,10 @@ object LightVoiceCommands {
 
         val afterWake = text.substringAfter("валера").trim()
         if (afterWake.isBlank()) return null
+
+        if (afterWake == "включи дворец" || afterWake == "дворец") {
+            return LightVoiceCommand.Color("нежно-жёлтый", 255, 205, 110)
+        }
 
         if (
             ("отмени" in afterWake || "сбрось" in afterWake || "убери" in afterWake) &&
@@ -173,7 +181,9 @@ object LightVoiceCommands {
             "валера останови музыку",
             "валера выключи радио",
             "валера пауза",
-            "валера продолжи музыку"
+            "валера продолжи музыку",
+            "валера включи дворец",
+            "валера дворец"
         )
 
         colors.forEach { color ->
