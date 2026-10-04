@@ -13,6 +13,8 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.speech.tts.UtteranceProgressListener
 import org.json.JSONObject
 import org.vosk.LibVosk
@@ -243,7 +245,14 @@ class WakeWordService : Service(), RecognitionListener {
             .map(String::trim)
             .filter(String::isNotEmpty)
     }
+    private fun playWakeChime() {
+        try {
+            ToneGenerator(AudioManager.STREAM_MUSIC, 55).startTone(ToneGenerator.TONE_PROP_ACK, 140)
+        } catch (_: Throwable) {}
+    }
+
     private fun startNativeAssistantConversation() {
+        playWakeChime()
         assistantHandoffActive = true
         assistantResponseComplete = false
         assistantStreamBuffer = ""
@@ -568,7 +577,7 @@ class WakeWordService : Service(), RecognitionListener {
         val result = musicExecutor.execute(command)
         val reply = result.getOrElse { it.message ?: "Не удалось открыть Радио Рекорд." }
         updateNotification(reply)
-        enqueueAssistantSpeech(reply)
+        // Do not speak over the radio stream; the station audio is the confirmation.
         handler.postDelayed({ startContinuousListening() }, WAKE_RESUME_DELAY_MS)
     }
 
