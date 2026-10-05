@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var voiceButton: Button
     private lateinit var chatGptButton: Button
     private lateinit var erpButton: Button
+    private lateinit var musicExecutor: MusicVoiceExecutor
     private lateinit var chatGptAuth: ChatGptAuthManager
     private lateinit var modeText: TextView
     private var waitingForOverlayPermission = false
@@ -80,6 +81,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         chatGptAuth = ChatGptAuthManager(this)
+        musicExecutor = MusicVoiceExecutor(this)
 
         orb = ValeraOrbView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -133,6 +135,36 @@ class MainActivity : Activity() {
             setOnClickListener {
                 openVoiceSetup()
             }
+        }
+
+        val musicTitle = TextView(this).apply {
+            text = "РАДИО RECORD"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(0, 18, 0, 6)
+        }
+        val musicControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val play = Button(this@MainActivity).apply {
+                text = "▶ RECORD"
+                setOnClickListener {
+                    val result = musicExecutor.execute(MusicVoiceCommand.PlayStation(MusicVoiceCommands.record))
+                    status.text = result.getOrElse { it.message ?: "Ошибка радио" }
+                }
+            }
+            val pause = Button(this@MainActivity).apply {
+                text = "⏸"
+                setOnClickListener { status.text = musicExecutor.execute(MusicVoiceCommand.Pause).getOrDefault("Ошибка") }
+            }
+            val stop = Button(this@MainActivity).apply {
+                text = "■"
+                setOnClickListener { status.text = musicExecutor.execute(MusicVoiceCommand.Stop).getOrDefault("Ошибка") }
+            }
+            addView(play, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f))
+            addView(pause, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(stop, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         }
 
         erpButton = Button(this).apply {
@@ -194,6 +226,8 @@ class MainActivity : Activity() {
                     topMargin = 12
                 }
             )
+            addView(musicTitle)
+            addView(musicControls)
             addView(
                 erpButton,
                 LinearLayout.LayoutParams(
