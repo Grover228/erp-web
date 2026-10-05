@@ -1371,5 +1371,6 @@ class WakeWordService : Service(), RecognitionListener {
         private const val ASSISTANT_SPEECH_CHUNK_CHARS = 180
         private const val ASSISTANT_QUERY_START_DELAY_MS = 250L
         private const val ASSISTANT_QUERY_TIMEOUT_MS = 12_000L
+        private const val STABLE_PARTIAL_MS = 220L
     }
 }
