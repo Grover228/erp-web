@@ -1063,11 +1063,6 @@ class WakeWordService : Service(), RecognitionListener {
         // Для wake-word timeout не используем: слушаем одним непрерывным сеансом.
     }
 
-    private fun handleMusicCommand(command: MusicVoiceCommand) {
-        val result = musicExecutor.execute(command)
-        updateNotification(result.getOrElse { it.message ?: "Ошибка радио" })
-    }
-
     companion object {
         const val ACTION_MUSIC_PLAY_RECORD = "ru.alexey.valera.MUSIC_PLAY_RECORD"
         const val ACTION_MUSIC_PAUSE = "ru.alexey.valera.MUSIC_PAUSE"
