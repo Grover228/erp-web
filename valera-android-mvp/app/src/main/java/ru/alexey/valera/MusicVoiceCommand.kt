@@ -12,9 +12,9 @@ sealed class MusicVoiceCommand {
 data class RadioStation(val name: String, val streamUrl: String)
 
 object MusicVoiceCommands {
-    val record = RadioStation("Рекорд", "https://radiorecord.hostingradio.ru/rr_main128.mp3")
-    val chillout = RadioStation("Chill-Out", "https://radiorecord.hostingradio.ru/chil128.mp3")
-    val lofi = RadioStation("Lo-Fi", "https://radiorecord.hostingradio.ru/lofi128.mp3")
+    val record = RadioStation("Рекорд", "https://radiorecord.hostingradio.ru/rr_main96.aacp")
+    val chillout = RadioStation("Chill-Out", "https://radiorecord.hostingradio.ru/chil96.aacp")
+    val lofi = RadioStation("Lo-Fi", "https://radiorecord.hostingradio.ru/lofi96.aacp")
     fun parse(rawText: String): MusicVoiceCommand? {
         val text = normalize(rawText)
         if (!text.contains("валера")) return null
