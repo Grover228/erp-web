@@ -540,6 +540,31 @@ export default function StockPage() {
       })
       .filter(Boolean) as StockRow[];
 
+    const aggregatedMovementRows = Array.from(
+      movementRows
+        .reduce((rowsByKey, row) => {
+          const existing = rowsByKey.get(row.key);
+          if (!existing) {
+            rowsByKey.set(row.key, { ...row });
+            return rowsByKey;
+          }
+
+          const quantityOnHand = existing.quantityOnHand + row.quantityOnHand;
+          const quantityReserved = existing.quantityReserved + row.quantityReserved;
+          const quantityAvailable = existing.quantityAvailable + row.quantityAvailable;
+
+          rowsByKey.set(row.key, {
+            ...existing,
+            quantityOnHand,
+            quantityReserved,
+            quantityAvailable,
+            amount: quantityOnHand * existing.avgPrice,
+          });
+          return rowsByKey;
+        }, new Map<string, StockRow>())
+        .values(),
+    );
+
     const stockIdsByType = new Map<StockItemType, Set<string>>([
       ["product", new Set()],
       ["resale_product", new Set()],
@@ -547,7 +572,7 @@ export default function StockPage() {
       ["consumable", new Set()],
     ]);
 
-    movementRows.forEach((row) => {
+    aggregatedMovementRows.forEach((row) => {
       stockIdsByType.get(row.itemType)?.add(row.itemId);
     });
 
@@ -653,7 +678,7 @@ export default function StockPage() {
       }));
 
     return [
-      ...movementRows,
+      ...aggregatedMovementRows,
       ...zeroStockProductRows,
       ...zeroStockResaleRows,
       ...zeroStockMaterialRows,

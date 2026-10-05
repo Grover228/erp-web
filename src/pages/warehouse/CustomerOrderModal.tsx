@@ -80,6 +80,7 @@ export type ResaleProduct = {
   default_price?: number | null;
   price?: number | null;
   sale_price?: number | null;
+  source_id?: string | null;
 };
 
 type PickerDirectoryItem = {
@@ -428,8 +429,16 @@ export default function CustomerOrderModal({
 
   function getPickerDirectoryItems(): PickerDirectoryItem[] {
     const query = productPickerSearch.trim().toLowerCase();
+    const resaleSourceProductIds = new Set(
+      resaleProducts
+        .map((item) => item.source_id)
+        .filter((sourceId): sourceId is string => Boolean(sourceId)),
+    );
+
     const allItems: PickerDirectoryItem[] = [
-      ...products.map((item) => ({ ...item, item_type: "product" as const })),
+      ...products
+        .filter((item) => !resaleSourceProductIds.has(item.id))
+        .map((item) => ({ ...item, item_type: "product" as const })),
       ...resaleProducts.map((item) => ({ ...item, item_type: "resale_product" as const })),
       ...materials.map((item) => ({ ...item, item_type: "material" as const })),
       ...consumables.map((item) => ({ ...item, item_type: "consumable" as const })),

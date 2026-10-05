@@ -9,25 +9,17 @@ import ProductionActiveBatches from "./pages/production/ProductionActiveBatches"
 import ProductionFinishOperationModal from "./pages/production/ProductionFinishOperationModal";
 import type {
   ActiveBatchItem,
-  ConsumablePrice,
   GeneratedQr,
   Job,
-  MaterialPrice,
   ProductItem,
   ProductionBatch,
-  ProductionConsumableRequirement,
-  ProductionMaterialRequirement,
   ProductionOperationLog,
   ProductionOrder,
   ProductionOrderOperation,
-  ProductionStockCheckResult,
   ProductionTab,
   ShiftStats,
   StockAvailableRow,
-  TechCardConsumable,
   TechCardItem,
-  TechCardMaterial,
-  TechCardOperation,
 } from "./pages/production/productionTypes";
 export type {
   Job,
@@ -51,6 +43,7 @@ import {
   getStatusLabel,
   getStockKey,
 } from "./pages/production/productionUtils";
+import { createProductionOrder } from "./pages/production/createProductionOrder";
 import {
   Field,
   InfoBox,
@@ -523,6 +516,12 @@ export default function Production({
         }
 
         if (allAccounted) {
+          const goodQuantity = orderBatches.reduce(
+            (sum, batch) => sum + Number(batch.completed_quantity || 0),
+            0,
+          );
+          await assertProductionOrderStockReceived(order.id, goodQuantity);
+
           const { error: closeOrderError } = await supabase
             .from("production_orders")
             .update({ status: "done" })
@@ -559,7 +558,7 @@ export default function Production({
 
     const product = products.find((item) => item.id === selectedProductId);
     const techCard = techCards.find(
-      (item) => item.product_id === selectedProductId
+      (item) => item.product_id === selectedProductId,
     );
 
     if (!product) {
@@ -582,321 +581,16 @@ export default function Production({
       setError("");
       setMessage("");
 
-      const orderQuantity = Number(quantity);
-      const orderNumber = `PR-${String(Date.now()).slice(-6)}`;
-
-      const [
-        techMaterialsResult,
-        techConsumablesResult,
-        techOperationsResult,
-      ] = await Promise.all([
-        supabase
-          .from("tech_card_materials")
-          .select("*")
-          .eq("tech_card_id", techCard.id),
-
-        supabase
-          .from("tech_card_consumables")
-          .select("*")
-          .eq("tech_card_id", techCard.id),
-
-        supabase
-          .from("tech_card_operations")
-          .select("*")
-          .eq("tech_card_id", techCard.id)
-          .order("sort_order", { ascending: true }),
-      ]);
-
-      if (techMaterialsResult.error) throw techMaterialsResult.error;
-      if (techConsumablesResult.error) throw techConsumablesResult.error;
-      if (techOperationsResult.error) throw techOperationsResult.error;
-
-      const techMaterials = (techMaterialsResult.data as TechCardMaterial[]) || [];
-      const techConsumables =
-        (techConsumablesResult.data as TechCardConsumable[]) || [];
-      const techOperations =
-        (techOperationsResult.data as TechCardOperation[]) || [];
-
-      const { data: stockCheckData, error: stockCheckError } =
-        await supabase.rpc("check_production_stock", {
-          p_tech_card_id: techCard.id,
-          p_order_quantity: orderQuantity,
-        });
-
-      if (stockCheckError) throw stockCheckError;
-
-      const stockShortages = (
-        (stockCheckData as ProductionStockCheckResult[]) || []
-      ).filter((item) => Number(item.missing_quantity || 0) > 0);
-
-      if (stockShortages.length > 0) {
-        throw new Error(
-          `Недостаточно остатков для запуска производства: ${stockShortages
-            .map(
-              (item) =>
-                `${item.item_name}: нужно ${formatQuantity(
-                  Number(item.required_quantity || 0),
-                )}, доступно ${formatQuantity(
-                  Number(item.available_quantity || 0),
-                )}`,
-            )
-            .join("; ")}`,
-        );
-      }
-
-      const materialIds = techMaterials.map((item) => item.material_id);
-      const consumableIds = techConsumables.map((item) => item.consumable_id);
-
-      const [materialsPricesResult, consumablesPricesResult] =
-        await Promise.all([
-          materialIds.length > 0
-            ? supabase
-                .from("materials")
-                .select("id, name, default_price, production_units_per_purchase_unit")
-                .in("id", materialIds)
-            : Promise.resolve({ data: [], error: null }),
-
-          consumableIds.length > 0
-            ? supabase
-                .from("consumables")
-                .select("id, name, default_price")
-                .in("id", consumableIds)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
-
-      if (materialsPricesResult.error) throw materialsPricesResult.error;
-      if (consumablesPricesResult.error) throw consumablesPricesResult.error;
-
-      const materialPrices = (materialsPricesResult.data as MaterialPrice[]) || [];
-      const consumablePrices =
-        (consumablesPricesResult.data as ConsumablePrice[]) || [];
-
-      const materialPriceMap = new Map(
-        materialPrices.map((item) => [item.id, Number(item.default_price || 0)])
-      );
-
-      const consumablePriceMap = new Map(
-        consumablePrices.map((item) => [
-          item.id,
-          Number(item.default_price || 0),
-        ])
-      );
-
-      const materialInfoMap = new Map(
-        materialPrices.map((item) => [item.id, item]),
-      );
-
-      const consumableInfoMap = new Map(
-        consumablePrices.map((item) => [item.id, item]),
-      );
-
-      const materialStockRequirements: ProductionMaterialRequirement[] =
-        techMaterials.map((item) => {
-          const materialInfo = materialInfoMap.get(item.material_id);
-          const requiredProductionQuantity =
-            Number(item.quantity || 0) * orderQuantity;
-          const requiredStockQuantity = convertProductionUnitsToStockUnits(
-            requiredProductionQuantity,
-            materialInfo?.production_units_per_purchase_unit,
-          );
-
-          return {
-            item_type: "material",
-            material_id: item.material_id,
-            quantity: requiredStockQuantity,
-            name: materialInfo?.name || "Материал",
-          };
-        });
-
-      const consumableStockRequirements: ProductionConsumableRequirement[] =
-        techConsumables.map((item) => {
-          const consumableInfo = consumableInfoMap.get(item.consumable_id);
-
-          return {
-            item_type: "consumable",
-            consumable_id: item.consumable_id,
-            quantity: Number(item.quantity || 0) * orderQuantity,
-            name: consumableInfo?.name || "Расходник",
-          };
-        });
-
-      const plannedMaterialsCost = techMaterials.reduce((sum, item) => {
-        const price = materialPriceMap.get(item.material_id) || 0;
-        const materialInfo = materialInfoMap.get(item.material_id);
-        const productionUnitsPerPurchaseUnit = Number(
-          materialInfo?.production_units_per_purchase_unit || 0,
-        );
-        const totalProductionQuantity =
-          Number(item.quantity || 0) * orderQuantity;
-        const totalPurchaseQuantity =
-          productionUnitsPerPurchaseUnit > 0
-            ? totalProductionQuantity / productionUnitsPerPurchaseUnit
-            : totalProductionQuantity;
-
-        return sum + totalPurchaseQuantity * price;
-      }, 0);
-
-      const plannedConsumablesCost = techConsumables.reduce((sum, item) => {
-        const price = consumablePriceMap.get(item.consumable_id) || 0;
-        return sum + Number(item.quantity || 0) * orderQuantity * price;
-      }, 0);
-
-      const plannedOperationsCost = techOperations.reduce((sum, item) => {
-        return sum + Number(item.price || 0) * orderQuantity;
-      }, 0);
-
-      const plannedTimeMin = techOperations.reduce((sum, item) => {
-        return sum + Number(item.planned_time_min || 0) * orderQuantity;
-      }, 0);
-
-      const plannedTotalCost =
-        plannedMaterialsCost + plannedConsumablesCost + plannedOperationsCost;
-
-      const { data: createdOrder, error: createOrderError } = await supabase
-        .from("production_orders")
-        .insert({
-          product_id: product.id,
-          tech_card_id: techCard.id,
-          order_number: orderNumber,
-          quantity: orderQuantity,
-          status: "draft",
-          comment: comment.trim() || null,
-          planned_materials_cost: plannedMaterialsCost,
-          planned_consumables_cost: plannedConsumablesCost,
-          planned_operations_cost: plannedOperationsCost,
-          planned_total_cost: plannedTotalCost,
-          planned_time_min: plannedTimeMin,
-        })
-        .select()
-        .single();
-
-      if (createOrderError) throw createOrderError;
-
-      const orderId = createdOrder.id as string;
-
-      const orderMaterials = techMaterials.map((item) => {
-        const price = materialPriceMap.get(item.material_id) || 0;
-        const totalQuantity = Number(item.quantity || 0) * orderQuantity;
-
-        return {
-          production_order_id: orderId,
-          material_id: item.material_id,
-          quantity_per_unit: item.quantity,
-          total_quantity: totalQuantity,
-          planned_price: price,
-          planned_total:
-            (Number(item.quantity || 0) * orderQuantity) /
-              Number(
-                materialInfoMap.get(item.material_id)
-                  ?.production_units_per_purchase_unit || 1,
-              ) *
-              price,
-          comment: item.comment,
-        };
+      const { orderNumber } = await createProductionOrder({
+        product,
+        techCard,
+        quantity: Number(quantity),
+        comment,
       });
 
-      const orderConsumables = techConsumables.map((item) => {
-        const price = consumablePriceMap.get(item.consumable_id) || 0;
-        const totalQuantity = Number(item.quantity || 0) * orderQuantity;
-
-        return {
-          production_order_id: orderId,
-          consumable_id: item.consumable_id,
-          quantity_per_unit: item.quantity,
-          total_quantity: totalQuantity,
-          planned_price: price,
-          planned_total: totalQuantity * price,
-          comment: item.comment,
-        };
-      });
-
-      const orderOperations = techOperations.map((item) => {
-        const timePerUnit = Number(item.planned_time_min || 0);
-        const pricePerUnit = Number(item.price || 0);
-
-        return {
-          production_order_id: orderId,
-          operation_name: item.operation_name,
-          sort_order: item.sort_order,
-          planned_time_min_per_unit: timePerUnit,
-          planned_total_time_min: timePerUnit * orderQuantity,
-          price_per_unit: pricePerUnit,
-          planned_total_price: pricePerUnit * orderQuantity,
-          status: "pending",
-          completed_quantity: 0,
-          comment: item.comment,
-        };
-      });
-
-      if (orderMaterials.length > 0) {
-        const { error } = await supabase
-          .from("production_order_materials")
-          .insert(orderMaterials);
-
-        if (error) throw error;
-      }
-
-      if (orderConsumables.length > 0) {
-        const { error } = await supabase
-          .from("production_order_consumables")
-          .insert(orderConsumables);
-
-        if (error) throw error;
-      }
-
-      if (orderOperations.length > 0) {
-        const { error } = await supabase
-          .from("production_order_operations")
-          .insert(orderOperations);
-
-        if (error) throw error;
-      }
-
-      const stockReservationRows = [
-        ...materialStockRequirements.map((item) => ({
-          source_document_type: "production_order",
-          source_document_id: orderId,
-          production_order_id: orderId,
-          item_type: "material",
-          material_id: item.material_id,
-          product_id: null,
-          consumable_id: null,
-          quantity: item.quantity,
-          status: "active",
-          created_at: new Date().toISOString(),
-        })),
-        ...consumableStockRequirements.map((item) => ({
-          source_document_type: "production_order",
-          source_document_id: orderId,
-          production_order_id: orderId,
-          item_type: "consumable",
-          material_id: null,
-          product_id: null,
-          consumable_id: item.consumable_id,
-          quantity: item.quantity,
-          status: "active",
-          created_at: new Date().toISOString(),
-        })),
-      ].filter((item) => Number(item.quantity || 0) > 0);
-
-      if (stockReservationRows.length > 0) {
-        const { error: reservationError } = await supabase
-          .from("stock_reservations")
-          .insert(stockReservationRows);
-
-        if (reservationError) throw reservationError;
-
-        const { error: reserveOrderError } = await supabase
-          .from("production_orders")
-          .update({
-            materials_reserved_at: new Date().toISOString(),
-          })
-          .eq("id", orderId);
-
-        if (reserveOrderError) throw reserveOrderError;
-      }
-
-      setMessage(`Производственный заказ ${orderNumber} создан. Материалы зарезервированы.`);
+      setMessage(
+        `Производственный заказ ${orderNumber} создан. Материалы зарезервированы.`,
+      );
       setIsCreateOpen(false);
       setQuantity("");
       setComment("");
@@ -907,7 +601,7 @@ export default function Production({
       setError(
         error instanceof Error
           ? error.message
-          : "Не удалось создать производственный заказ"
+          : "Не удалось создать производственный заказ",
       );
     } finally {
       setCreating(false);
@@ -1317,31 +1011,34 @@ export default function Production({
     }
   }
 
+  async function waitForPrintJob(jobId: string, timeoutMs = 12000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const { data, error: jobError } = await supabase
+        .from("print_jobs")
+        .select("status, error")
+        .eq("id", jobId)
+        .single();
+
+      if (jobError) throw jobError;
+
+      if (data.status === "printed" || data.status === "failed") {
+        return data as { status: "printed" | "failed"; error: string | null };
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 600);
+      });
+    }
+
+    return null;
+  }
+
   async function printQrLabel(item: GeneratedQr) {
     try {
       setMessage("");
       setError("");
-
-      const response = await fetch("http://localhost:3001/print-qr", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          printerName: "Xprinter XP-365B",
-          batchNumber: item.batchNumber,
-          productName: item.payload.product_name,
-          article: item.payload.product_article || "",
-          quantity: item.payload.quantity,
-          qrDataUrl: item.dataUrl,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Ошибка печати QR");
-      }
 
       const batch =
         batches.find((itemBatch) => itemBatch.batch_number === item.batchNumber) ||
@@ -1349,7 +1046,7 @@ export default function Production({
 
       if (!batch) {
         throw new Error(
-          `QR отправлен на принтер, но пачка ${item.batchNumber} не найдена для записи журнала печати`,
+          `Пачка ${item.batchNumber} не найдена, задание на печать не создано`,
         );
       }
 
@@ -1359,26 +1056,45 @@ export default function Production({
       } = await supabase.auth.getUser();
 
       if (userError) throw userError;
+      if (!user) throw new Error("Для печати нужно войти в ERP");
 
-      const { error: printLogError } = await supabase
-        .from("production_qr_print_logs")
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
         .insert({
-          batch_id: batch.id,
-          production_order_id: batch.production_order_id,
-          printed_by: user?.id || null,
-          printer_name: "Xprinter XP-365B",
-          batch_number: batch.batch_number,
-          quantity: Number(batch.quantity || 0),
-        });
+          printer_code: "xprinter-main",
+          job_type: "qr",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber: item.batchNumber,
+            productName: item.payload.product_name,
+            article: item.payload.product_article || "",
+            quantity: item.payload.quantity,
+            qrDataUrl: item.dataUrl,
+            batchId: batch.id,
+            productionOrderId: batch.production_order_id,
+          },
+        })
+        .select("id, status")
+        .single();
 
-      if (printLogError) {
-        throw new Error(
-          `QR напечатан, но не удалось записать факт печати: ${printLogError.message}`,
-        );
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать задание печати");
+
+      const result = await waitForPrintJob(job.id);
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Принтер не смог выполнить задание");
       }
 
-      setMessage(`QR пачки ${item.batchNumber} отправлен на печать и записан в журнал`);
-      await loadProductionOrders();
+      if (result?.status === "printed") {
+        setMessage(`QR пачки ${item.batchNumber} напечатан и записан в журнал`);
+        await loadProductionOrders();
+        return;
+      }
+
+      setMessage(
+        `QR пачки ${item.batchNumber} поставлен в очередь. Ноутбук распечатает его автоматически`,
+      );
     } catch (error) {
       setError(
         error instanceof Error
@@ -1414,39 +1130,49 @@ export default function Production({
 
   async function handleTestPrint() {
     try {
-    setMessage("");
-    setError("");
+      setMessage("");
+      setError("");
 
-    const response = await fetch("http://localhost:3001/print-test", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        printerName: "Xprinter XP-365B",
-        batchNumber: "PK-TEST-001",
-        productName: "Шапка бини",
-        article: "bini-black-52",
-        quantity: 15,
-        operation: "Стачивание",
-      }),
-    });
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
+        .insert({
+          printer_code: "xprinter-main",
+          job_type: "test",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber: "PK-TEST-001",
+            productName: "Шапка бини",
+            article: "bini-black-52",
+            quantity: 15,
+            operation: "Стачивание",
+          },
+        })
+        .select("id, status")
+        .single();
 
-    const result = await response.json();
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать тестовое задание печати");
 
-    if (!response.ok) {
-      throw new Error(result.error || "Ошибка печати");
+      const result = await waitForPrintJob(job.id);
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Ошибка тестовой печати");
+      }
+
+      if (result?.status === "printed") {
+        setMessage("Тестовая этикетка напечатана");
+        return;
+      }
+
+      setMessage("Тестовая этикетка поставлена в очередь печати");
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка тестовой печати"
+      );
     }
-
-    setMessage("Тестовая этикетка отправлена на принтер");
-  } catch (error) {
-    setError(
-      error instanceof Error
-        ? error.message
-        : "Ошибка тестовой печати"
-    );
   }
-}
   async function makeQrFromPayload(payload: GeneratedQr["payload"]) {
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
       width: 600,
@@ -1639,6 +1365,30 @@ export default function Production({
       ]);
 
     if (movementsError) throw movementsError;
+  }
+
+  async function assertProductionOrderStockReceived(
+    orderId: string,
+    goodQuantity: number,
+  ) {
+    const { data: receipts, error: receiptsError } = await supabase
+      .from("stock_movements")
+      .select("quantity")
+      .eq("production_order_id", orderId)
+      .eq("movement_type", "production_receipt")
+      .eq("item_type", "product");
+
+    if (receiptsError) throw receiptsError;
+
+    const receivedQuantity = (receipts || []).reduce(
+      (sum, movement) => sum + Number(movement.quantity || 0),
+      0,
+    );
+    if (receivedQuantity !== goodQuantity) {
+      throw new Error(
+        `Заказ не закрыт: на склад поступило ${receivedQuantity} из ${goodQuantity} годных изделий. Проверь движения по завершённым QR-пачкам.`,
+      );
+    }
   }
 
   async function isProductionOrderFullyDone(orderId: string, orderQuantity: number) {
@@ -2142,6 +1892,12 @@ export default function Production({
       }
 
       if (allBatchesDone) {
+        const goodQuantity = refreshedBatches.reduce(
+          (sum, item) => sum + Number(item.completed_quantity || 0),
+          0,
+        );
+        await assertProductionOrderStockReceived(order.id, goodQuantity);
+
         const { error: doneOrderError } = await supabase
           .from("production_orders")
           .update({

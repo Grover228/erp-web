@@ -1,0 +1,32 @@
+name: Apply Excel import local directory fallback fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-excel-import-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply exact local-directory patch
+        run: node scripts/fix-excel-import-product-fallback.cjs
+      - name: Verify build
+        run: npm ci && npm run build
+      - name: Commit source fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pages/warehouse/SalesPage.tsx
+          git commit -m "fix: use loaded products for Excel import fallback" || exit 0
+          git push origin main
