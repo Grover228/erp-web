@@ -51,6 +51,10 @@ class WakeWordService : Service(), RecognitionListener {
     private var lastWakeHypothesis = ""
     private var wakeChimeTrack: AudioTrack? = null
     private var audioFocusRequest: android.media.AudioFocusRequest? = null
+    private enum class ErpDialogueState { NONE, WAIT_CUTTING_QUANTITY, CONFIRM_CUTTING_QUANTITY }
+    private var erpDialogueState = ErpDialogueState.NONE
+    private var pendingCuttingQuantity: Int? = null
+    private var resumeErpDialogueAfterSpeech = false
 
     private val wakeDecisionRunnable = Runnable {
         wakeDecisionPending = false
@@ -213,7 +217,10 @@ class WakeWordService : Service(), RecognitionListener {
                             assistantSpeechBusy = false
                             speakNextAssistantPhrase()
                             finishNativeAssistantIfDone()
-                            finishNativeAssistantIfDone()
+                            if (resumeErpDialogueAfterSpeech && !assistantSpeechBusy && assistantSpeechQueue.isEmpty()) {
+                                resumeErpDialogueAfterSpeech = false
+                                startErpFollowupListening()
+                            }
                         }
                     }
                 }
@@ -427,7 +434,90 @@ class WakeWordService : Service(), RecognitionListener {
         return true
     }
 
+    private fun startErpFollowupListening() {
+        if (!assistantHandoffActive) assistantHandoffActive = true
+        stopWakeDetector()
+        val currentModel = model ?: run { finishAssistantHandoff(); return }
+        try {
+            val recognizer = Recognizer(currentModel, SAMPLE_RATE)
+            assistantQueryListening = true
+            speechService = SpeechService(recognizer, SAMPLE_RATE).also { it.startListening(this) }
+            handler.removeCallbacks(assistantQueryTimeoutRunnable)
+            handler.postDelayed(assistantQueryTimeoutRunnable, ASSISTANT_QUERY_TIMEOUT_MS)
+            updateNotification("ERP • слушаю ответ…")
+        } catch (_: Throwable) {
+            erpDialogueState = ErpDialogueState.NONE
+            pendingCuttingQuantity = null
+            finishAssistantHandoff()
+        }
+    }
+
+    private fun speakErpAndListen(message: String) {
+        assistantResponseComplete = false
+        resumeErpDialogueAfterSpeech = true
+        enqueueAssistantSpeech(message)
+    }
+
+    private fun parseRussianQuantity(raw: String): Int? {
+        raw.filter { it.isDigit() }.toIntOrNull()?.let { return it }
+        val words = normalize(raw).split(" ")
+        val units = mapOf("один" to 1,"одна" to 1,"два" to 2,"две" to 2,"три" to 3,"четыре" to 4,"пять" to 5,"шесть" to 6,"семь" to 7,"восемь" to 8,"девять" to 9)
+        val teens = mapOf("десять" to 10,"одиннадцать" to 11,"двенадцать" to 12,"тринадцать" to 13,"четырнадцать" to 14,"пятнадцать" to 15,"шестнадцать" to 16,"семнадцать" to 17,"восемнадцать" to 18,"девятнадцать" to 19)
+        val tens = mapOf("двадцать" to 20,"тридцать" to 30,"сорок" to 40,"пятьдесят" to 50,"шестьдесят" to 60,"семьдесят" to 70,"восемьдесят" to 80,"девяносто" to 90)
+        val hundreds = mapOf("сто" to 100,"двести" to 200,"триста" to 300,"четыреста" to 400,"пятьсот" to 500,"шестьсот" to 600,"семьсот" to 700,"восемьсот" to 800,"девятьсот" to 900)
+        var total = 0; var seen = false
+        for (w in words) {
+            val v = hundreds[w] ?: teens[w] ?: tens[w] ?: units[w]
+            if (v != null) { total += v; seen = true }
+        }
+        return if (seen && total > 0) total else null
+    }
+
+    private fun handleErpDialogueAnswer(text: String): Boolean {
+        when (erpDialogueState) {
+            ErpDialogueState.WAIT_CUTTING_QUANTITY -> {
+                val quantity = parseRussianQuantity(text)
+                if (quantity == null || quantity <= 0) {
+                    speakErpAndListen("Не расслышал количество. Сколько штук готово?")
+                } else {
+                    pendingCuttingQuantity = quantity
+                    erpDialogueState = ErpDialogueState.CONFIRM_CUTTING_QUANTITY
+                    speakErpAndListen("Ты сказал $quantity штук. Всё верно?")
+                }
+                return true
+            }
+            ErpDialogueState.CONFIRM_CUTTING_QUANTITY -> {
+                val answer = normalize(text)
+                if (listOf("да","верно","правильно","подтверждаю").any { answer.contains(it) }) {
+                    val quantity = pendingCuttingQuantity ?: return true
+                    erpDialogueState = ErpDialogueState.NONE
+                    pendingCuttingQuantity = null
+                    updateNotification("ERP • завершаю раскрой…")
+                    Thread {
+                        val result = erpExecutor.finishCuttingAndPrint(quantity)
+                        handler.post {
+                            val reply = result.getOrElse { it.message ?: "Не удалось завершить раскрой." }
+                            assistantResponseComplete = true
+                            updateNotification(reply)
+                            enqueueAssistantSpeech(reply)
+                            finishNativeAssistantIfDone()
+                        }
+                    }.start()
+                } else if (listOf("нет","неверно","не правильно","ошибка").any { answer.contains(it) }) {
+                    pendingCuttingQuantity = null
+                    erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
+                    speakErpAndListen("Хорошо. Сколько штук готово?")
+                } else {
+                    speakErpAndListen("Скажи да, если количество верное, или нет, чтобы назвать заново.")
+                }
+                return true
+            }
+            ErpDialogueState.NONE -> return false
+        }
+    }
+
     private fun sendAssistantQuery(text: String) {
+        if (handleErpDialogueAnswer(text)) return
         // Commands spoken after the separate wake word ("Валера" -> chime -> command)
         // arrive here without the wake word, so parse local commands again here.
         MusicVoiceCommands.parse("валера " + text)?.let { command ->
@@ -454,6 +544,13 @@ class WakeWordService : Service(), RecognitionListener {
 
         val erpCommand = ErpVoiceCommands.parse(text)
         if (erpCommand != null) {
+            if (erpCommand == ErpVoiceCommand.FinishCutting) {
+                erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
+                pendingCuttingQuantity = null
+                updateNotification("ERP • завершение раскроя")
+                speakErpAndListen("Останавливаю раскрой. Сколько штук готово?")
+                return
+            }
             updateNotification("Выполняю команду ERP…")
             assistantStreamBuffer = ""
             assistantResponseComplete = false
@@ -1051,6 +1148,9 @@ class WakeWordService : Service(), RecognitionListener {
         assistantQueryListening = false
         assistantResponseComplete = false
         assistantStreamBuffer = ""
+        resumeErpDialogueAfterSpeech = false
+        erpDialogueState = ErpDialogueState.NONE
+        pendingCuttingQuantity = null
         handler.removeCallbacks(assistantQueryTimeoutRunnable)
         assistantRecordingSeen = false
         assistantSilentPolls = 0
@@ -1140,9 +1240,25 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onPartialResult(hypothesis: String?) {
-        // During the second-stage command capture, partial hypotheses must not be
-        // treated as wake-word input. Wait for a final/result hypothesis instead.
-        if (!assistantQueryListening) inspectHypothesis(hypothesis)
+        if (!assistantQueryListening) {
+            inspectHypothesis(hypothesis)
+            return
+        }
+        // Some Android devices stop producing a final Vosk result after the screen
+        // turns off. For known local commands accept an exact partial hypothesis too.
+        if (erpDialogueState == ErpDialogueState.NONE && !hypothesis.isNullOrBlank()) {
+            val text = runCatching {
+                val json = JSONObject(hypothesis)
+                json.optString("partial").trim()
+            }.getOrDefault("")
+            if (text.isNotBlank() && (
+                    ErpVoiceCommands.parse(text) != null ||
+                    MusicVoiceCommands.parse("валера " + text) != null ||
+                    LightVoiceCommands.parse("валера " + text) != null
+                )) {
+                inspectAssistantQuery(JSONObject().put("text", text).toString())
+            }
+        }
     }
 
     override fun onResult(hypothesis: String?) {
