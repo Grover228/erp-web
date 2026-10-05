@@ -8,7 +8,10 @@ import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
-import android.media.MediaPlayer
+import android.media.AudioTrack
+import kotlin.math.PI
+import kotlin.math.exp
+import kotlin.math.sin
 import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
@@ -46,7 +49,7 @@ class WakeWordService : Service(), RecognitionListener {
     private var lastWakeAt = 0L
     private var wakeDecisionPending = false
     private var lastWakeHypothesis = ""
-    private var wakeChimePlayer: MediaPlayer? = null
+    private var wakeChimeTrack: AudioTrack? = null
     private var audioFocusRequest: android.media.AudioFocusRequest? = null
 
     private val wakeDecisionRunnable = Runnable {
@@ -131,8 +134,8 @@ class WakeWordService : Service(), RecognitionListener {
         stopWakeDetector()
         lightExecutor.closeActive()
         musicExecutor.release()
-        wakeChimePlayer?.release()
-        wakeChimePlayer = null
+        wakeChimeTrack?.release()
+        wakeChimeTrack = null
         restoreMediaAfterCommand()
 
         model?.close()
@@ -303,16 +306,64 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun playWakeChime() {
+        // Activation sound #09: 480 -> 720 -> 960 Hz. Rendered locally so the APK
+        // does not depend on a binary asset. Gain is 150% of the original preview.
         try {
-            wakeChimePlayer?.release()
-            wakeChimePlayer = MediaPlayer.create(this, R.raw.valera_activation_09)?.apply {
-                setVolume(1.0f, 1.0f)
-                setOnCompletionListener {
-                    it.release()
-                    if (wakeChimePlayer === it) wakeChimePlayer = null
+            wakeChimeTrack?.stop()
+            wakeChimeTrack?.release()
+
+            val sampleRate = 44_100
+            val parts = listOf(480.0 to 0.070, 720.0 to 0.070, 960.0 to 0.100)
+            val gapSeconds = 0.012
+            val samples = ArrayList<Short>()
+
+            parts.forEachIndexed { index, (frequency, duration) ->
+                val count = (sampleRate * duration).toInt()
+                for (i in 0 until count) {
+                    val t = i.toDouble() / sampleRate
+                    val attack = (t / 0.004).coerceIn(0.0, 1.0)
+                    val decay = exp(-t / (duration * 0.55))
+                    val raw = sin(2.0 * PI * frequency * t) * attack * decay
+                    val boosted = (raw * 0.88 * 1.5).coerceIn(-1.0, 1.0)
+                    samples.add((boosted * Short.MAX_VALUE).toInt().toShort())
                 }
-                start()
+                if (index < parts.lastIndex) {
+                    repeat((sampleRate * gapSeconds).toInt()) { samples.add(0) }
+                }
             }
+            repeat((sampleRate * 0.08).toInt()) { samples.add(0) }
+
+            val pcm = ShortArray(samples.size) { samples[it] }
+            wakeChimeTrack = AudioTrack.Builder()
+                .setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                .setAudioFormat(
+                    android.media.AudioFormat.Builder()
+                        .setEncoding(android.media.AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(sampleRate)
+                        .setChannelMask(android.media.AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(pcm.size * 2)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
+                .also { track ->
+                    track.write(pcm, 0, pcm.size)
+                    track.setVolume(1.0f)
+                    track.setNotificationMarkerPosition(pcm.size)
+                    track.setPlaybackPositionUpdateListener(object : AudioTrack.OnPlaybackPositionUpdateListener {
+                        override fun onMarkerReached(audioTrack: AudioTrack) {
+                            audioTrack.release()
+                            if (wakeChimeTrack === audioTrack) wakeChimeTrack = null
+                        }
+                        override fun onPeriodicNotification(audioTrack: AudioTrack) = Unit
+                    })
+                    track.play()
+                }
         } catch (_: Throwable) {}
     }
 
