@@ -583,8 +583,7 @@ class WakeWordService : Service(), RecognitionListener {
             assistantResponseComplete = true
             assistantStreamBuffer = ""
             updateNotification("Локальный режим • жду команду")
-            enqueueAssistantSpeech("Эта команда пока не запрограммирована.")
-            finishNativeAssistantIfDone()
+            finishAssistantHandoff()
             return
         }
 
@@ -1275,18 +1274,14 @@ class WakeWordService : Service(), RecognitionListener {
                     listOf("да","верно","правильно","подтверждаю","нет","неверно","ошибка").any { a.contains(it) }
                 }
         }
-        if (!known) {
-            assistantPartialCandidate = text
-            assistantPartialSeenAt = System.currentTimeMillis()
-            return
-        }
+        if (!known) return
 
         val now = System.currentTimeMillis()
-        if (assistantPartialCandidate == text && now - assistantPartialSeenAt >= STABLE_PARTIAL_MS) {
-            inspectAssistantQuery(JSONObject().put("text", text).toString())
-        } else {
+        if (assistantPartialCandidate != text) {
             assistantPartialCandidate = text
             assistantPartialSeenAt = now
+        } else if (now - assistantPartialSeenAt >= STABLE_PARTIAL_MS) {
+            inspectAssistantQuery(JSONObject().put("text", text).toString())
         }
     }
 
