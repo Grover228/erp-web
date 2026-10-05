@@ -11,7 +11,7 @@ android {
         applicationId = "ru.alexey.valera"
         minSdk = 28
         targetSdk = 35
-        versionCode = 23
+        versionCode = 24
         versionName = "1.1.2"
     }
 
