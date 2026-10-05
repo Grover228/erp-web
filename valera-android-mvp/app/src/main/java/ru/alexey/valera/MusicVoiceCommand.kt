@@ -33,6 +33,7 @@ object MusicVoiceCommands {
             "чил" in command -> MusicVoiceCommand.PlayStation(chillout)
             "лоу" in command -> MusicVoiceCommand.PlayStation(lofi)
             isRadio -> MusicVoiceCommand.PlayStation(record)
+            "музык" in command -> MusicVoiceCommand.PlayStation(record)
             else -> null
         }
     }
