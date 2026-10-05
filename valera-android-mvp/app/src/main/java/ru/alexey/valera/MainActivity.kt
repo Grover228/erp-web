@@ -28,7 +28,6 @@ class MainActivity : Activity() {
     private lateinit var voiceButton: Button
     private lateinit var chatGptButton: Button
     private lateinit var erpButton: Button
-    private lateinit var musicExecutor: MusicVoiceExecutor
     private lateinit var chatGptAuth: ChatGptAuthManager
     private lateinit var modeText: TextView
     private var waitingForOverlayPermission = false
@@ -84,7 +83,6 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         chatGptAuth = ChatGptAuthManager(this)
-        musicExecutor = MusicVoiceExecutor(this)
 
         orb = ValeraOrbView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -153,17 +151,17 @@ class MainActivity : Activity() {
             val play = Button(this@MainActivity).apply {
                 text = "▶ RECORD"
                 setOnClickListener {
-                    val result = musicExecutor.execute(MusicVoiceCommand.PlayStation(MusicVoiceCommands.record))
-                    status.text = result.getOrElse { it.message ?: "Ошибка радио" }
+                    startService(Intent(this@MainActivity, WakeWordService::class.java).setAction(WakeWordService.ACTION_MUSIC_PLAY_RECORD))
+                    status.text = "Подключаю Рекорд…"
                 }
             }
             val pause = Button(this@MainActivity).apply {
                 text = "⏸"
-                setOnClickListener { status.text = musicExecutor.execute(MusicVoiceCommand.Pause).getOrDefault("Ошибка") }
+                setOnClickListener { startService(Intent(this@MainActivity, WakeWordService::class.java).setAction(WakeWordService.ACTION_MUSIC_PAUSE)) }
             }
             val stop = Button(this@MainActivity).apply {
                 text = "■"
-                setOnClickListener { status.text = musicExecutor.execute(MusicVoiceCommand.Stop).getOrDefault("Ошибка") }
+                setOnClickListener { startService(Intent(this@MainActivity, WakeWordService::class.java).setAction(WakeWordService.ACTION_MUSIC_STOP)) }
             }
             addView(play, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f))
             addView(pause, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
