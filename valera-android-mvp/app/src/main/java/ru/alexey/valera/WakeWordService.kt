@@ -95,6 +95,20 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_MUSIC_PLAY_RECORD -> {
+                handleMusicCommand(MusicVoiceCommand.PlayStation(MusicVoiceCommands.record))
+                return START_STICKY
+            }
+            ACTION_MUSIC_PAUSE -> {
+                handleMusicCommand(MusicVoiceCommand.Pause)
+                return START_STICKY
+            }
+            ACTION_MUSIC_STOP -> {
+                handleMusicCommand(MusicVoiceCommand.Stop)
+                return START_STICKY
+            }
+        }
         if (model == null && !modelLoading) {
             initOfflineWakeWord()
         } else if (
@@ -1049,7 +1063,15 @@ class WakeWordService : Service(), RecognitionListener {
         // Для wake-word timeout не используем: слушаем одним непрерывным сеансом.
     }
 
+    private fun handleMusicCommand(command: MusicVoiceCommand) {
+        val result = musicExecutor.execute(command)
+        updateNotification(result.getOrElse { it.message ?: "Ошибка радио" })
+    }
+
     companion object {
+        const val ACTION_MUSIC_PLAY_RECORD = "ru.alexey.valera.MUSIC_PLAY_RECORD"
+        const val ACTION_MUSIC_PAUSE = "ru.alexey.valera.MUSIC_PAUSE"
+        const val ACTION_MUSIC_STOP = "ru.alexey.valera.MUSIC_STOP"
         const val ACTION_WAKE_DETECTED = "ru.alexey.valera.WAKE_DETECTED"
         const val ACTION_SERVICE_STATE = "ru.alexey.valera.SERVICE_STATE"
         const val EXTRA_STATE = "state"
