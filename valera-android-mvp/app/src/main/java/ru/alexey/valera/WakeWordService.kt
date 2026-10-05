@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
@@ -45,6 +46,8 @@ class WakeWordService : Service(), RecognitionListener {
     private var lastWakeAt = 0L
     private var wakeDecisionPending = false
     private var lastWakeHypothesis = ""
+    private var wakeChimePlayer: MediaPlayer? = null
+    private var audioFocusRequest: android.media.AudioFocusRequest? = null
 
     private val wakeDecisionRunnable = Runnable {
         wakeDecisionPending = false
@@ -128,6 +131,9 @@ class WakeWordService : Service(), RecognitionListener {
         stopWakeDetector()
         lightExecutor.closeActive()
         musicExecutor.release()
+        wakeChimePlayer?.release()
+        wakeChimePlayer = null
+        restoreMediaAfterCommand()
 
         model?.close()
         model = null
@@ -258,13 +264,60 @@ class WakeWordService : Service(), RecognitionListener {
             .map(String::trim)
             .filter(String::isNotEmpty)
     }
+    private fun duckMediaForCommand() {
+        musicExecutor.duckForVoiceCommand()
+        val audioManager = getSystemService(AudioManager::class.java)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                val request = android.media.AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                    .setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .setAcceptsDelayedFocusGain(false)
+                    .setOnAudioFocusChangeListener { }
+                    .build()
+                audioFocusRequest = request
+                audioManager.requestAudioFocus(request)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            }
+        } catch (_: Throwable) {}
+    }
+
+    private fun restoreMediaAfterCommand() {
+        musicExecutor.restoreAfterVoiceCommand()
+        val audioManager = getSystemService(AudioManager::class.java)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+                audioFocusRequest = null
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager.abandonAudioFocus(null)
+            }
+        } catch (_: Throwable) {}
+    }
+
     private fun playWakeChime() {
         try {
-            ToneGenerator(AudioManager.STREAM_MUSIC, 55).startTone(ToneGenerator.TONE_PROP_ACK, 140)
+            wakeChimePlayer?.release()
+            wakeChimePlayer = MediaPlayer.create(this, R.raw.valera_activation_09)?.apply {
+                setVolume(1.0f, 1.0f)
+                setOnCompletionListener {
+                    it.release()
+                    if (wakeChimePlayer === it) wakeChimePlayer = null
+                }
+                start()
+            }
         } catch (_: Throwable) {}
     }
 
     private fun startNativeAssistantConversation() {
+        duckMediaForCommand()
         playWakeChime()
         assistantHandoffActive = true
         assistantResponseComplete = false
@@ -942,6 +995,7 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun finishAssistantHandoff() {
+        restoreMediaAfterCommand()
         assistantHandoffActive = false
         assistantQueryListening = false
         assistantResponseComplete = false
