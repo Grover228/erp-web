@@ -134,8 +134,8 @@ class ErpVoiceExecutor(context: Context) {
         }finally{c.disconnect()}
     }
     private fun <T> withSession(block: (ErpSession) -> T): Result<T> = runCatching {
-        var s=auth.session()?:error("Сначала подключи ERP в приложении Валера.")
-        try{block(s)}catch(first:Throwable){s=auth.refresh().getOrElse{throw first};block(s)}
+        val s = auth.session() ?: error("Сначала подключи ERP в приложении Валера.")
+        block(s)
     }
     private fun now()=java.time.Instant.now().toString()
     private fun enc(v:String)=URLEncoder.encode(v,"UTF-8")
