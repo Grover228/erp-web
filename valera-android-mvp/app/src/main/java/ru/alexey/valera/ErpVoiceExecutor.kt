@@ -64,7 +64,9 @@ class ErpVoiceExecutor(context: Context) {
             if (startedAt.isBlank()) 0 else java.time.Duration.between(java.time.Instant.parse(startedAt), java.time.Instant.parse(finishedAt)).seconds.coerceAtLeast(0)
         }.getOrDefault(0)
         val newCompleted = already + quantity
-        // Завершение одного рабочего захода всегда снимает операцию с in_progress.\n        // Если план ещё не выполнен, ERP оставляет операцию pending для следующего запуска.\n        val nextStatus = if (newCompleted >= order.optInt("quantity", 0)) "done" else "pending"
+        // Завершение рабочего захода снимает операцию с in_progress.
+        // Если план не выполнен, операция остаётся pending для следующего запуска.
+        val nextStatus = if (newCompleted >= order.optInt("quantity", 0)) "done" else "pending"
         val earned = quantity * op.optDouble("price_per_unit", 0.0)
 
         request(s,"PATCH","production_order_operations?id=eq."+enc(op.getString("id")),
