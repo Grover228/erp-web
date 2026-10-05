@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import android.content.Intent
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 
@@ -31,9 +32,22 @@ class MusicVoiceExecutor(private val context: Context) {
                 true
             )
             exo.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    val state = when (playbackState) {
+                        Player.STATE_BUFFERING -> "Подключение к радио…"
+                        Player.STATE_READY -> if (exo.playWhenReady) "Радио играет" else "Радио готово"
+                        Player.STATE_ENDED -> "Поток завершён"
+                        else -> return
+                    }
+                    publishStatus(state)
+                }
+                override fun onIsPlayingChanged(isPlaying: Boolean) {
+                    if (isPlaying) publishStatus("Радио играет")
+                }
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
-                    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                        .edit().putString(KEY_LAST_ERROR, error.errorCodeName + ": " + (error.message ?: "ошибка потока")).apply()
+                    val message = "Ошибка радио: " + error.errorCodeName + " • " + (error.cause?.message ?: error.message ?: "неизвестная ошибка")
+                    context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_LAST_ERROR, message).apply()
+                    publishStatus(message)
                 }
             })
             player = exo
@@ -74,6 +88,10 @@ class MusicVoiceExecutor(private val context: Context) {
         } else play(MusicVoiceCommands.record)
     }
 
+    private fun publishStatus(message: String) {
+        context.sendBroadcast(Intent(ACTION_MUSIC_STATUS).setPackage(context.packageName).putExtra(EXTRA_MESSAGE, message))
+    }
+
     fun release() {
         player?.release()
         player = null
@@ -83,5 +101,7 @@ class MusicVoiceExecutor(private val context: Context) {
     companion object {
         const val PREFS = "valera-music"
         const val KEY_LAST_ERROR = "last_error"
+        const val ACTION_MUSIC_STATUS = "ru.alexey.valera.MUSIC_STATUS"
+        const val EXTRA_MESSAGE = "message"
     }
 }
