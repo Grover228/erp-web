@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
-const { exec } = require("child_process");
+const { execFile } = require("child_process");
 const iconv = require("iconv-lite");
 
 const app = express();
@@ -69,14 +69,32 @@ function writeToPrinter(tspl) {
 
     fs.writeFileSync(filePath, encoded);
 
-    exec(`COPY /B "${filePath}" "\\\\localhost\\Xprinter"`, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
+    const rawPrintScript = path.join(__dirname, "raw-print.ps1");
 
-      resolve();
-    });
+    execFile(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        rawPrintScript,
+        "-PrinterName",
+        PRINTER_NAME,
+        "-FilePath",
+        filePath,
+      ],
+      { windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error) {
+          const details = (stderr || stdout || error.message).trim();
+          reject(new Error(details || error.message));
+          return;
+        }
+
+        resolve();
+      }
+    );
   });
 }
 
