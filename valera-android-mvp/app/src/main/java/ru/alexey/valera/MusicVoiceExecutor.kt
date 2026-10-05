@@ -11,6 +11,8 @@ import androidx.media3.exoplayer.ExoPlayer
 class MusicVoiceExecutor(private val context: Context) {
     private var player: ExoPlayer? = null
     private var currentStation: RadioStation? = null
+    private var volumeBeforeDuck = 1.0f
+    private var ducked = false
 
     fun execute(command: MusicVoiceCommand): Result<String> = runCatching {
         when (command) {
@@ -90,6 +92,19 @@ class MusicVoiceExecutor(private val context: Context) {
 
     private fun publishStatus(message: String) {
         context.sendBroadcast(Intent(ACTION_MUSIC_STATUS).setPackage(context.packageName).putExtra(EXTRA_MESSAGE, message))
+    }
+
+    fun duckForVoiceCommand() {
+        val exo = player ?: return
+        if (!ducked) volumeBeforeDuck = exo.volume
+        ducked = true
+        exo.volume = 0.12f
+    }
+
+    fun restoreAfterVoiceCommand() {
+        if (!ducked) return
+        player?.volume = volumeBeforeDuck
+        ducked = false
     }
 
     fun release() {
