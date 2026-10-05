@@ -36,6 +36,9 @@ class MainActivity : Activity() {
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
+                MusicVoiceExecutor.ACTION_MUSIC_STATUS -> {
+                    status.text = intent.getStringExtra(MusicVoiceExecutor.EXTRA_MESSAGE) ?: "Статус радио неизвестен"
+                }
                 WakeWordService.ACTION_WAKE_DETECTED -> {
                     orb.setState(ValeraOrbView.State.AWAKE)
                     status.text = "Да, Алексей. Слушаю."
@@ -264,6 +267,7 @@ class MainActivity : Activity() {
         val filter = IntentFilter().apply {
             addAction(WakeWordService.ACTION_WAKE_DETECTED)
             addAction(WakeWordService.ACTION_SERVICE_STATE)
+            addAction(MusicVoiceExecutor.ACTION_MUSIC_STATUS)
         }
 
         ContextCompat.registerReceiver(
