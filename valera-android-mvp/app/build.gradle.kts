@@ -11,8 +11,8 @@ android {
         applicationId = "ru.alexey.valera"
         minSdk = 28
         targetSdk = 35
-        versionCode = 25
-        versionName = "1.1.4"
+        versionCode = 26
+        versionName = "1.1.5"
     }
 
     compileOptions {
