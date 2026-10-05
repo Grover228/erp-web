@@ -16,6 +16,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.speech.tts.TextToSpeech
 import android.media.ToneGenerator
 import android.speech.tts.UtteranceProgressListener
@@ -51,6 +52,9 @@ class WakeWordService : Service(), RecognitionListener {
     private var lastWakeHypothesis = ""
     private var wakeChimeTrack: AudioTrack? = null
     private var audioFocusRequest: android.media.AudioFocusRequest? = null
+    private var cpuWakeLock: PowerManager.WakeLock? = null
+    private var assistantPartialCandidate = ""
+    private var assistantPartialSeenAt = 0L
     private enum class ErpDialogueState { NONE, WAIT_CUTTING_QUANTITY, CONFIRM_CUTTING_QUANTITY }
     private var erpDialogueState = ErpDialogueState.NONE
     private var pendingCuttingQuantity: Int? = null
@@ -94,6 +98,10 @@ class WakeWordService : Service(), RecognitionListener {
             .edit()
             .putBoolean(KEY_RUNNING, true)
             .apply()
+
+        cpuWakeLock = getSystemService(PowerManager::class.java)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "$packageName:voice-listener")
+            .apply { setReferenceCounted(false); acquire() }
 
         initTts()
         lightExecutor = LightVoiceExecutor(this)
@@ -141,6 +149,8 @@ class WakeWordService : Service(), RecognitionListener {
         wakeChimeTrack?.release()
         wakeChimeTrack = null
         restoreMediaAfterCommand()
+        runCatching { if (cpuWakeLock?.isHeld == true) cpuWakeLock?.release() }
+        cpuWakeLock = null
 
         model?.close()
         model = null
@@ -382,6 +392,8 @@ class WakeWordService : Service(), RecognitionListener {
         assistantStreamBuffer = ""
         assistantSpeechQueue.clear()
         assistantSpeechBusy = false
+        assistantPartialCandidate = ""
+        assistantPartialSeenAt = 0L
         stopWakeDetector()
         updateNotification("Валера слушает вопрос…")
         sendStateBroadcast(STATE_HANDOFF, "Слушаю вопрос")
@@ -1148,6 +1160,8 @@ class WakeWordService : Service(), RecognitionListener {
         assistantQueryListening = false
         assistantResponseComplete = false
         assistantStreamBuffer = ""
+        assistantPartialCandidate = ""
+        assistantPartialSeenAt = 0L
         resumeErpDialogueAfterSpeech = false
         erpDialogueState = ErpDialogueState.NONE
         pendingCuttingQuantity = null
@@ -1244,20 +1258,35 @@ class WakeWordService : Service(), RecognitionListener {
             inspectHypothesis(hypothesis)
             return
         }
-        // Some Android devices stop producing a final Vosk result after the screen
-        // turns off. For known local commands accept an exact partial hypothesis too.
-        if (erpDialogueState == ErpDialogueState.NONE && !hypothesis.isNullOrBlank()) {
-            val text = runCatching {
-                val json = JSONObject(hypothesis)
-                json.optString("partial").trim()
-            }.getOrDefault("")
-            if (text.isNotBlank() && (
-                    ErpVoiceCommands.parse(text) != null ||
+        if (hypothesis.isNullOrBlank()) return
+        val text = runCatching { JSONObject(hypothesis).optString("partial").trim() }.getOrDefault("")
+        if (text.isBlank()) return
+
+        // При погашенном экране Vosk на части устройств может долго не присылать
+        // финальный result. Не исполняем обрывок сразу: ждём, пока одна и та же
+        // известная команда стабилизируется минимум на двух partial callback.
+        val known = when (erpDialogueState) {
+            ErpDialogueState.NONE ->
+                ErpVoiceCommands.parse(text) != null ||
                     MusicVoiceCommands.parse("валера " + text) != null ||
                     LightVoiceCommands.parse("валера " + text) != null
-                )) {
-                inspectAssistantQuery(JSONObject().put("text", text).toString())
-            }
+            else -> parseRussianQuantity(text) != null ||
+                normalize(text).let { a ->
+                    listOf("да","верно","правильно","подтверждаю","нет","неверно","ошибка").any { a.contains(it) }
+                }
+        }
+        if (!known) {
+            assistantPartialCandidate = text
+            assistantPartialSeenAt = System.currentTimeMillis()
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        if (assistantPartialCandidate == text && now - assistantPartialSeenAt >= STABLE_PARTIAL_MS) {
+            inspectAssistantQuery(JSONObject().put("text", text).toString())
+        } else {
+            assistantPartialCandidate = text
+            assistantPartialSeenAt = now
         }
     }
 
