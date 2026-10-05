@@ -17,16 +17,22 @@ object MusicVoiceCommands {
     val lofi = RadioStation("Lo-Fi", "https://radiorecord.hostingradio.ru/lofi96.aacp")
     fun parse(rawText: String): MusicVoiceCommand? {
         val text = normalize(rawText)
-        if (!text.contains("валера")) return null
-        val command = text.substringAfter("валера").trim()
-        if (command in listOf("выключи музыку", "останови музыку", "выключи радио", "стоп музыка")) return MusicVoiceCommand.Stop
-        if (command in listOf("пауза", "поставь музыку на паузу")) return MusicVoiceCommand.Pause
-        if (command in listOf("продолжи музыку", "продолжай музыку", "включи дальше")) return MusicVoiceCommand.Resume
+        val command = if ("валера" in text) text.substringAfter("валера").trim() else text
+        if (command.isBlank()) return null
 
-        return when (command) {
-            "включи музыку", "включить музыку", "включи рекорд", "включи радио", "включи радио рекорд", "запусти радио рекорд" -> MusicVoiceCommand.PlayStation(record)
-            "включи чилаут", "включи чил аут" -> MusicVoiceCommand.PlayStation(chillout)
-            "включи лоуфай", "включи лоу фай" -> MusicVoiceCommand.PlayStation(lofi)
+        val isRadio = listOf("радио", "музык", "рекорд", "record", "чил", "лоу").any { it in command }
+        if (("выключ" in command || "останов" in command || command.startsWith("стоп")) && isRadio) return MusicVoiceCommand.Stop
+        if ("пауз" in command && (isRadio || command == "пауза")) return MusicVoiceCommand.Pause
+        if (("продолж" in command || "возобнов" in command || "включи дальше" in command) && (isRadio || "дальше" in command)) return MusicVoiceCommand.Resume
+
+        val wantsPlay = listOf("включ", "запуст", "постав", "играй").any { it in command } ||
+            command in listOf("рекорд", "радио", "музыка", "чилаут", "чил аут", "лоуфай", "лоу фай")
+
+        if (!wantsPlay) return null
+        return when {
+            "чил" in command -> MusicVoiceCommand.PlayStation(chillout)
+            "лоу" in command -> MusicVoiceCommand.PlayStation(lofi)
+            isRadio -> MusicVoiceCommand.PlayStation(record)
             else -> null
         }
     }
