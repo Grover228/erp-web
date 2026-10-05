@@ -30,7 +30,7 @@ class ErpVoiceExecutor(context: Context) {
         return "Смена закрыта. За смену учтено "+shift.optInt("total_quantity",0)+" штук."
     }
     private fun startCutting(s: ErpSession): String {
-        val rows=get(s,"production_order_operations?operation_name=ilike.%D0%A0%D0%B0%D1%81%D0%BA%D1%80%D0%BE%D0%B9&status=neq.done&select=id,status,completed_quantity,started_at&order=created_at.desc&limit=2")
+        val rows=get(s,"production_order_operations?operation_name=ilike.%D0%A0%D0%B0%D1%81%D0%BA%D1%80%D0%BE%D0%B9&status=neq.done&select=id,production_order_id,status,completed_quantity,started_at&order=created_at.desc&limit=2")
         if(rows.length()==0)return "Незавершённый раскрой не найден."
         if(rows.length()>1)return "Нашёл несколько незавершённых раскроев. Ничего не запускаю."
         val op=rows.getJSONObject(0)
@@ -38,6 +38,10 @@ class ErpVoiceExecutor(context: Context) {
         val started=op.optString("started_at").takeIf{it.isNotBlank()}?:now()
         val body=JSONObject().put("status","in_progress").put("assigned_user_id",s.userId).put("assigned_at",now()).put("started_at",started)
         request(s,"PATCH","production_order_operations?id=eq."+enc(op.getString("id")),body.toString(),"return=representation")
+        val orderId = op.optString("production_order_id")
+        if (orderId.isNotBlank()) {
+            request(s,"PATCH","production_orders?id=eq."+enc(orderId)+"&status=eq.draft",JSONObject().put("status","in_progress").toString(),"return=minimal")
+        }
         return "Раскрой запущен. Уже учтено "+op.optInt("completed_quantity",0)+" штук."
     }
     fun finishCuttingAndPrint(quantity: Int): Result<String> = withSession { s ->
@@ -60,7 +64,7 @@ class ErpVoiceExecutor(context: Context) {
             if (startedAt.isBlank()) 0 else java.time.Duration.between(java.time.Instant.parse(startedAt), java.time.Instant.parse(finishedAt)).seconds.coerceAtLeast(0)
         }.getOrDefault(0)
         val newCompleted = already + quantity
-        val nextStatus = if (newCompleted >= order.optInt("quantity", 0)) "done" else "pending"
+        // Завершение одного рабочего захода всегда снимает операцию с in_progress.\n        // Если план ещё не выполнен, ERP оставляет операцию pending для следующего запуска.\n        val nextStatus = if (newCompleted >= order.optInt("quantity", 0)) "done" else "pending"
         val earned = quantity * op.optDouble("price_per_unit", 0.0)
 
         request(s,"PATCH","production_order_operations?id=eq."+enc(op.getString("id")),
