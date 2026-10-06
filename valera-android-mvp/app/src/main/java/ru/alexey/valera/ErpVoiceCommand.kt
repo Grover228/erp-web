@@ -37,7 +37,22 @@ object ErpVoiceCommands {
     fun parse(rawText: String): ErpVoiceCommand? {
         var text = normalize(rawText)
         if (text.startsWith("валера ")) text = text.removePrefix("валера ").trim()
-        return aliases[text]
+
+        aliases[text]?.let { return it }
+
+        // Vosk often adds harmless service words around short ERP commands.
+        // Keep the destructive/action routing strict, but allow natural shift phrases.
+        if (
+            text.contains("смен") &&
+            listOf("открой", "открыть", "начни", "начать", "начинаю", "начало").any { text.contains(it) }
+        ) return ErpVoiceCommand.OpenShift
+
+        if (
+            text.contains("смен") &&
+            listOf("закрой", "закрыть", "закончи", "закончить", "заверши", "завершить", "конец").any { text.contains(it) }
+        ) return ErpVoiceCommand.CloseShift
+
+        return null
     }
 
     private fun normalize(value: String): String =
