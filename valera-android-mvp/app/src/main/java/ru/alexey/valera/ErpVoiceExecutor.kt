@@ -35,7 +35,7 @@ class ErpVoiceExecutor(context: Context) {
         if(rows.length()>1)return "Нашёл несколько незавершённых раскроев. Ничего не запускаю."
         val op=rows.getJSONObject(0)
         if(op.optString("status")=="in_progress")return "Раскрой уже в работе. Готово "+op.optInt("completed_quantity",0)+" штук."
-        val started=op.optString("started_at").takeIf{it.isNotBlank()}?:now()
+        val started=now()
         val body=JSONObject().put("status","in_progress").put("assigned_user_id",s.userId).put("assigned_at",now()).put("started_at",started)
         request(s,"PATCH","production_order_operations?id=eq."+enc(op.getString("id")),body.toString(),"return=representation")
         val orderId = op.optString("production_order_id")
