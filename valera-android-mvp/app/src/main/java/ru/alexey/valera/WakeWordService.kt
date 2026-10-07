@@ -560,7 +560,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         val erpCommand = ErpVoiceCommands.parse(text)
         if (erpCommand != null) {
-            appLogger.log("command_route", "matched", recognizedText = text, action = "erp:${erpCommand.name}", details = diagnosticDetails())
+            appLogger.log("command_route", "matched", recognizedText = text, action = "erp:${erpCommand.javaClass.simpleName}", details = diagnosticDetails())
             if (erpCommand == ErpVoiceCommand.FinishCutting) {
                 erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
                 pendingCuttingQuantity = null
