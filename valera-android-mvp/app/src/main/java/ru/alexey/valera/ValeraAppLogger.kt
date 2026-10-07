@@ -55,4 +55,8 @@ class ValeraAppLogger(context: Context) {
         }.start()
     }
 
-    private fun appVersion(): String = runCatching {\n        val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)\n        info.versionName ?: "unknown"\n    }.getOrDefault("unknown")\n}\n
+    private fun appVersion(): String = runCatching {
+        val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        info.versionName ?: "unknown"
+    }.getOrDefault("unknown")
+}
