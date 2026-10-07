@@ -22,7 +22,7 @@ class ValeraAppLogger(context: Context) {
         Thread {
             runCatching {
                 val body = JSONObject()
-                    .put("app_version", BuildConfig.VERSION_NAME)
+                    .put("app_version", appVersion())
                     .put("event_type", eventType)
                     .put("recognized_text", recognizedText ?: JSONObject.NULL)
                     .put("action", action ?: JSONObject.NULL)
@@ -54,4 +54,5 @@ class ValeraAppLogger(context: Context) {
             }
         }.start()
     }
-}
+
+    private fun appVersion(): String = runCatching {\n        val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)\n        info.versionName ?: "unknown"\n    }.getOrDefault("unknown")\n}\n
