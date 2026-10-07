@@ -46,6 +46,7 @@ class WakeWordService : Service(), RecognitionListener {
     private lateinit var lightExecutor: LightVoiceExecutor
     private lateinit var erpExecutor: ErpVoiceExecutor
     private lateinit var musicExecutor: MusicVoiceExecutor
+    private lateinit var appLogger: ValeraAppLogger
     private var modelLoading = false
     private var lastWakeAt = 0L
     private var wakeDecisionPending = false
@@ -88,6 +89,8 @@ class WakeWordService : Service(), RecognitionListener {
         super.onCreate()
 
         assistantClient = ValeraAssistantClient(this)
+        appLogger = ValeraAppLogger(this)
+        appLogger.log("service_start", "ok", details = diagnosticDetails())
         createChannel()
         startForeground(
             NOTIFICATION_ID,
@@ -529,6 +532,7 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun sendAssistantQuery(text: String) {
+        appLogger.log("command_text", "recognized", recognizedText = text, details = diagnosticDetails())
         if (handleErpDialogueAnswer(text)) return
         // Commands spoken after the separate wake word ("Валера" -> chime -> command)
         // arrive here without the wake word, so parse local commands again here.
@@ -556,6 +560,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         val erpCommand = ErpVoiceCommands.parse(text)
         if (erpCommand != null) {
+            appLogger.log("command_route", "matched", recognizedText = text, action = "erp:${erpCommand.name}", details = diagnosticDetails())
             if (erpCommand == ErpVoiceCommand.FinishCutting) {
                 erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
                 pendingCuttingQuantity = null
@@ -707,7 +712,9 @@ class WakeWordService : Service(), RecognitionListener {
 
             updateNotification("Офлайн • жду «Валера»")
             sendStateBroadcast(STATE_LISTENING, "Скажи «Валера»")
+            appLogger.log("listener_start", "ok", details = diagnosticDetails())
         } catch (exception: Exception) {
+            appLogger.log("listener_start", "error", errorCode = exception.javaClass.simpleName, errorMessage = exception.message, details = diagnosticDetails())
             updateNotification("Ошибка микрофона")
             sendStateBroadcast(
                 STATE_ERROR,
@@ -739,6 +746,7 @@ class WakeWordService : Service(), RecognitionListener {
 
         val normalized = normalize(phrase)
         if (!normalized.contains(WAKE_WORD)) return
+        appLogger.log("wake_hypothesis", "recognized", recognizedText = phrase, details = diagnosticDetails())
 
         val musicCommand = MusicVoiceCommands.parse(normalized)
         if (musicCommand != null) {
@@ -806,6 +814,7 @@ class WakeWordService : Service(), RecognitionListener {
         lastWakeHypothesis = ""
 
         lastWakeAt = now
+        appLogger.log("wake_detected", "ok", recognizedText = WAKE_WORD, action = "wake", details = diagnosticDetails())
         val shellConfig = PwaConfig.cached(this)
 
         sendBroadcast(
@@ -1210,6 +1219,16 @@ class WakeWordService : Service(), RecognitionListener {
         }
     }
 
+    private fun diagnosticDetails(): JSONObject {
+        val powerManager = getSystemService(PowerManager::class.java)
+        return JSONObject()
+            .put("screen_interactive", powerManager.isInteractive)
+            .put("assistant_handoff", assistantHandoffActive)
+            .put("assistant_query_listening", assistantQueryListening)
+            .put("wake_lock_held", cpuWakeLock?.isHeld == true)
+            .put("erp_dialogue_state", erpDialogueState.name)
+    }
+
     private fun sendStateBroadcast(state: String, message: String) {
         sendBroadcast(
             Intent(ACTION_SERVICE_STATE)
@@ -1294,6 +1313,7 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onError(exception: Exception?) {
+        appLogger.log("recognizer_error", "error", errorCode = exception?.javaClass?.simpleName, errorMessage = exception?.message, details = diagnosticDetails())
         stopWakeDetector()
 
         if (assistantHandoffActive) {
