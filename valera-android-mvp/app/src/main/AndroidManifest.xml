@@ -31,9 +31,9 @@
 
     <application
         android:label="Валера"
-        android:icon="@mipmap/ic_launcher_valera_v2"
-        android:roundIcon="@mipmap/ic_launcher_valera_v2_round"
-        android:logo="@mipmap/ic_launcher_valera_v2"
+        android:icon="@mipmap/ic_launcher_valera_brand"
+        android:roundIcon="@mipmap/ic_launcher_valera_brand_round"
+        android:logo="@mipmap/ic_launcher_valera_brand"
         android:theme="@style/AppTheme">
         <activity
             android:name=".ErpLoginActivity"
