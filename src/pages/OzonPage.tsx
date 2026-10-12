@@ -415,7 +415,17 @@ export default function OzonPage() {
       setFboResolvedSku(Number(row.sku || 0) || null);
       setFboClusterId(String(row.macrolocal_cluster_id));
       if (row.seller_warehouse_id) setFboSellerWarehouseId(String(row.seller_warehouse_id));
-      if (row.drop_off_warehouse_id) setFboDropoffWarehouseId(String(row.drop_off_warehouse_id));
+      if (row.drop_off_warehouse_id) {
+        setFboDropoffWarehouseId(String(row.drop_off_warehouse_id));
+        if (row.drop_off_warehouse_name) {
+          setFboDropoffPoints([{
+            warehouse_id: row.drop_off_warehouse_id,
+            name: row.drop_off_warehouse_name,
+            warehouse_type: row.drop_off_warehouse_type || "",
+            address: "",
+          }]);
+        }
+      }
       setFboDraftInfo(
         row.ozon_response && typeof row.ozon_response === "object"
           ? { ...row.ozon_response, status: row.status || row.ozon_response?.status }
@@ -1022,7 +1032,7 @@ export default function OzonPage() {
         <section style={{ ...panelStyle, padding: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <div>
-              <div style={{ fontWeight: 900, fontSize: 20 }}>Тестовая поставка FBO</div>
+              <div style={{ fontWeight: 900, fontSize: 20 }}>Тестовая поставка FBO · CROSSDOCK</div>
               <div style={{ color: "#64748b", fontSize: 13, marginTop: 5 }}>
                 Товар: <b>bini-black-56</b> · FBO SKU <b>{fboResolvedSku || "определится при создании"}</b> · количество <b>42 шт.</b>
               </div>
@@ -1037,7 +1047,7 @@ export default function OzonPage() {
 
           <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "minmax(260px,1fr) auto", gap: 12, alignItems: "end" }}>
             <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-              Кластер Ozon
+              Кластер размещения Ozon
               <select value={fboClusterId} onChange={(event) => setFboClusterId(event.target.value)} style={inputStyle} disabled={fboLoading}>
                 {fboClusters.map((cluster) => (
                   <option key={cluster.id} value={cluster.id}>
@@ -1058,19 +1068,79 @@ export default function OzonPage() {
 
           {selected && selected.fulfillments.length > 0 && (
             <div style={{ marginTop: 10, color: "#64748b", fontSize: 12 }}>
-              Склады в кластере: {selected.fulfillments.slice(0, 8).map((row) => row.name).join(", ")}
+              Склады размещения в кластере: {selected.fulfillments.slice(0, 8).map((row) => row.name).join(", ")}
               {selected.fulfillments.length > 8 ? "…" : ""}
             </div>
           )}
+
+          <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+              Склад продавца Ozon
+              <select
+                value={fboSellerWarehouseId}
+                onChange={(event) => setFboSellerWarehouseId(event.target.value)}
+                style={inputStyle}
+                disabled={fboLoading}
+              >
+                <option value="">Выберите склад продавца</option>
+                {fboSellerWarehouses.map((warehouse: any) => (
+                  <option
+                    key={warehouse.seller_warehouse_id}
+                    value={String(warehouse.seller_warehouse_id)}
+                  >
+                    {warehouse?.address?.address || warehouse?.name || `Склад продавца ${warehouse.seller_warehouse_id}`}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1fr) auto", gap: 10, alignItems: "end" }}>
+              <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                Найти точку отгрузки CROSSDOCK
+                <input
+                  value={fboDropoffSearch}
+                  onChange={(event) => setFboDropoffSearch(event.target.value)}
+                  placeholder="Например: Саранск, Казань, название ПВЗ"
+                  style={inputStyle}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void searchFboDropoffPoints()}
+                disabled={fboLoading || fboDropoffSearch.trim().length < 4}
+                style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800, cursor: "pointer" }}
+              >
+                Найти точки
+              </button>
+            </div>
+
+            {fboDropoffPoints.length > 0 && (
+              <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                Точка отгрузки
+                <select
+                  value={fboDropoffWarehouseId}
+                  onChange={(event) => setFboDropoffWarehouseId(event.target.value)}
+                  style={inputStyle}
+                >
+                  <option value="">Выберите точку</option>
+                  {fboDropoffPoints.map((point: any) => (
+                    <option key={point.warehouse_id} value={String(point.warehouse_id)}>
+                      {point.name}{point.address ? ` · ${point.address}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
 
           <div style={{ marginTop: 16 }}>
             <button
               type="button"
               onClick={() => void createTestFboDraft()}
-              disabled={fboLoading || !fboClusterId}
+              disabled={fboLoading || !fboClusterId || !fboSellerWarehouseId || !fboDropoffWarehouseId}
               style={{ border: 0, background: fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 900, cursor: fboLoading ? "wait" : "pointer" }}
             >
-              {fboLoading ? "Работаю…" : "Создать тестовый черновик на 42 шт."}
+              {fboLoading ? "Работаю…" : "Создать CROSSDOCK-черновик на 42 шт."}
             </button>
           </div>
         </section>
@@ -1136,9 +1206,9 @@ export default function OzonPage() {
             {draftStatus === "SUCCESS" && availableWarehouses.length > 0 && (
               <div style={{ marginTop: 16, borderTop: "1px solid #e2e8f0", paddingTop: 16, display: "grid", gap: 12 }}>
                 <div>
-                  <div style={{ fontWeight: 900, fontSize: 17 }}>2. Выберите склад и таймслот</div>
+                  <div style={{ fontWeight: 900, fontSize: 17 }}>2. Выберите склад размещения и время сдачи</div>
                   <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                    Показываем только склады со статусом FULL_AVAILABLE.
+                    Склад размещения выбирается из расчёта Ozon, а таймслот относится к выбранной точке отгрузки CROSSDOCK.
                   </div>
                 </div>
 
