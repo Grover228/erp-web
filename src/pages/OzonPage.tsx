@@ -55,6 +55,14 @@ type FeeBreakdown = {
   count: number;
 };
 
+type DailyFinance = {
+  date: string;
+  gross: number;
+  ozon: number;
+  cost: number;
+  profit: number;
+};
+
 type OzonStock = {
   productId: string;
   article: string;
@@ -160,6 +168,110 @@ function EmptyState({ title, text }: { title: string; text: string }) {
   );
 }
 
+
+const dashboardSeriesColors = {
+  gross: "#2563eb",
+  ozon: "#ef4444",
+  cost: "#f59e0b",
+  profit: "#10b981",
+};
+
+function svgPoints(values: number[], width: number, height: number, padding = 4) {
+  if (!values.length) return "";
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+  return values.map((value, index) => {
+    const x = padding + (index * (width - padding * 2)) / Math.max(values.length - 1, 1);
+    const y = padding + ((max - value) * (height - padding * 2)) / range;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+}
+
+function Sparkline({ values, color }: { values: number[]; color: string }) {
+  const width = 145;
+  const height = 34;
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="34" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={svgPoints(values, width, height, 3)} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function FinanceLineChart({ rows }: { rows: DailyFinance[] }) {
+  const width = 1000;
+  const height = 230;
+  const paddingX = 52;
+  const paddingY = 22;
+  const values = rows.flatMap((row) => [row.gross, row.ozon, row.cost, row.profit]);
+  const min = Math.min(...values, 0);
+  const max = Math.max(...values, 0);
+  const range = max - min || 1;
+
+  const points = (key: keyof Omit<DailyFinance, "date">) => rows.map((row, index) => {
+    const x = paddingX + (index * (width - paddingX * 2)) / Math.max(rows.length - 1, 1);
+    const y = paddingY + ((max - row[key]) * (height - paddingY * 2)) / range;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+
+  if (!rows.length) return <EmptyState title="Нет динамики" text="За выбранный период нет данных для графика." />;
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", minWidth: 720, height: 260 }}>
+        {[0, 1, 2, 3, 4].map((step) => {
+          const y = paddingY + (step * (height - paddingY * 2)) / 4;
+          return <line key={step} x1={paddingX} y1={y} x2={width - paddingX} y2={y} stroke="#e2e8f0" strokeWidth="1" />;
+        })}
+        <line x1={paddingX} y1={paddingY} x2={paddingX} y2={height - paddingY} stroke="#cbd5e1" />
+        <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#cbd5e1" />
+        <polyline points={points("gross")} fill="none" stroke={dashboardSeriesColors.gross} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={points("ozon")} fill="none" stroke={dashboardSeriesColors.ozon} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={points("cost")} fill="none" stroke={dashboardSeriesColors.cost} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+        <polyline points={points("profit")} fill="none" stroke={dashboardSeriesColors.profit} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        {rows.map((row, index) => {
+          const x = paddingX + (index * (width - paddingX * 2)) / Math.max(rows.length - 1, 1);
+          if (rows.length > 16 && index % Math.ceil(rows.length / 12) !== 0 && index !== rows.length - 1) return null;
+          return <text key={row.date} x={x} y={height - 3} textAnchor="middle" fontSize="11" fill="#64748b">{new Date(row.date + "T00:00:00").toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit" })}</text>;
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function DonutExpenseChart({ rows }: { rows: FeeBreakdown[] }) {
+  const colors = ["#3b82f6", "#fb923c", "#10b981", "#8b5cf6", "#ef4444", "#f59e0b", "#38bdf8", "#94a3b8"];
+  const visible = rows.filter((row) => row.amount !== 0).slice(0, 8);
+  const total = visible.reduce((sum, row) => sum + Math.abs(row.amount), 0);
+  let cursor = 0;
+  const gradient = visible.length && total > 0
+    ? `conic-gradient(${visible.map((row, index) => {
+        const start = cursor;
+        cursor += (Math.abs(row.amount) / total) * 100;
+        return `${colors[index % colors.length]} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+      }).join(", ")})`
+    : "#e2e8f0";
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "160px minmax(180px,1fr)", gap: 18, alignItems: "center" }}>
+      <div style={{ width: 150, height: 150, borderRadius: "50%", background: gradient, position: "relative", margin: "0 auto" }}>
+        <div style={{ position: "absolute", inset: 31, borderRadius: "50%", background: "#fff", display: "grid", placeItems: "center", textAlign: "center", fontWeight: 900, color: "#0f172a", fontSize: 15 }}>
+          <div>{money(-total)}<div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>100%</div></div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gap: 7 }}>
+        {visible.map((row, index) => (
+          <div key={row.typeId} style={{ display: "grid", gridTemplateColumns: "10px 1fr auto", gap: 8, alignItems: "center", fontSize: 12 }}>
+            <span style={{ width: 9, height: 9, borderRadius: "50%", background: colors[index % colors.length] }} />
+            <span style={{ color: "#475569" }}>{row.label}</span>
+            <b>{total ? ((Math.abs(row.amount) / total) * 100).toFixed(1) : "0.0"}%</b>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function OzonPage() {
   const today = new Date();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -171,6 +283,7 @@ export default function OzonPage() {
   const [articleAnalytics, setArticleAnalytics] = useState<ArticleAnalytics[]>([]);
   const [analyticsSummary, setAnalyticsSummary] = useState<PeriodSummary | null>(null);
   const [feeBreakdown, setFeeBreakdown] = useState<FeeBreakdown[]>([]);
+  const [dailyFinance, setDailyFinance] = useState<DailyFinance[]>([]);
   const [operationCount, setOperationCount] = useState(0);
 
   const [stocks, setStocks] = useState<OzonStock[]>([]);
@@ -327,6 +440,7 @@ export default function OzonPage() {
       setArticleAnalytics((analyticsResult.data?.articles as ArticleAnalytics[]) || []);
       setAnalyticsSummary((analyticsResult.data?.summary as PeriodSummary) || null);
       setFeeBreakdown((analyticsResult.data?.feeBreakdown as FeeBreakdown[]) || []);
+      setDailyFinance((analyticsResult.data?.dailyFinance as DailyFinance[]) || []);
       setOperationCount(Number(analyticsResult.data?.operationCount || 0));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить данные Ozon");
@@ -1226,58 +1340,130 @@ export default function OzonPage() {
   }
 
   function Analytics() {
+    const topProfit = articleAnalytics.slice(0, 10);
+    const topSalesReturns = [...articleAnalytics]
+      .sort((a, b) => (b.soldQty + b.returnQty) - (a.soldQty + a.returnQty))
+      .slice(0, 10);
+    const feeRows = feeBreakdown.filter((row) => row.amount !== 0);
+    const maxFee = Math.max(...feeRows.map((row) => Math.abs(row.amount)), 1);
+    const maxProfit = Math.max(...topProfit.map((row) => Math.abs(row.profit)), 1);
+    const maxVolume = Math.max(...topSalesReturns.map((row) => Math.max(row.soldQty, row.returnQty)), 1);
+
+    const kpis = [
+      { title: "Продажи", value: summary.gross, values: dailyFinance.map((row) => row.gross), color: dashboardSeriesColors.gross },
+      { title: "Расходы Ozon", value: summary.ozon, values: dailyFinance.map((row) => row.ozon), color: dashboardSeriesColors.ozon },
+      { title: "Себестоимость", value: summary.cost, values: dailyFinance.map((row) => row.cost), color: "#94a3b8" },
+      { title: "Прибыль", value: summary.profit, values: dailyFinance.map((row) => row.profit), color: dashboardSeriesColors.profit },
+    ];
+
     return (
       <>
         <PeriodControls />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
-          <SummaryCard title="Продажи" value={money(summary.gross)} />
-          <SummaryCard title="Ozon" value={money(summary.ozon)} />
-          <SummaryCard title="Себестоимость" value={money(summary.cost)} />
-          <SummaryCard title="Прибыль" value={money(summary.profit)} color={summary.profit >= 0 ? "#15803d" : "#b91c1c"} />
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 }}>
+          {kpis.map((kpi) => (
+            <div key={kpi.title} style={{
+              background: "linear-gradient(135deg,#10233f,#061425)",
+              color: "#fff",
+              borderRadius: 14,
+              padding: "15px 16px 11px",
+              minHeight: 112,
+              boxShadow: "0 8px 24px rgba(15,23,42,.12)",
+              border: "1px solid rgba(148,163,184,.16)",
+            }}>
+              <div style={{ color: "#cbd5e1", fontSize: 13 }}>{kpi.title}</div>
+              <div style={{ fontSize: 27, fontWeight: 900, marginTop: 4, color: kpi.title === "Прибыль" ? "#34d399" : "#fff" }}>
+                {money(kpi.value)}
+              </div>
+              <div style={{ marginTop: 5, opacity: .95 }}><Sparkline values={kpi.values} color={kpi.color} /></div>
+            </div>
+          ))}
         </div>
-        <section style={{ ...panelStyle, overflow: "hidden" }}>
-          <div style={{ padding: 18 }}>
-            <div style={{ fontWeight: 850, fontSize: 18 }}>Расходы Ozon по видам услуг</div>
-            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-              Кросс-докинг, приёмка FBO, логистика, возвраты, упаковка и другие начисления за выбранный период.
+
+        <section style={{ ...panelStyle, padding: 16, boxShadow: "0 8px 28px rgba(15,23,42,.05)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 6 }}>
+            <div>
+              <div style={{ fontWeight: 900, fontSize: 18 }}>Финансовый результат по дням</div>
+              <div style={{ color: "#64748b", fontSize: 12, marginTop: 3 }}>Продажи, расходы Ozon, себестоимость и прибыль за выбранный период.</div>
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
+              {[
+                ["Продажи", dashboardSeriesColors.gross],
+                ["Расходы Ozon", dashboardSeriesColors.ozon],
+                ["Себестоимость", dashboardSeriesColors.cost],
+                ["Прибыль", dashboardSeriesColors.profit],
+              ].map(([label, color]) => (
+                <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "#475569" }}>
+                  <span style={{ width: 8, height: 8, borderRadius: "50%", background: color }} />{label}
+                </span>
+              ))}
             </div>
           </div>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
-              <thead>
-                <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
-                  {["Услуга", "Type ID", "Начислений", "Сумма"].map((title) => (
-                    <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {feeBreakdown.map((row) => (
-                  <tr key={row.typeId} style={{ borderTop: "1px solid #eef2f7" }}>
-                    <td style={{ padding: 12, fontWeight: row.typeId === 12 || row.typeId === 77 ? 850 : 600 }}>
-                      {row.label}
-                    </td>
-                    <td style={{ padding: 12 }}>{row.typeId}</td>
-                    <td style={{ padding: 12 }}>{row.count}</td>
-                    <td style={{ padding: 12, fontWeight: 800, color: row.amount < 0 ? "#b91c1c" : "#15803d" }}>
-                      {money(row.amount)}
-                    </td>
-                  </tr>
-                ))}
-                {!loading && feeBreakdown.length === 0 && (
-                  <tr><td colSpan={4}><EmptyState title="Нет расходов" text="За выбранный период начисления Ozon не найдены." /></td></tr>
-                )}
-                {loading && (
-                  <tr><td colSpan={4}><EmptyState title="Считаю расходы" text="Разбираю финансовые начисления Ozon…" /></td></tr>
-                )}
-              </tbody>
-            </table>
+          <FinanceLineChart rows={dailyFinance} />
+        </section>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12 }}>
+          <section style={{ ...panelStyle, padding: 16, overflow: "hidden" }}>
+            <div style={{ fontWeight: 900, fontSize: 17 }}>Расходы Ozon по видам услуг</div>
+            <div style={{ color: "#64748b", fontSize: 12, marginTop: 3, marginBottom: 14 }}>Чем длиннее полоса — тем дороже статья.</div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {feeRows.slice(0, 9).map((row) => (
+                <div key={row.typeId} style={{ display: "grid", gridTemplateColumns: "minmax(110px,1fr) minmax(100px,1.4fr) auto", gap: 9, alignItems: "center", fontSize: 12 }}>
+                  <span style={{ color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+                  <div style={{ height: 10, background: "#eef2f7", borderRadius: 999, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.max(2, (Math.abs(row.amount) / maxFee) * 100)}%`, height: "100%", background: row.typeId === 12 || row.typeId === 77 ? "#f59e0b" : "#3b82f6", borderRadius: 999 }} />
+                  </div>
+                  <b style={{ color: row.amount < 0 ? "#dc2626" : "#15803d", whiteSpace: "nowrap" }}>{money(row.amount)}</b>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section style={{ ...panelStyle, padding: 16 }}>
+            <div style={{ fontWeight: 900, fontSize: 17, marginBottom: 16 }}>Структура расходов Ozon</div>
+            <DonutExpenseChart rows={feeRows} />
+          </section>
+
+          <section style={{ ...panelStyle, padding: 16 }}>
+            <div style={{ fontWeight: 900, fontSize: 17 }}>Топ-10 артикулов по прибыли</div>
+            <div style={{ color: "#64748b", fontSize: 12, marginTop: 3, marginBottom: 14 }}>Самые прибыльные позиции выбранного периода.</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {topProfit.map((row) => (
+                <div key={row.article} style={{ display: "grid", gridTemplateColumns: "110px 1fr auto", gap: 8, alignItems: "center", fontSize: 12 }}>
+                  <b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.article}</b>
+                  <div style={{ height: 10, background: "#ecfdf5", borderRadius: 999, overflow: "hidden" }}>
+                    <div style={{ width: `${Math.max(2, (Math.abs(row.profit) / maxProfit) * 100)}%`, height: "100%", background: "#34d399", borderRadius: 999 }} />
+                  </div>
+                  <b style={{ color: row.profit >= 0 ? "#15803d" : "#b91c1c", whiteSpace: "nowrap" }}>{money(row.profit)}</b>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <section style={{ ...panelStyle, padding: 16 }}>
+          <div style={{ fontWeight: 900, fontSize: 17 }}>Продажи и возвраты по артикулам</div>
+          <div style={{ color: "#64748b", fontSize: 12, marginTop: 3, marginBottom: 14 }}>Топ-10 по общему количеству продаж и возвратов.</div>
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${Math.max(topSalesReturns.length, 1)}, minmax(76px,1fr))`, gap: 10, alignItems: "end", minHeight: 220, overflowX: "auto" }}>
+            {topSalesReturns.map((row) => (
+              <div key={row.article} style={{ minWidth: 74, display: "grid", gap: 8, justifyItems: "center" }}>
+                <div style={{ height: 160, width: 54, display: "flex", gap: 6, alignItems: "end" }}>
+                  <div title={`Продажи: ${row.soldQty}`} style={{ width: 24, height: `${Math.max(4, (row.soldQty / maxVolume) * 150)}px`, background: "#3b82f6", borderRadius: "5px 5px 0 0" }} />
+                  <div title={`Возвраты: ${row.returnQty}`} style={{ width: 24, height: `${Math.max(2, (row.returnQty / maxVolume) * 150)}px`, background: "#ef4444", borderRadius: "5px 5px 0 0" }} />
+                </div>
+                <div style={{ fontSize: 11, fontWeight: 800, color: "#475569", maxWidth: 90, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.article}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", justifyContent: "center", gap: 18, marginTop: 8, fontSize: 12, color: "#64748b" }}>
+            <span><b style={{ color: "#3b82f6" }}>■</b> Продажи</span>
+            <span><b style={{ color: "#ef4444" }}>■</b> Возвраты</span>
           </div>
         </section>
 
         <section style={{ ...panelStyle, overflow: "hidden" }}>
           <div style={{ padding: 18, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <div><div style={{ fontWeight: 850, fontSize: 18 }}>Аналитика по артикулам</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div></div>
+            <div><div style={{ fontWeight: 900, fontSize: 18 }}>Аналитика по артикулам</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div></div>
             <div style={{ color: "#64748b", fontSize: 13 }}>Сортировка: по прибыли</div>
           </div>
           <div style={{ overflowX: "auto" }}>
@@ -1294,18 +1480,20 @@ export default function OzonPage() {
           </div>
         </section>
 
-        <section style={{ ...panelStyle, overflow: "hidden" }}>
-          <div style={{ padding: 18 }}><div style={{ fontWeight: 850, fontSize: 18 }}>Операции</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Показаны последние {Math.min(operationCount, 1000)} из {operationCount} операций.</div></div>
-          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
-            <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Дата", "Операция", "Отправление", "Продажа", "Ozon", "Начислено", "Себестоимость", "Прибыль", "Связь"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
-            <tbody>{operations.map((row) => <tr key={row.id} style={{ borderTop: "1px solid #eef2f7" }}><td style={{ padding: 12 }}>{new Date(row.operation_date).toLocaleDateString("ru-RU")}</td><td style={{ padding: 12 }}>{row.operation_type_name || "Операция Ozon"}</td><td style={{ padding: 12 }}>{row.posting_number || "—"}</td><td style={{ padding: 12 }}>{money(row.accruals_for_sale)}</td><td style={{ padding: 12 }}>{money(Number(row.sale_commission) + Number(row.services_total))}</td><td style={{ padding: 12 }}>{money(row.amount)}</td><td style={{ padding: 12 }}>{money(row.cost_of_goods)}</td><td style={{ padding: 12, color: Number(row.profit) >= 0 ? "#15803d" : "#b91c1c", fontWeight: 800 }}>{money(row.profit)}</td><td style={{ padding: 12 }}>{row.matched ? "✓" : "Проверить"}</td></tr>)}</tbody>
-          </table></div>
-        </section>
-
-        <section style={{ ...panelStyle, padding: 18 }}>
-          <div style={{ fontWeight: 850, fontSize: 18, marginBottom: 12 }}>Последние синхронизации</div>
-          {runs.length === 0 ? <div style={{ color: "#64748b" }}>Синхронизаций ещё не было.</div> : runs.map((run) => <div key={run.id} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, padding: "10px 0", borderTop: "1px solid #eef2f7" }}><span>{new Date(run.started_at).toLocaleString("ru-RU")}</span><span>{run.status === "completed" ? "Готово" : run.status === "failed" ? "Ошибка" : "Выполняется"} · {run.operations_loaded || 0} операций</span>{run.error_message && <span style={{ color: "#b91c1c", width: "100%" }}>{run.error_message}</span>}</div>)}
-        </section>
+        <details style={{ ...panelStyle, overflow: "hidden" }}>
+          <summary style={{ padding: 18, cursor: "pointer", fontWeight: 900 }}>Операции и последние синхронизации</summary>
+          <div style={{ borderTop: "1px solid #e2e8f0" }}>
+            <div style={{ padding: 18 }}><div style={{ fontWeight: 850, fontSize: 18 }}>Операции</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Показаны последние {Math.min(operationCount, 1000)} из {operationCount} операций.</div></div>
+            <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+              <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Дата", "Операция", "Отправление", "Продажа", "Ozon", "Начислено", "Себестоимость", "Прибыль", "Связь"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
+              <tbody>{operations.map((row) => <tr key={row.id} style={{ borderTop: "1px solid #eef2f7" }}><td style={{ padding: 12 }}>{new Date(row.operation_date).toLocaleDateString("ru-RU")}</td><td style={{ padding: 12 }}>{row.operation_type_name || "Операция Ozon"}</td><td style={{ padding: 12 }}>{row.posting_number || "—"}</td><td style={{ padding: 12 }}>{money(row.accruals_for_sale)}</td><td style={{ padding: 12 }}>{money(Number(row.sale_commission) + Number(row.services_total))}</td><td style={{ padding: 12 }}>{money(row.amount)}</td><td style={{ padding: 12 }}>{money(row.cost_of_goods)}</td><td style={{ padding: 12, color: Number(row.profit) >= 0 ? "#15803d" : "#b91c1c", fontWeight: 800 }}>{money(row.profit)}</td><td style={{ padding: 12 }}>{row.matched ? "✓" : "Проверить"}</td></tr>)}</tbody>
+            </table></div>
+            <div style={{ padding: 18, borderTop: "1px solid #e2e8f0" }}>
+              <div style={{ fontWeight: 850, fontSize: 18, marginBottom: 12 }}>Последние синхронизации</div>
+              {runs.length === 0 ? <div style={{ color: "#64748b" }}>Синхронизаций ещё не было.</div> : runs.map((run) => <div key={run.id} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, padding: "10px 0", borderTop: "1px solid #eef2f7" }}><span>{new Date(run.started_at).toLocaleString("ru-RU")}</span><span>{run.status === "completed" ? "Готово" : run.status === "failed" ? "Ошибка" : "Выполняется"} · {run.operations_loaded || 0} операций</span>{run.error_message && <span style={{ color: "#b91c1c", width: "100%" }}>{run.error_message}</span>}</div>)}
+            </div>
+          </div>
+        </details>
       </>
     );
   }
