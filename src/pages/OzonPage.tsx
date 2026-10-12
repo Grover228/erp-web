@@ -339,8 +339,12 @@ export default function OzonPage() {
   const [fboLabelOperationId, setFboLabelOperationId] = useState("");
   const [fboLabelUrl, setFboLabelUrl] = useState("");
   const [fboCards, setFboCards] = useState<SavedFboDraft[]>([]);
-  const [fboView, setFboView] = useState<"board" | "wizard">("board");
+  const [fboView, setFboView] = useState<"board" | "picker" | "wizard">("board");
   const [fboStatusSyncing, setFboStatusSyncing] = useState(false);
+  const [fboSelectedArticle, setFboSelectedArticle] = useState("");
+  const [fboSelectedName, setFboSelectedName] = useState("");
+  const [fboQuantity, setFboQuantity] = useState(1);
+  const [fboProductSearch, setFboProductSearch] = useState("");
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -588,6 +592,12 @@ export default function OzonPage() {
     const workflow = row.workflow_data && typeof row.workflow_data === "object" ? row.workflow_data : {};
     setFboDraftId(Number(row.draft_id));
     setFboResolvedSku(Number(row.sku || 0) || null);
+    setFboSelectedArticle(String(row.offer_id || ""));
+    setFboSelectedName(
+      stocks.find((stock) => stock.article.toLowerCase() === String(row.offer_id || "").toLowerCase())?.name
+      || String(row.offer_id || "")
+    );
+    setFboQuantity(Math.max(1, Number(row.quantity || 1)));
     setFboClusterId(String(row.macrolocal_cluster_id || ""));
     setFboSellerWarehouseId(row.seller_warehouse_id ? String(row.seller_warehouse_id) : "");
     setFboOrderId(row.order_id ? Number(row.order_id) : null);
@@ -650,6 +660,10 @@ export default function OzonPage() {
     setFboCargoes([]);
     setFboLabelOperationId("");
     setFboLabelUrl("");
+    setFboSelectedArticle("");
+    setFboSelectedName("");
+    setFboQuantity(1);
+    setFboProductSearch("");
     setFboTimeslots([]);
     setFboTimeslotIndex("");
     setFboDropoffWarehouseId(String(DEFAULT_FBO_DROPOFF.warehouse_id));
@@ -657,7 +671,7 @@ export default function OzonPage() {
     setFboError("");
     setFboMessage("");
     setFboStep(1);
-    setFboView("wizard");
+    setFboView("picker");
   }
 
   async function updateFboWorkflow(step?: number, workflowData?: Record<string, any>) {
@@ -931,8 +945,8 @@ export default function OzonPage() {
         body: {
           action: "create_crossdock_draft",
           macrolocalClusterId: clusterId,
-          quantity: 42,
-          offerId: "bini-black-56",
+          quantity: fboQuantity,
+          offerId: fboSelectedArticle,
           sellerWarehouseId,
           dropOffWarehouseId: Number(dropoff.warehouse_id),
           dropOffWarehouseName: String(dropoff.name || ""),
@@ -959,7 +973,7 @@ export default function OzonPage() {
       setFboDraftInfo({ status: "CREATED" });
       setFboDiagnostics([]);
       setFboMessage(
-        `Черновик CROSSDOCK №${draftId} создан: bini-black-56, 42 шт. Подождите несколько секунд и обновите статус.`,
+        `Черновик CROSSDOCK №${draftId} создан: ${fboSelectedArticle}, ${fboQuantity} шт. Подождите несколько секунд и обновите статус.`,
       );
       setFboStep(3);
     } catch (cause) {
@@ -1088,7 +1102,7 @@ export default function OzonPage() {
       if (fboManualStorage && !storageWarehouseId) throw new Error("Выберите склад Ozon.");
 
       const confirmed = window.confirm(
-        `Создать реальную CROSSDOCK-заявку Ozon по черновику №${fboDraftId}?\n\nТовар: bini-black-56\nКоличество: 42 шт.\nПосле подтверждения заявка будет создана в Ozon.`,
+        `Создать реальную CROSSDOCK-заявку Ozon по черновику №${fboDraftId}?\n\nТовар: ${fboSelectedArticle}\nКоличество: ${fboQuantity} шт.\nПосле подтверждения заявка будет создана в Ozon.`,
       );
       if (!confirmed) return;
 
@@ -1181,9 +1195,9 @@ export default function OzonPage() {
       setFboOrderId(internalOrderId);
       setFboSupplyId(supplyId);
       setFboSupplyItem(item);
-      setFboBoxes([42]);
-      advanceFboStep(6, { boxes: [42] });
-      setFboMessage(`Заявка №${visibleOrderNumber} загружена. Теперь распределите 42 шт. по коробкам.`);
+      setFboBoxes([fboQuantity]);
+      advanceFboStep(6, { boxes: [fboQuantity] });
+      setFboMessage(`Заявка №${visibleOrderNumber} загружена. Теперь распределите ${fboQuantity} шт. по коробкам.`);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось загрузить данные созданной поставки");
     } finally {
@@ -1233,7 +1247,7 @@ export default function OzonPage() {
       setFboCargoResult(null);
 
       const total = fboBoxes.reduce((sum, quantity) => sum + Number(quantity || 0), 0);
-      if (total !== 42) throw new Error(`По коробкам распределено ${total} шт., а в поставке должно быть ровно 42 шт.`);
+      if (total !== fboQuantity) throw new Error(`По коробкам распределено ${total} шт., а в поставке должно быть ровно ${fboQuantity} шт.`);
       if (fboBoxes.some((quantity) => Number(quantity || 0) <= 0)) {
         throw new Error("В каждой коробке должно быть больше 0 штук.");
       }
@@ -1264,7 +1278,7 @@ export default function OzonPage() {
       setFboMessage(
         operationId
           ? `Коробки отправлены в Ozon. Операция ${operationId} формируется.`
-          : `Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, 42 шт.`,
+          : `Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, ${fboQuantity} шт.`,
       );
       advanceFboStep(7, { boxes: fboBoxes, cargoOperationId: operationId });
     } catch (cause) {
@@ -1878,6 +1892,113 @@ export default function OzonPage() {
       );
     }
 
+    if (fboView === "picker") {
+      const normalizedSearch = fboProductSearch.trim().toLowerCase();
+      const selectableProducts = stocks
+        .filter((row) => row.fboSku)
+        .filter((row) =>
+          !normalizedSearch ||
+          row.article.toLowerCase().includes(normalizedSearch) ||
+          row.name.toLowerCase().includes(normalizedSearch)
+        )
+        .slice(0, 80);
+
+      const selectedStock = stocks.find(
+        (row) => row.article.toLowerCase() === fboSelectedArticle.toLowerCase()
+      );
+
+      return (
+        <section style={{ ...panelStyle, padding: 18, maxWidth: 1100, width: "100%", margin: "0 auto", display: "grid", gap: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <button type="button" onClick={() => setFboView("board")} style={{ border: 0, background: "transparent", color: "#005bff", fontWeight: 900, padding: "0 0 8px", cursor: "pointer" }}>← К поставкам</button>
+              <div style={{ fontWeight: 900, fontSize: 22 }}>🛍️ Выберите товар для поставки</div>
+              <div style={{ color: "#64748b", marginTop: 5 }}>Показываем товары Ozon, для которых найден FBO SKU.</div>
+            </div>
+            <button type="button" onClick={() => void loadStocks()} disabled={stocksLoading} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800 }}>
+              {stocksLoading ? "Обновляю…" : "🔄 Обновить товары"}
+            </button>
+          </div>
+
+          <input
+            value={fboProductSearch}
+            onChange={(event) => setFboProductSearch(event.target.value)}
+            placeholder="Поиск по артикулу или названию…"
+            style={{ ...inputStyle, width: "100%", fontSize: 15 }}
+          />
+
+          {fboSelectedArticle && (
+            <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 14, padding: 14, display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ color: "#64748b", fontSize: 12 }}>Выбранный товар</div>
+                  <div style={{ fontWeight: 900, fontSize: 18, marginTop: 3 }}>{fboSelectedArticle}</div>
+                  <div style={{ color: "#475569", marginTop: 3 }}>{fboSelectedName || fboSelectedArticle}</div>
+                  {selectedStock && <div style={{ color: "#64748b", fontSize: 12, marginTop: 4 }}>FBO SKU: {selectedStock.fboSku} · сейчас на Ozon: {selectedStock.fboPresent} шт.</div>}
+                </div>
+                <label style={{ display: "grid", gap: 6, minWidth: 150 }}>
+                  <span style={{ color: "#64748b", fontSize: 12 }}>Количество в поставке</span>
+                  <input
+                    type="number"
+                    min={1}
+                    value={fboQuantity}
+                    onChange={(event) => setFboQuantity(Math.max(1, Number(event.target.value || 1)))}
+                    style={{ ...inputStyle, fontSize: 16, fontWeight: 900 }}
+                  />
+                </label>
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  onClick={() => { setFboBoxes([fboQuantity]); setFboStep(1); setFboView("wizard"); }}
+                  style={{ border: 0, background: "#005bff", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900, cursor: "pointer" }}
+                >
+                  Продолжить с этим товаром →
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 10 }}>
+            {selectableProducts.map((row) => {
+              const active = row.article === fboSelectedArticle;
+              return (
+                <button
+                  key={row.productId || row.article}
+                  type="button"
+                  onClick={() => {
+                    setFboSelectedArticle(row.article);
+                    setFboSelectedName(row.name);
+                  }}
+                  style={{
+                    textAlign: "left",
+                    border: active ? "2px solid #005bff" : "1px solid #e2e8f0",
+                    background: active ? "#eff6ff" : "#fff",
+                    borderRadius: 14,
+                    padding: 14,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div style={{ fontWeight: 900, color: "#0f172a" }}>{row.article}</div>
+                  <div style={{ color: "#475569", marginTop: 4, minHeight: 36 }}>{row.name}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 8, marginTop: 10, color: "#64748b", fontSize: 12 }}>
+                    <span>FBO SKU {row.fboSku}</span>
+                    <span>На Ozon: <b>{row.fboPresent}</b></span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {!stocksLoading && selectableProducts.length === 0 && (
+            <div style={{ padding: 28, textAlign: "center", color: "#64748b" }}>
+              Товары с FBO SKU не найдены. Попробуйте обновить список или изменить поиск.
+            </div>
+          )}
+        </section>
+      );
+    }
+
     return (
       <section style={{ ...panelStyle, padding: 18, maxWidth: 980, width: "100%", margin: "0 auto" }}>
         <button type="button" onClick={() => { setFboView("board"); void loadFboCards(); }} style={{ border: 0, background: "transparent", color: "#005bff", fontWeight: 900, padding: "0 0 12px", cursor: "pointer" }}>← К поставкам</button>
@@ -1885,7 +2006,7 @@ export default function OzonPage() {
           <div>
             <div style={{ fontWeight: 900, fontSize: 20 }}>Новая поставка FBO · CROSSDOCK</div>
             <div style={{ color: "#64748b", fontSize: 13, marginTop: 5 }}>
-              <b>bini-black-56</b> · 42 шт. · конкретный склад внутри кластера определяет Ozon
+              <b>{fboSelectedArticle || "Товар не выбран"}</b> · {fboQuantity} шт. · конкретный склад внутри кластера определяет Ozon
             </div>
           </div>
           <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
@@ -2062,8 +2183,8 @@ export default function OzonPage() {
               </div>
 
               <div style={{ display: "grid", gap: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 14, padding: 16 }}>
-                <div><span style={{ color: "#64748b" }}>Товар:</span> <b>bini-black-56</b></div>
-                <div><span style={{ color: "#64748b" }}>Количество:</span> <b>42 шт.</b></div>
+                <div><span style={{ color: "#64748b" }}>Товар:</span> <b>{fboSelectedArticle}</b></div>
+                <div><span style={{ color: "#64748b" }}>Количество:</span> <b>{fboQuantity} шт.</b></div>
                 <div><span style={{ color: "#64748b" }}>Кластер:</span> <b>{selectedCluster?.name || "—"}</b></div>
                 <div><span style={{ color: "#64748b" }}>Точка сдачи:</span> <b>{selectedDropoff?.name || DEFAULT_FBO_DROPOFF.name}</b></div>
                 <div><span style={{ color: "#64748b" }}>Склад размещения:</span> <b>определяет Ozon</b></div>
@@ -2090,7 +2211,7 @@ export default function OzonPage() {
               <div>
                 <div style={{ fontWeight: 900, fontSize: 22 }}>Разложите товар по коробкам</div>
                 <div style={{ color: "#64748b", marginTop: 5 }}>
-                  Заявка <b>№2000070131119</b>. Один SKU в одной коробке. Всего: <b>42 шт.</b>
+                  Заявка <b>№{fboSupplyId || fboOrderId || fboDraftId || "—"}</b>. Один SKU в одной коробке. Всего: <b>{fboQuantity} шт.</b>
                 </div>
               </div>
 
@@ -2119,7 +2240,7 @@ export default function OzonPage() {
                         <input
                           type="number"
                           min={1}
-                          max={42}
+                          max={fboQuantity}
                           value={quantity}
                           onChange={(event) => {
                             const next = [...fboBoxes];
@@ -2150,7 +2271,7 @@ export default function OzonPage() {
                       + Добавить коробку
                     </button>
                     <div style={{ fontWeight: 900, fontSize: 18 }}>
-                      Итого: {fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0)} / 42 шт.
+                      Итого: {fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0)} / {fboQuantity} шт.
                     </div>
                   </div>
 
@@ -2162,9 +2283,9 @@ export default function OzonPage() {
                       disabled={
                         fboLoading ||
                         fboBoxes.some((value) => Number(value || 0) <= 0) ||
-                        fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== 42
+                        fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== fboQuantity
                       }
-                      style={{ border: 0, background: fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === 42 ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}
+                      style={{ border: 0, background: fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === fboQuantity ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}
                     >
                       Передать коробки в Ozon →
                     </button>
@@ -2253,8 +2374,8 @@ export default function OzonPage() {
               </div>
 
               <div style={{ display: "grid", gap: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 14, padding: 16 }}>
-                <div><b>Заявка:</b> №2000070131119</div>
-                <div><b>Товар:</b> bini-black-56 · 42 шт.</div>
+                <div><b>Заявка:</b> №{fboSupplyId || fboOrderId || fboDraftId || "—"}</div>
+                <div><b>Товар:</b> {fboSelectedArticle} · {fboQuantity} шт.</div>
                 <div><b>Коробок:</b> {fboBoxes.length}</div>
                 <div><b>Точка сдачи:</b> {selectedDropoff?.name || DEFAULT_FBO_DROPOFF.name}</div>
               </div>
