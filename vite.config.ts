@@ -11,6 +11,8 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
+        navigateFallback: null,
+        globPatterns: ["**/*.{js,css,png,svg,ico,woff2}"],
       },
       includeAssets: ["pwa-192x192.png", "pwa-512x512.png"],
       manifest: {
