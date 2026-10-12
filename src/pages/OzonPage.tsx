@@ -1247,13 +1247,26 @@ export default function OzonPage() {
             {draftStatus === "SUCCESS" && availableWarehouses.length > 0 && (
               <div style={{ marginTop: 16, borderTop: "1px solid #e2e8f0", paddingTop: 16, display: "grid", gap: 12 }}>
                 <div>
-                  <div style={{ fontWeight: 900, fontSize: 17 }}>2. Выберите склад размещения и время сдачи</div>
+                  <div style={{ fontWeight: 900, fontSize: 17 }}>2. Выберите время сдачи</div>
                   <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                    Склад размещения выбирается из расчёта Ozon, а таймслот относится к выбранной точке отгрузки CROSSDOCK.
+                    Конкретный склад внутри выбранного кластера по умолчанию определяет Ozon. Таймслот относится к выбранной точке отгрузки CROSSDOCK.
                   </div>
                 </div>
 
-                <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 12, padding: 12 }}>
+                  <div style={{ fontWeight: 900 }}>Распределение по складам: автоматически Ozon</div>
+                  <div style={{ fontSize: 12, marginTop: 4 }}>Вы выбираете кластер, а конкретный склад размещения Ozon назначает сам.</div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setFboManualStorage((value) => !value)}
+                  style={{ justifySelf: "start", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", borderRadius: 10, padding: "8px 11px", fontWeight: 800, cursor: "pointer" }}
+                >
+                  {fboManualStorage ? "Использовать автоматическое распределение" : "Выбрать склад вручную"}
+                </button>
+
+                {fboManualStorage && <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
                   Доступный склад
                   <select
                     value={fboWarehouseId}
@@ -1274,7 +1287,7 @@ export default function OzonPage() {
                       </option>
                     ))}
                   </select>
-                </label>
+                </label>}
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
                   <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
@@ -1302,8 +1315,8 @@ export default function OzonPage() {
                   <button
                     type="button"
                     onClick={() => void loadFboTimeslots()}
-                    disabled={fboLoading || !fboWarehouseId}
-                    style={{ border: 0, background: fboLoading || !fboWarehouseId ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850, cursor: fboLoading ? "wait" : "pointer" }}
+                    disabled={fboLoading || (fboManualStorage && !fboWarehouseId)}
+                    style={{ border: 0, background: fboLoading || (fboManualStorage && !fboWarehouseId) ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850, cursor: fboLoading ? "wait" : "pointer" }}
                   >
                     Получить свободные таймслоты
                   </button>
