@@ -142,6 +142,8 @@ function getMovementLabel(type: string) {
   if (type === "production_write_off") return "Списание в производство";
   if (type === "manual_receipt") return "Оприходование";
   if (type === "manual_write_off") return "Списание";
+  if (type === "warehouse_transfer_out") return "Перемещение: расход";
+  if (type === "warehouse_transfer_in") return "Перемещение: приход";
   if (type === "reservation") return "Резерв";
   if (type === "release") return "Снятие резерва";
   return type || "—";
@@ -153,6 +155,7 @@ function getDocumentLabel(type: string) {
   if (type === "customer_shipment") return "Отгрузка покупателю";
   if (type === "customer_order") return "Заказ покупателя";
   if (type === "stock_adjustment") return "Корректировка склада";
+  if (type === "warehouse_transfer") return "Перемещение между складами";
   return type || "—";
 }
 
