@@ -1051,14 +1051,11 @@ export default function OzonPage() {
   }
 
   function FboSupply() {
-    const selected = fboClusters.find((row) => String(row.id) === fboClusterId);
+    const selectedCluster = fboClusters.find((row) => String(row.id) === fboClusterId);
+    const selectedDropoff = fboDropoffPoints.find(
+      (row: any) => String(row?.warehouse_id || "") === fboDropoffWarehouseId,
+    );
     const draftStatus = String(fboDraftInfo?.status || "");
-    const noPlacementWarehouses =
-      draftStatus === "FAILED" &&
-      Array.isArray(fboDraftInfo?.clusters) &&
-      fboDraftInfo.clusters.length === 0 &&
-      Array.isArray(fboDraftInfo?.errors) &&
-      fboDraftInfo.errors.length === 0;
     const draftClusters = Array.isArray(fboDraftInfo?.clusters) ? fboDraftInfo.clusters : [];
     const availableWarehouses = draftClusters.flatMap((cluster: any) =>
       Array.isArray(cluster?.warehouses)
@@ -1067,328 +1064,220 @@ export default function OzonPage() {
           )
         : []
     );
-    const autoStorageWarehouse =
-      availableWarehouses.length === 1 &&
-      !availableWarehouses[0]?.storage_warehouse;
+    const selectedSlot =
+      fboTimeslotIndex !== "" && fboTimeslots[Number(fboTimeslotIndex)]
+        ? fboTimeslots[Number(fboTimeslotIndex)]
+        : null;
+
+    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение"];
 
     return (
-      <>
-        <section style={{ ...panelStyle, padding: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-            <div>
-              <div style={{ fontWeight: 900, fontSize: 20 }}>Тестовая поставка FBO · CROSSDOCK</div>
-              <div style={{ color: "#64748b", fontSize: 13, marginTop: 5 }}>
-                Товар: <b>bini-black-56</b> · FBO SKU <b>{fboResolvedSku || "определится при создании"}</b> · количество <b>42 шт.</b>
-              </div>
+      <section style={{ ...panelStyle, padding: 18, maxWidth: 980, width: "100%", margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 20 }}>Новая поставка FBO · CROSSDOCK</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 5 }}>
+              <b>bini-black-56</b> · 42 шт. · конкретный склад внутри кластера определяет Ozon
             </div>
-            <span style={{ border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
-              Сначала только черновик
-            </span>
           </div>
+          <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
+            Шаг {fboStep} из 5
+          </span>
+        </div>
 
-          {fboError && <div style={{ marginTop: 14, color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{fboError}</div>}
-          {fboMessage && <div style={{ marginTop: 14, color: "#166534", background: "#f0fdf4", padding: 12, borderRadius: 10 }}>{fboMessage}</div>}
-
-          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "minmax(260px,1fr) auto", gap: 12, alignItems: "end" }}>
-            <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-              Кластер размещения Ozon
-              <select value={fboClusterId} onChange={(event) => setFboClusterId(event.target.value)} style={inputStyle} disabled={fboLoading}>
-                {fboClusters.map((cluster) => (
-                  <option key={cluster.id} value={cluster.id}>
-                    {cluster.name}{cluster.country ? ` · ${cluster.country}` : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              onClick={() => void loadFboClusters()}
-              disabled={fboLoading}
-              style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800, cursor: "pointer" }}
-            >
-              Обновить кластеры
-            </button>
-          </div>
-
-          {selected && selected.fulfillments.length > 0 && (
-            <div style={{ marginTop: 10, color: "#64748b", fontSize: 12 }}>
-              Склады размещения в кластере: {selected.fulfillments.slice(0, 8).map((row) => row.name).join(", ")}
-              {selected.fulfillments.length > 8 ? "…" : ""}
-            </div>
-          )}
-
-          <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
-            <div style={{ display: "grid", gap: 8 }}>
-              <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                Склад продавца Ozon
-                <select
-                value={fboSellerWarehouseId}
-                onChange={(event) => setFboSellerWarehouseId(event.target.value)}
-                style={inputStyle}
-                disabled={fboLoading}
-              >
-                <option value="">Выберите склад продавца</option>
-                {fboSellerWarehouses.map((warehouse: any) => (
-                  <option
-                    key={warehouse.seller_warehouse_id}
-                    value={String(warehouse.seller_warehouse_id)}
-                  >
-                    {warehouse?.seller_warehouse_name || warehouse?.address?.address || warehouse?.name || `Склад продавца ${warehouse.seller_warehouse_id}`}
-                  </option>
-                ))}
-                </select>
-              </label>
-              {fboSellerWarehouses.length === 0 && (
-                <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 10, padding: 10, fontSize: 12 }}>
-                  FBO seller warehouse у этого кабинета не зарегистрирован. Для схемы DROPOFF попробуем создать только черновик с seller_warehouse_id = 0. Это безопасный тест: реальная поставка не создаётся.
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(90px,1fr))", gap: 6, marginTop: 16, overflowX: "auto" }}>
+          {stepNames.map((name, index) => {
+            const step = index + 1;
+            const active = step === fboStep;
+            const done = step < fboStep;
+            return (
+              <div key={name} style={{ minWidth: 90, textAlign: "center" }}>
+                <div style={{
+                  height: 5,
+                  borderRadius: 999,
+                  background: active || done ? "#005bff" : "#e2e8f0",
+                  marginBottom: 7,
+                }} />
+                <div style={{ fontSize: 11, fontWeight: active ? 900 : 700, color: active ? "#005bff" : "#64748b" }}>
+                  {name}
                 </div>
-              )}
-              <div>
-                <button
-                  type="button"
-                  onClick={() => void loadFboSellerWarehouses()}
-                  disabled={fboLoading}
-                  style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "8px 11px", fontWeight: 800, cursor: "pointer" }}
-                >
-                  Обновить склады продавца
-                </button>
               </div>
-            </div>
+            );
+          })}
+        </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1fr) auto", gap: 10, alignItems: "end" }}>
-              <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                Найти точку отгрузки CROSSDOCK
-                <input
-                  value={fboDropoffSearch}
-                  onChange={(event) => setFboDropoffSearch(event.target.value)}
-                  placeholder="Например: Казань, Воронеж, название ПВЗ"
-                  style={inputStyle}
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => void searchFboDropoffPoints()}
-                disabled={fboLoading || fboDropoffSearch.trim().length < 4}
-                style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800, cursor: "pointer" }}
-              >
-                Найти точки
-              </button>
-            </div>
+        {fboError && <div style={{ marginTop: 14, color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{fboError}</div>}
+        {fboMessage && <div style={{ marginTop: 14, color: "#166534", background: "#f0fdf4", padding: 12, borderRadius: 10 }}>{fboMessage}</div>}
 
-            <div style={{ color: "#64748b", fontSize: 12 }}>
-              Ozon не отдаёт весь список точек сразу: введите минимум 4 символа города или названия точки и нажмите «Найти точки».
-            </div>
-
-            {fboDropoffPoints.length > 0 && (
-              <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                Точка отгрузки
-                <select
-                  value={fboDropoffWarehouseId}
-                  onChange={(event) => setFboDropoffWarehouseId(event.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="">Выберите точку</option>
-                  {fboDropoffPoints.map((point: any) => (
-                    <option key={point.warehouse_id} value={String(point.warehouse_id)}>
-                      {point.name}{point.address ? ` · ${point.address}` : ""}
-                    </option>
+        <div style={{ marginTop: 18, minHeight: 330 }}>
+          {fboStep === 1 && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Куда размещаем товар?</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>Выберите только кластер. Конкретный склад внутри него Ozon назначит сам.</div>
+              </div>
+              <label style={{ display: "grid", gap: 7 }}>
+                <span style={{ fontWeight: 800 }}>Кластер размещения</span>
+                <select value={fboClusterId} onChange={(event) => setFboClusterId(event.target.value)} style={inputStyle}>
+                  {fboClusters.map((cluster) => (
+                    <option key={cluster.id} value={cluster.id}>{cluster.name}{cluster.country ? ` · ${cluster.country}` : ""}</option>
                   ))}
                 </select>
               </label>
-            )}
-          </div>
-
-          <div style={{ marginTop: 16 }}>
-            <button
-              type="button"
-              onClick={() => void createTestFboDraft()}
-              disabled={fboLoading || !fboClusterId || !fboDropoffWarehouseId}
-              style={{ border: 0, background: fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 900, cursor: fboLoading ? "wait" : "pointer" }}
-            >
-              {fboLoading ? "Работаю…" : "Создать CROSSDOCK-черновик на 42 шт."}
-            </button>
-          </div>
-        </section>
-
-        {fboDraftId && (
-          <section style={{ ...panelStyle, padding: 18 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
-              <div>
-                <div style={{ fontWeight: 900, fontSize: 18 }}>Черновик Ozon №{fboDraftId}</div>
-                <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                  Статус расчёта: <b>{draftStatus || "ожидаем ответ"}</b>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => void refreshFboDraftInfo()}
-                disabled={fboLoading}
-                style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "9px 12px", fontWeight: 800, cursor: "pointer" }}
-              >
-                Обновить статус
-              </button>
-            </div>
-
-            {noPlacementWarehouses && (
-              <div style={{ marginTop: 14, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontWeight: 900, color: "#991b1b", marginBottom: 6 }}>Ozon не предложил склад размещения</div>
-                <div style={{ color: "#b91c1c", fontSize: 13 }}>
-                  Для этого товара и выбранного кластера Ozon вернул FAILED без ошибок и без доступных складов. Выберите другой FBO-кластер и создайте новый черновик.
-                </div>
-              </div>
-            )}
-
-            {fboDiagnostics.length > 0 && (
-              <div style={{ marginTop: 14, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontWeight: 900, color: "#991b1b", marginBottom: 6 }}>Причина ответа Ozon</div>
-                {fboDiagnostics.map((reason, index) => (
-                  <div key={index} style={{ color: "#b91c1c", fontSize: 13, marginTop: index ? 5 : 0 }}>
-                    {reason}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {draftClusters.length > 0 && (
-              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
-                {draftClusters.map((cluster: any, index: number) => (
-                  <div key={cluster.macrolocal_cluster_id || index} style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 14 }}>
-                    <div style={{ fontWeight: 850 }}>{cluster.cluster_name || `Кластер ${cluster.macrolocal_cluster_id}`}</div>
-                    <div style={{ color: "#64748b", fontSize: 13, marginTop: 6 }}>
-                      Доступных складов: {Array.isArray(cluster.warehouses) ? cluster.warehouses.length : 0}
-                    </div>
-                    {Array.isArray(cluster.warehouses) && cluster.warehouses.slice(0, 10).map((warehouse: any) => (
-                      <div key={warehouse.storage_warehouse?.warehouse_id || warehouse.bundle_id} style={{ marginTop: 7, paddingTop: 7, borderTop: "1px solid #f1f5f9", fontSize: 13 }}>
-                        <b>{warehouse.storage_warehouse?.name || warehouse.storage_warehouse?.warehouse_id || "Склад"}</b>
-                        {warehouse.storage_warehouse?.address ? <span style={{ color: "#64748b" }}> · {warehouse.storage_warehouse.address}</span> : null}
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {draftStatus === "SUCCESS" && availableWarehouses.length > 0 && (
-              <div style={{ marginTop: 16, borderTop: "1px solid #e2e8f0", paddingTop: 16, display: "grid", gap: 12 }}>
-                <div>
-                  <div style={{ fontWeight: 900, fontSize: 17 }}>2. Выберите время сдачи</div>
-                  <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                    Конкретный склад внутри выбранного кластера по умолчанию определяет Ozon. Таймслот относится к выбранной точке отгрузки CROSSDOCK.
-                  </div>
-                </div>
-
-                <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 12, padding: 12 }}>
-                  <div style={{ fontWeight: 900 }}>Распределение по складам: автоматически Ozon</div>
-                  <div style={{ fontSize: 12, marginTop: 4 }}>Вы выбираете кластер, а конкретный склад размещения Ozon назначает сам.</div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setFboManualStorage((value) => !value)}
-                  style={{ justifySelf: "start", border: "1px solid #cbd5e1", background: "#fff", color: "#475569", borderRadius: 10, padding: "8px 11px", fontWeight: 800, cursor: "pointer" }}
-                >
-                  {fboManualStorage ? "Использовать автоматическое распределение" : "Выбрать склад вручную"}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <button type="button" onClick={() => void loadFboClusters()} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800 }}>
+                  Обновить кластеры
                 </button>
+                <button type="button" onClick={() => setFboStep(2)} disabled={!fboClusterId} style={{ border: 0, background: fboClusterId ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}>
+                  Далее →
+                </button>
+              </div>
+            </div>
+          )}
 
-                {fboManualStorage && <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                  Доступный склад
-                  <select
-                    value={fboWarehouseId}
-                    onChange={(event) => {
-                      setFboWarehouseId(event.target.value);
-                      setFboTimeslots([]);
-                      setFboTimeslotIndex("");
-                    }}
-                    style={inputStyle}
-                  >
-                    <option value="">Выберите склад</option>
-                    {availableWarehouses.map((warehouse: any) => (
-                      <option
-                        key={warehouse.storage_warehouse?.warehouse_id || warehouse.bundle_id}
-                        value={String(warehouse.storage_warehouse?.warehouse_id || "")}
-                      >
-                        {warehouse.storage_warehouse?.name || warehouse.storage_warehouse?.warehouse_id}
-                      </option>
-                    ))}
-                  </select>
-                </label>}
+          {fboStep === 2 && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Точка сдачи CROSSDOCK</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>По умолчанию выбрана ваша точка в Саранске. При необходимости её можно заменить.</div>
+              </div>
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
-                  <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                    Таймслоты с даты
-                    <input
-                      type="date"
-                      value={fboTimeslotFrom}
-                      onChange={(event) => setFboTimeslotFrom(event.target.value)}
-                      style={inputStyle}
-                    />
-                  </label>
-                  <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                    По дату
-                    <input
-                      type="date"
-                      value={fboTimeslotTo}
-                      min={fboTimeslotFrom}
-                      onChange={(event) => setFboTimeslotTo(event.target.value)}
-                      style={inputStyle}
-                    />
-                  </label>
-                </div>
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 14, padding: 14 }}>
+                <div style={{ color: "#64748b", fontSize: 12 }}>Выбранная точка</div>
+                <div style={{ fontWeight: 900, marginTop: 4 }}>{selectedDropoff?.name || DEFAULT_FBO_DROPOFF.name}</div>
+                <div style={{ color: "#64748b", fontSize: 13, marginTop: 3 }}>{selectedDropoff?.address || DEFAULT_FBO_DROPOFF.address}</div>
+              </div>
 
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => void loadFboTimeslots()}
-                    disabled={fboLoading || (fboManualStorage && !fboWarehouseId)}
-                    style={{ border: 0, background: fboLoading || (fboManualStorage && !fboWarehouseId) ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850, cursor: fboLoading ? "wait" : "pointer" }}
-                  >
-                    Получить свободные таймслоты
-                  </button>
-                </div>
-
-                {fboTimeslots.length > 0 && (
-                  <>
-                    <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-                      Время поставки
-                      <select value={fboTimeslotIndex} onChange={(event) => setFboTimeslotIndex(event.target.value)} style={inputStyle}>
-                        <option value="">Выберите таймслот</option>
-                        {fboTimeslots.map((slot: any, index: number) => {
-                          const fromValue = slot?.from_in_timezone || slot?.from || slot?.start_at || slot?.date_from || "";
-                          const toValue = slot?.to_in_timezone || slot?.to || slot?.end_at || slot?.date_to || "";
-                          const fromText = fromValue ? new Date(fromValue).toLocaleString("ru-RU") : "Начало";
-                          const toText = toValue ? new Date(toValue).toLocaleString("ru-RU") : "конец";
-                          return <option key={index} value={String(index)}>{fromText} — {toText}</option>;
-                        })}
-                      </select>
-                    </label>
-
-                    <button
-                      type="button"
-                      onClick={() => void createRealFboSupply()}
-                      disabled={fboLoading || fboTimeslotIndex === ""}
-                      style={{ border: 0, background: fboLoading || fboTimeslotIndex === "" ? "#94a3b8" : "#16a34a", color: "#fff", borderRadius: 11, padding: "12px 17px", fontWeight: 900, cursor: fboLoading ? "wait" : "pointer" }}
-                    >
-                      Создать реальную поставку в Ozon
+              <details>
+                <summary style={{ cursor: "pointer", fontWeight: 800, color: "#475569" }}>Выбрать другую точку</summary>
+                <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) auto", gap: 10 }}>
+                    <input value={fboDropoffSearch} onChange={(event) => setFboDropoffSearch(event.target.value)} placeholder="Город или название точки" style={inputStyle} />
+                    <button type="button" onClick={() => void searchFboDropoffPoints()} disabled={fboDropoffSearch.trim().length < 4 || fboLoading} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800 }}>
+                      Найти
                     </button>
-                  </>
-                )}
-
-                {fboSupplyResult && (
-                  <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 12, padding: 12, fontSize: 13 }}>
-                    Ozon принял команду создания поставки. Ответ: <b>{JSON.stringify(fboSupplyResult)}</b>
                   </div>
-                )}
-              </div>
-            )}
+                  {fboDropoffPoints.length > 0 && (
+                    <select value={fboDropoffWarehouseId} onChange={(event) => setFboDropoffWarehouseId(event.target.value)} style={inputStyle}>
+                      {fboDropoffPoints.map((point: any) => (
+                        <option key={point.warehouse_id} value={String(point.warehouse_id)}>
+                          {point.name}{point.address ? ` · ${point.address}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </details>
 
-            {draftStatus !== "SUCCESS" && (
-              <div style={{ marginTop: 14, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: 12, fontSize: 13 }}>
-                Сначала нужно получить статус SUCCESS и доступный склад.
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <button type="button" onClick={() => setFboStep(1)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Назад</button>
+                <button type="button" onClick={() => void createTestFboDraft()} disabled={!fboDropoffWarehouseId || fboLoading} style={{ border: 0, background: !fboDropoffWarehouseId || fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}>
+                  {fboLoading ? "Создаю…" : "Создать черновик →"}
+                </button>
               </div>
-            )}
-          </section>
-        )}
-      </>
+            </div>
+          )}
+
+          {fboStep === 3 && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Проверка черновика</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>Ozon рассчитывает возможность поставки.</div>
+              </div>
+              <div style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 16 }}>
+                <div style={{ color: "#64748b", fontSize: 12 }}>Черновик</div>
+                <div style={{ fontWeight: 900, fontSize: 20, marginTop: 3 }}>№{fboDraftId || "—"}</div>
+                <div style={{ marginTop: 8 }}>Статус: <b>{draftStatus || "CREATED"}</b></div>
+              </div>
+              {fboDiagnostics.length > 0 && (
+                <div style={{ background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", borderRadius: 12, padding: 12 }}>
+                  {fboDiagnostics.join(" · ")}
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <button type="button" onClick={() => setFboStep(2)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Назад</button>
+                <button type="button" onClick={() => void refreshFboDraftInfo()} disabled={fboLoading} style={{ border: 0, background: "#005bff", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}>
+                  {fboLoading ? "Проверяю…" : draftStatus === "SUCCESS" ? "Продолжить →" : "Обновить статус"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {fboStep === 4 && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Выберите время сдачи</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>
+                  Кластер: <b>{selectedCluster?.name || "—"}</b> · точка: <b>{selectedDropoff?.name || DEFAULT_FBO_DROPOFF.name}</b>
+                </div>
+              </div>
+
+              <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 12, padding: 12 }}>
+                Конкретный склад размещения внутри кластера определит Ozon автоматически.
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+                <label style={{ display: "grid", gap: 6 }}>С даты<input type="date" value={fboTimeslotFrom} onChange={(event) => setFboTimeslotFrom(event.target.value)} style={inputStyle} /></label>
+                <label style={{ display: "grid", gap: 6 }}>По дату<input type="date" value={fboTimeslotTo} min={fboTimeslotFrom} onChange={(event) => setFboTimeslotTo(event.target.value)} style={inputStyle} /></label>
+              </div>
+
+              <button type="button" onClick={() => void loadFboTimeslots()} disabled={fboLoading} style={{ justifySelf: "start", border: 0, background: fboLoading ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}>
+                {fboLoading ? "Загружаю…" : "Получить свободные таймслоты"}
+              </button>
+
+              {fboTimeslots.length > 0 && (
+                <label style={{ display: "grid", gap: 6 }}>
+                  <span style={{ fontWeight: 800 }}>Время сдачи</span>
+                  <select value={fboTimeslotIndex} onChange={(event) => setFboTimeslotIndex(event.target.value)} style={inputStyle}>
+                    <option value="">Выберите время</option>
+                    {fboTimeslots.map((slot: any, index: number) => {
+                      const fromValue = slot?.from_in_timezone || slot?.from || slot?.start_at || slot?.date_from || "";
+                      const toValue = slot?.to_in_timezone || slot?.to || slot?.end_at || slot?.date_to || "";
+                      return <option key={index} value={String(index)}>{fromValue ? new Date(fromValue).toLocaleString("ru-RU") : "Начало"} — {toValue ? new Date(toValue).toLocaleString("ru-RU") : "конец"}</option>;
+                    })}
+                  </select>
+                </label>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <button type="button" onClick={() => setFboStep(3)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Назад</button>
+                <button type="button" onClick={() => setFboStep(5)} disabled={!selectedSlot} style={{ border: 0, background: selectedSlot ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}>Далее →</button>
+              </div>
+            </div>
+          )}
+
+          {fboStep === 5 && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Подтверждение поставки</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>Проверьте всё перед созданием заявки в Ozon.</div>
+              </div>
+
+              <div style={{ display: "grid", gap: 8, background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 14, padding: 16 }}>
+                <div><span style={{ color: "#64748b" }}>Товар:</span> <b>bini-black-56</b></div>
+                <div><span style={{ color: "#64748b" }}>Количество:</span> <b>42 шт.</b></div>
+                <div><span style={{ color: "#64748b" }}>Кластер:</span> <b>{selectedCluster?.name || "—"}</b></div>
+                <div><span style={{ color: "#64748b" }}>Точка сдачи:</span> <b>{selectedDropoff?.name || DEFAULT_FBO_DROPOFF.name}</b></div>
+                <div><span style={{ color: "#64748b" }}>Склад размещения:</span> <b>определяет Ozon</b></div>
+                <div><span style={{ color: "#64748b" }}>Время:</span> <b>{selectedSlot ? JSON.stringify(selectedSlot) : "—"}</b></div>
+              </div>
+
+              {fboSupplyResult && (
+                <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 12, padding: 12 }}>
+                  Ozon принял команду создания поставки.
+                </div>
+              )}
+
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                <button type="button" onClick={() => setFboStep(4)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Назад</button>
+                <button type="button" onClick={() => void createRealFboSupply()} disabled={fboLoading || !selectedSlot} style={{ border: 0, background: fboLoading || !selectedSlot ? "#94a3b8" : "#16a34a", color: "#fff", borderRadius: 11, padding: "12px 18px", fontWeight: 900 }}>
+                  {fboLoading ? "Создаю…" : "Создать поставку в Ozon"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
     );
   }
 
