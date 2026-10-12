@@ -334,6 +334,7 @@ export default function OzonPage() {
   const [fboSupplyItem, setFboSupplyItem] = useState<any>(null);
   const [fboSupplyItems, setFboSupplyItems] = useState<any[]>([]);
   const [fboBoxes, setFboBoxes] = useState<number[]>([42]);
+  const [fboBoxSkuKeys, setFboBoxSkuKeys] = useState<string[]>([]);
   const [fboCargoResult, setFboCargoResult] = useState<any>(null);
   const [fboCargoOperationId, setFboCargoOperationId] = useState("");
   const [fboCargoes, setFboCargoes] = useState<any[]>([]);
@@ -1271,15 +1272,23 @@ export default function OzonPage() {
       setFboSupplyItems(items);
       setFboSupplyItem(items[0] || null);
 
+      const supplyItemKey = (item: any) => String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
+      const initialBoxes = items.map((item: any) => Math.max(0, Number(item?.quantity || 0))).filter((quantity: number) => quantity > 0);
+      const initialBoxSkuKeys = items
+        .filter((item: any) => Number(item?.quantity || 0) > 0)
+        .map((item: any) => supplyItemKey(item));
+
       const savedItems = stocks
         .filter((row) => Number(fboSupplyDraft[row.article] || 0) > 0)
         .map((row) => ({ offerId: row.article, quantity: Number(fboSupplyDraft[row.article] || 0) }));
       const totalQuantity = savedItems.reduce((sum, row) => sum + row.quantity, 0) || fboQuantity;
       setFboQuantity(totalQuantity);
-      setFboBoxes([totalQuantity]);
+      setFboBoxes(initialBoxes.length ? initialBoxes : [totalQuantity]);
+      setFboBoxSkuKeys(initialBoxSkuKeys.length ? initialBoxSkuKeys : [supplyItemKey(items[0])]);
 
       advanceFboStep(6, {
-        boxes: [totalQuantity],
+        boxes: initialBoxes.length ? initialBoxes : [totalQuantity],
+        boxSkuKeys: initialBoxSkuKeys.length ? initialBoxSkuKeys : [supplyItemKey(items[0])],
         supplyItems: items,
         orderNumber: visibleOrderNumber,
         internalOrderLookup: true,
@@ -1329,12 +1338,18 @@ export default function OzonPage() {
   }
 
   async function submitFboCargoes() {
-    if (!fboSupplyId || !fboSupplyItem) return;
+    if (!fboSupplyId || !fboSupplyItems.length) return;
 
     try {
       setFboLoading(true);
       setFboError("");
       setFboCargoResult(null);
+
+      const supplyItemKey = (item: any) => String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
+      const itemByKey = new Map(fboSupplyItems.map((item: any) => [supplyItemKey(item), item]));
+      const expectedByKey = new Map(
+        fboSupplyItems.map((item: any) => [supplyItemKey(item), Math.max(0, Number(item?.quantity || 0))]),
+      );
 
       const total = fboBoxes.reduce((sum, quantity) => sum + Number(quantity || 0), 0);
       if (total !== fboQuantity) throw new Error(`По коробкам распределено ${total} шт., а в поставке должно быть ровно ${fboQuantity} шт.`);
@@ -1342,19 +1357,38 @@ export default function OzonPage() {
         throw new Error("В каждой коробке должно быть больше 0 штук.");
       }
       if (fboBoxes.length > 30) throw new Error("Ozon разрешает не больше 30 коробок в одном запросе.");
+      if (fboBoxSkuKeys.length !== fboBoxes.length || fboBoxSkuKeys.some((key) => !itemByKey.has(key))) {
+        throw new Error("Для каждой коробки выберите товар.");
+      }
 
-      const item = {
-        barcode: String(fboSupplyItem?.barcode || ""),
-        offer_id: String(fboSupplyItem?.contractor_item_code || fboSupplyItem?.offer_id || "bini-black-56"),
-        quant: Number(fboSupplyItem?.quant || 1),
-      };
+      for (const [key, expected] of expectedByKey.entries()) {
+        const actual = fboBoxes.reduce(
+          (sum, quantity, index) => sum + (fboBoxSkuKeys[index] === key ? Number(quantity || 0) : 0),
+          0,
+        );
+        if (actual !== expected) {
+          const item = itemByKey.get(key) as any;
+          const label = String(item?.contractor_item_code || item?.offer_id || item?.sku || key);
+          throw new Error(`По товару ${label} распределено ${actual} шт., а должно быть ровно ${expected} шт.`);
+        }
+      }
 
-      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+      const boxes = fboBoxes.map((quantity, index) => {
+        const item = itemByKey.get(fboBoxSkuKeys[index]) as any;
+        return {
+          quantity: Number(quantity),
+          item: {
+            barcode: String(item?.barcode || ""),
+            offer_id: String(item?.contractor_item_code || item?.offer_id || ""),
+            quant: Number(item?.quant || 1),
+          },
+        };
+      });
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-cargoes", {
         body: {
-          action: "cargoes_create",
           supplyId: fboSupplyId,
-          boxes: fboBoxes.map((quantity) => ({ quantity })),
-          item,
+          boxes,
         },
       });
 
@@ -1370,7 +1404,7 @@ export default function OzonPage() {
           ? `Коробки отправлены в Ozon. Операция ${operationId} формируется.`
           : `Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, ${fboQuantity} шт.`,
       );
-      advanceFboStep(7, { boxes: fboBoxes, cargoOperationId: operationId });
+      advanceFboStep(7, { boxes: fboBoxes, boxSkuKeys: fboBoxSkuKeys, cargoOperationId: operationId });
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось передать коробки в Ozon");
     } finally {
@@ -2393,19 +2427,54 @@ export default function OzonPage() {
               {fboSupplyId && (
                 <>
                   {fboSupplyItems.length > 1 && (
-                    <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 12, padding: 12 }}>
-                      В заявке {fboSupplyItems.length} SKU. ERP уже загрузила состав поставки, но передавать грузоместа как один SKU нельзя — ниже будет отдельная раскладка по товарам.
+                    <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 12, padding: 12 }}>
+                      В заявке {fboSupplyItems.length} SKU. Для каждой коробки выберите один товар и укажите количество. По каждому SKU сумма должна точно совпасть с составом заявки Ozon.
                     </div>
                   )}
-                  <div style={{ display: "grid", gap: 10, maxHeight: 360, overflowY: "auto", paddingRight: 4 }}>
+
+                  <div style={{ display: "grid", gap: 8, border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#f8fafc" }}>
+                    {fboSupplyItems.map((item: any) => {
+                      const key = String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
+                      const expected = Math.max(0, Number(item?.quantity || 0));
+                      const packed = fboBoxes.reduce(
+                        (sum, quantity, index) => sum + (fboBoxSkuKeys[index] === key ? Number(quantity || 0) : 0),
+                        0,
+                      );
+                      return (
+                        <div key={key} style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                          <span><b>{String(item?.contractor_item_code || item?.offer_id || item?.sku || "SKU")}</b></span>
+                          <span style={{ color: packed === expected ? "#15803d" : "#b45309", fontWeight: 800 }}>{packed} / {expected} шт.</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div style={{ display: "grid", gap: 10, maxHeight: 430, overflowY: "auto", paddingRight: 4 }}>
                     {fboBoxes.map((quantity, index) => (
-                      <div key={index} style={{ display: "grid", gridTemplateColumns: "120px minmax(120px,1fr) auto", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+                      <div key={index} style={{ display: "grid", gridTemplateColumns: "110px minmax(220px,1fr) minmax(120px,180px) auto", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
                         <div style={{ fontWeight: 900 }}>Коробка {index + 1}</div>
+                        <select
+                          value={fboBoxSkuKeys[index] || ""}
+                          onChange={(event) => {
+                            const next = [...fboBoxSkuKeys];
+                            next[index] = event.target.value;
+                            setFboBoxSkuKeys(next);
+                          }}
+                          style={inputStyle}
+                        >
+                          <option value="">Выберите SKU</option>
+                          {fboSupplyItems.map((item: any) => {
+                            const key = String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
+                            const label = String(item?.contractor_item_code || item?.offer_id || item?.sku || "SKU");
+                            return <option key={key} value={key}>{label}</option>;
+                          })}
+                        </select>
                         <input
                           type="number"
                           min={1}
                           max={fboQuantity}
-                          value={quantity}
+                          value={quantity || ""}
+                          placeholder="Количество"
                           onChange={(event) => {
                             const next = [...fboBoxes];
                             next[index] = Math.max(0, Number(event.target.value || 0));
@@ -2416,7 +2485,10 @@ export default function OzonPage() {
                         <button
                           type="button"
                           disabled={fboBoxes.length <= 1}
-                          onClick={() => setFboBoxes(fboBoxes.filter((_, rowIndex) => rowIndex !== index))}
+                          onClick={() => {
+                            setFboBoxes(fboBoxes.filter((_, rowIndex) => rowIndex !== index));
+                            setFboBoxSkuKeys(fboBoxSkuKeys.filter((_, rowIndex) => rowIndex !== index));
+                          }}
                           style={{ border: "1px solid #fecaca", background: "#fff", color: "#b91c1c", borderRadius: 9, padding: "8px 10px", fontWeight: 800 }}
                         >
                           Удалить
@@ -2428,7 +2500,10 @@ export default function OzonPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <button
                       type="button"
-                      onClick={() => setFboBoxes([...fboBoxes, 0])}
+                      onClick={() => {
+                        setFboBoxes([...fboBoxes, 0]);
+                        setFboBoxSkuKeys([...fboBoxSkuKeys, fboBoxSkuKeys[0] || String(fboSupplyItems[0]?.contractor_item_code || fboSupplyItems[0]?.offer_id || fboSupplyItems[0]?.sku || fboSupplyItems[0]?.barcode || "")]);
+                      }}
                       disabled={fboBoxes.length >= 30}
                       style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "9px 12px", fontWeight: 800 }}
                     >
@@ -2445,14 +2520,46 @@ export default function OzonPage() {
                       type="button"
                       onClick={() => void submitFboCargoes()}
                       disabled={
-                        fboSupplyItems.length > 1 ||
                         fboLoading ||
                         fboBoxes.some((value) => Number(value || 0) <= 0) ||
-                        fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== fboQuantity
+                        fboBoxSkuKeys.length !== fboBoxes.length ||
+                        fboBoxSkuKeys.some((key) => !key) ||
+                        fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== fboQuantity ||
+                        fboSupplyItems.some((item: any) => {
+                          const key = String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
+                          const expected = Math.max(0, Number(item?.quantity || 0));
+                          const packed = fboBoxes.reduce(
+                            (sum, quantity, index) => sum + (fboBoxSkuKeys[index] === key ? Number(quantity || 0) : 0),
+                            0,
+                          );
+                          return packed !== expected;
+                        })
                       }
-                      style={{ border: 0, background: fboSupplyItems.length > 1 ? "#94a3b8" : (fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === fboQuantity ? "#005bff" : "#94a3b8"), color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}
+                      style={{
+                        border: 0,
+                        background: (
+                          !fboLoading &&
+                          fboBoxes.every((value) => Number(value || 0) > 0) &&
+                          fboBoxSkuKeys.length === fboBoxes.length &&
+                          fboBoxSkuKeys.every(Boolean) &&
+                          fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === fboQuantity &&
+                          fboSupplyItems.every((item: any) => {
+                            const key = String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
+                            const expected = Math.max(0, Number(item?.quantity || 0));
+                            const packed = fboBoxes.reduce(
+                              (sum, quantity, index) => sum + (fboBoxSkuKeys[index] === key ? Number(quantity || 0) : 0),
+                              0,
+                            );
+                            return packed === expected;
+                          })
+                        ) ? "#005bff" : "#94a3b8",
+                        color: "#fff",
+                        borderRadius: 11,
+                        padding: "11px 18px",
+                        fontWeight: 900,
+                      }}
                     >
-                      {fboSupplyItems.length > 1 ? "Нужна раскладка нескольких SKU" : "Передать коробки в Ozon →"}
+                      Передать коробки в Ozon →
                     </button>
                   </div>
                 </>
