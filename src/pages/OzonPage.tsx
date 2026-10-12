@@ -681,16 +681,10 @@ export default function OzonPage() {
         : null;
 
       const clusterId = Number(cluster?.macrolocal_cluster_id || fboClusterId || 0);
-      const fullAvailable = Array.isArray(cluster?.warehouses)
-        ? cluster.warehouses.filter((warehouse: any) =>
-            String(warehouse?.availability_status?.state || "") === "FULL_AVAILABLE"
-          )
-        : [];
-      const autoStorage = fullAvailable.length === 1 && !fullAvailable[0]?.storage_warehouse;
-      const warehouseId = autoStorage ? 0 : Number(fboWarehouseId || 0);
+      const warehouseId = fboManualStorage ? Number(fboWarehouseId || 0) : 0;
 
       if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
-      if (!autoStorage && !warehouseId) throw new Error("Выберите доступный склад Ozon.");
+      if (fboManualStorage && !warehouseId) throw new Error("Выберите доступный склад Ozon.");
 
       const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
         body: {
@@ -754,16 +748,10 @@ export default function OzonPage() {
         : null;
 
       const clusterId = Number(cluster?.macrolocal_cluster_id || fboClusterId || 0);
-      const fullAvailable = Array.isArray(cluster?.warehouses)
-        ? cluster.warehouses.filter((warehouse: any) =>
-            String(warehouse?.availability_status?.state || "") === "FULL_AVAILABLE"
-          )
-        : [];
-      const autoStorage = fullAvailable.length === 1 && !fullAvailable[0]?.storage_warehouse;
-      const storageWarehouseId = autoStorage ? 0 : Number(fboWarehouseId || 0);
+      const storageWarehouseId = fboManualStorage ? Number(fboWarehouseId || 0) : 0;
 
       if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
-      if (!autoStorage && !storageWarehouseId) throw new Error("Выберите склад Ozon.");
+      if (fboManualStorage && !storageWarehouseId) throw new Error("Выберите склад Ozon.");
 
       const confirmed = window.confirm(
         `Создать реальную CROSSDOCK-заявку Ozon по черновику №${fboDraftId}?\n\nТовар: bini-black-56\nКоличество: 42 шт.\nПосле подтверждения заявка будет создана в Ozon.`,
