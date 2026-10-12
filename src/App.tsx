@@ -70,6 +70,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
+const APP_BUILD = "2026.10.12-01";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
@@ -1351,6 +1352,10 @@ function App() {
 
                   <div
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
                       fontSize: 15,
                       color: "#64748b",
                       marginTop: 4,
@@ -1358,7 +1363,23 @@ function App() {
                       wordBreak: "break-word",
                     }}
                   >
-                    {pageSubtitle}
+                    <span>{pageSubtitle}</span>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        borderRadius: 999,
+                        background: "#eff6ff",
+                        color: "#2563eb",
+                        border: "1px solid #bfdbfe",
+                        padding: "2px 7px",
+                        fontSize: 11,
+                        fontWeight: 800,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Сборка {APP_BUILD}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1533,15 +1554,31 @@ function App() {
                 </div>
                 <div
                   style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
                     fontSize: 12,
                     color: "#64748b",
                     marginTop: 3,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
-                    textOverflow: "ellipsis",
                   }}
                 >
-                  {pageSubtitle}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{pageSubtitle}</span>
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      borderRadius: 999,
+                      background: "#eff6ff",
+                      color: "#2563eb",
+                      border: "1px solid #bfdbfe",
+                      padding: "1px 5px",
+                      fontSize: 9,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {APP_BUILD}
+                  </span>
                 </div>
               </div>
 
