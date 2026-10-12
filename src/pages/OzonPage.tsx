@@ -290,7 +290,7 @@ export default function OzonPage() {
   useEffect(() => { void Promise.all([loadStocks(), loadErpStock()]); }, []);
   useEffect(() => {
     if (activeTab === "fbo") {
-      if (fboClusters.length === 0) void loadFboClusters();
+      setFboError("");
       void loadSavedFboDraft();
     }
   }, [activeTab]);
