@@ -404,13 +404,20 @@ export default function OzonPage() {
       const { data, error: loadError } = await supabase
         .from("ozon_fbo_drafts")
         .select("draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,supply_type,drop_off_warehouse_id,drop_off_warehouse_name,drop_off_warehouse_type,seller_warehouse_id,created_at,updated_at")
+        .eq("supply_type", "CROSSDOCK")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
 
       if (loadError) throw loadError;
       const row = data as SavedFboDraft | null;
-      if (!row) return;
+      if (!row) {
+        setFboDraftId(null);
+        setFboResolvedSku(null);
+        setFboDraftInfo(null);
+        setFboDiagnostics([]);
+        return;
+      }
 
       setFboDraftId(Number(row.draft_id));
       setFboResolvedSku(Number(row.sku || 0) || null);
