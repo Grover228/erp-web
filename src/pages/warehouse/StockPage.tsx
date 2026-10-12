@@ -23,6 +23,7 @@ type BulkEditChange = {
 };
 
 type StockAvailableRow = {
+  warehouse_id?: string | null;
   item_type: StockItemType | string;
   product_id: string | null;
   material_id: string | null;
@@ -31,6 +32,12 @@ type StockAvailableRow = {
   quantity_on_hand: number | null;
   quantity_reserved: number | null;
   quantity_available: number | null;
+};
+
+type WarehouseOption = {
+  id: string;
+  code: string;
+  name: string;
 };
 
 type ProductCatalogItem = {
@@ -71,6 +78,7 @@ type ColorCatalogItem = {
 
 type StockMovementRow = {
   id?: string;
+  warehouse_id?: string | null;
   item_type: StockItemType | string;
   product_id: string | null;
   material_id: string | null;
@@ -161,6 +169,8 @@ function getDocumentLabel(type: string) {
 
 export default function StockPage() {
   const [stockAvailable, setStockAvailable] = useState<StockAvailableRow[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<"all" | string>("all");
   const [products, setProducts] = useState<ProductCatalogItem[]>([]);
   const [resaleProducts, setResaleProducts] = useState<ResaleCatalogItem[]>([]);
   const [materials, setMaterials] = useState<MaterialCatalogItem[]>([]);
@@ -186,15 +196,30 @@ export default function StockPage() {
 
   useEffect(() => {
     loadStockItems();
-  }, []);
+  }, [selectedWarehouseId]);
 
   async function loadStockItems() {
     try {
       setLoading(true);
       setError("");
 
+      const stockQuery =
+        selectedWarehouseId === "all"
+          ? supabase
+              .from("stock_available")
+              .select(
+                "item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
+              )
+          : supabase
+              .from("stock_available_by_warehouse")
+              .select(
+                "warehouse_id, item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
+              )
+              .eq("warehouse_id", selectedWarehouseId);
+
       const [
         stockResult,
+        warehousesResult,
         productsResult,
         resaleProductsResult,
         materialsResult,
@@ -203,11 +228,13 @@ export default function StockPage() {
         movementsResult,
         productionCostsResult,
       ] = await Promise.all([
+        stockQuery,
+
         supabase
-          .from("stock_available")
-          .select(
-            "item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
-          ),
+          .from("warehouses")
+          .select("id,code,name")
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
 
         supabase
           .from("products")
@@ -238,7 +265,7 @@ export default function StockPage() {
         supabase
           .from("stock_movements")
           .select(
-            "id, item_type, product_id, material_id, consumable_id, item_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
+            "id, warehouse_id, item_type, product_id, material_id, consumable_id, item_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
           )
           .order("created_at", { ascending: false }),
 
@@ -249,6 +276,7 @@ export default function StockPage() {
       ]);
 
       if (stockResult.error) throw stockResult.error;
+      if (warehousesResult.error) throw warehousesResult.error;
       if (productsResult.error) throw productsResult.error;
       if (resaleProductsResult.error) throw resaleProductsResult.error;
       if (materialsResult.error) throw materialsResult.error;
@@ -258,6 +286,7 @@ export default function StockPage() {
       if (productionCostsResult.error) throw productionCostsResult.error;
 
       setStockAvailable((stockResult.data as StockAvailableRow[]) || []);
+      setWarehouses((warehousesResult.data as WarehouseOption[]) || []);
       setProducts((productsResult.data as ProductCatalogItem[]) || []);
       setResaleProducts((resaleProductsResult.data as ResaleCatalogItem[]) || []);
       setMaterials((materialsResult.data as MaterialCatalogItem[]) || []);
@@ -329,6 +358,7 @@ export default function StockPage() {
         source_document_type: "stock_adjustment",
         source_document_id: null,
         production_order_id: null,
+        warehouse_id: selectedWarehouseId === "all" ? null : selectedWarehouseId,
         item_type: selectedRow.itemType,
         product_id: selectedRow.itemType === "product" ? selectedRow.itemId : null,
         material_id:
@@ -893,6 +923,7 @@ export default function StockPage() {
         source_document_type: "stock_adjustment",
         source_document_id: null,
         production_order_id: null,
+        warehouse_id: selectedWarehouseId === "all" ? null : selectedWarehouseId,
         item_type: change.itemType,
         product_id: change.itemType === "product" ? change.id : null,
         material_id: change.itemType === "material" ? change.id : null,
@@ -927,6 +958,7 @@ export default function StockPage() {
   const selectedMovements = selectedRow
     ? movements
         .filter((movement) => {
+          if (selectedWarehouseId !== "all" && movement.warehouse_id !== selectedWarehouseId) return false;
           if (movement.item_type !== selectedRow.itemType) return false;
           if (selectedRow.itemType === "resale_product") return movement.item_id === selectedRow.itemId;
           if (selectedRow.itemType === "product") return movement.product_id === selectedRow.itemId;
@@ -950,8 +982,9 @@ export default function StockPage() {
               <span style={sectionTitleStyle}>Остатки</span>
             </div>
             <div style={sectionSubtitleStyle}>
-              Остатки считаются по всем складским движениям: приёмки, производство,
-              списания, выпуск продукции, отгрузки и активные резервы.
+              {selectedWarehouseId === "all"
+                ? "Общий остаток по всем складам. Перемещения между складами не меняют эту сумму."
+                : `Остаток по складу «${warehouses.find((row) => row.id === selectedWarehouseId)?.name || "Склад"}».`}
             </div>
           </div>
 
@@ -992,6 +1025,29 @@ export default function StockPage() {
         {error && <div style={errorStyle}>{error}</div>}
 
         
+
+        <div style={warehouseFilterWrapStyle}>
+          <span style={warehouseFilterLabelStyle}>Склад:</span>
+          <div style={warehouseFilterTabsStyle}>
+            <button
+              type="button"
+              onClick={() => { setSelectedWarehouseId("all"); setSelectedRowKey(null); }}
+              style={warehouseFilterButtonStyle(selectedWarehouseId === "all")}
+            >
+              Все склады
+            </button>
+            {warehouses.map((warehouse) => (
+              <button
+                key={warehouse.id}
+                type="button"
+                onClick={() => { setSelectedWarehouseId(warehouse.id); setSelectedRowKey(null); }}
+                style={warehouseFilterButtonStyle(selectedWarehouseId === warehouse.id)}
+              >
+                {warehouse.name}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div style={toolbarStyle}>
           <div style={filterTabsStyle}>
@@ -1920,3 +1976,40 @@ const errorStyle: React.CSSProperties = {
   padding: 14,
   fontWeight: 700,
 };
+
+
+const warehouseFilterWrapStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  padding: 12,
+  border: "1px solid #dbeafe",
+  background: "#f8fbff",
+  borderRadius: 14,
+};
+
+const warehouseFilterLabelStyle: React.CSSProperties = {
+  color: "#475569",
+  fontSize: 13,
+  fontWeight: 900,
+};
+
+const warehouseFilterTabsStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+function warehouseFilterButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? "1px solid #60a5fa" : "1px solid #cbd5e1",
+    background: active ? "#dbeafe" : "#ffffff",
+    color: active ? "#1d4ed8" : "#475569",
+    borderRadius: 999,
+    padding: "8px 12px",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 13,
+  };
+}
