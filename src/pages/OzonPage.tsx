@@ -680,10 +680,16 @@ export default function OzonPage() {
         : null;
 
       const clusterId = Number(cluster?.macrolocal_cluster_id || fboClusterId || 0);
-      const warehouseId = Number(fboWarehouseId || 0);
+      const fullAvailable = Array.isArray(cluster?.warehouses)
+        ? cluster.warehouses.filter((warehouse: any) =>
+            String(warehouse?.availability_status?.state || "") === "FULL_AVAILABLE"
+          )
+        : [];
+      const autoStorage = fullAvailable.length === 1 && !fullAvailable[0]?.storage_warehouse;
+      const warehouseId = autoStorage ? 0 : Number(fboWarehouseId || 0);
 
       if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
-      if (!warehouseId) throw new Error("Выберите доступный склад Ozon.");
+      if (!autoStorage && !warehouseId) throw new Error("Выберите доступный склад Ozon.");
 
       const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
         body: {
@@ -739,7 +745,6 @@ export default function OzonPage() {
       const slotIndex = Number(fboTimeslotIndex);
       const timeslot = Number.isInteger(slotIndex) ? fboTimeslots[slotIndex] : null;
       if (!timeslot) throw new Error("Выберите таймслот.");
-      if (!fboWarehouseId) throw new Error("Выберите склад Ozon.");
 
       const cluster = Array.isArray(fboDraftInfo?.clusters)
         ? fboDraftInfo.clusters.find((row: any) =>
@@ -748,7 +753,16 @@ export default function OzonPage() {
         : null;
 
       const clusterId = Number(cluster?.macrolocal_cluster_id || fboClusterId || 0);
+      const fullAvailable = Array.isArray(cluster?.warehouses)
+        ? cluster.warehouses.filter((warehouse: any) =>
+            String(warehouse?.availability_status?.state || "") === "FULL_AVAILABLE"
+          )
+        : [];
+      const autoStorage = fullAvailable.length === 1 && !fullAvailable[0]?.storage_warehouse;
+      const storageWarehouseId = autoStorage ? 0 : Number(fboWarehouseId || 0);
+
       if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
+      if (!autoStorage && !storageWarehouseId) throw new Error("Выберите склад Ozon.");
 
       const confirmed = window.confirm(
         `Создать реальную CROSSDOCK-заявку Ozon по черновику №${fboDraftId}?\n\nТовар: bini-black-56\nКоличество: 42 шт.\nПосле подтверждения заявка будет создана в Ozon.`,
@@ -777,7 +791,7 @@ export default function OzonPage() {
           action: "create_supply",
           draftId: fboDraftId,
           macrolocalClusterId: clusterId,
-          storageWarehouseId: Number(fboWarehouseId),
+          storageWarehouseId,
           timeslot: normalizedTimeslot,
         },
       });
@@ -1040,6 +1054,9 @@ export default function OzonPage() {
           )
         : []
     );
+    const autoStorageWarehouse =
+      availableWarehouses.length === 1 &&
+      !availableWarehouses[0]?.storage_warehouse;
 
     return (
       <>
