@@ -48,6 +48,13 @@ type PeriodSummary = {
   unmatched: number;
 };
 
+type FeeBreakdown = {
+  typeId: number;
+  label: string;
+  amount: number;
+  count: number;
+};
+
 type OzonStock = {
   productId: string;
   article: string;
@@ -163,6 +170,7 @@ export default function OzonPage() {
   const [runs, setRuns] = useState<SyncRun[]>([]);
   const [articleAnalytics, setArticleAnalytics] = useState<ArticleAnalytics[]>([]);
   const [analyticsSummary, setAnalyticsSummary] = useState<PeriodSummary | null>(null);
+  const [feeBreakdown, setFeeBreakdown] = useState<FeeBreakdown[]>([]);
   const [operationCount, setOperationCount] = useState(0);
 
   const [stocks, setStocks] = useState<OzonStock[]>([]);
@@ -318,6 +326,7 @@ export default function OzonPage() {
       setRuns((runResult.data as SyncRun[]) || []);
       setArticleAnalytics((analyticsResult.data?.articles as ArticleAnalytics[]) || []);
       setAnalyticsSummary((analyticsResult.data?.summary as PeriodSummary) || null);
+      setFeeBreakdown((analyticsResult.data?.feeBreakdown as FeeBreakdown[]) || []);
       setOperationCount(Number(analyticsResult.data?.operationCount || 0));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить данные Ozon");
@@ -1226,6 +1235,46 @@ export default function OzonPage() {
           <SummaryCard title="Себестоимость" value={money(summary.cost)} />
           <SummaryCard title="Прибыль" value={money(summary.profit)} color={summary.profit >= 0 ? "#15803d" : "#b91c1c"} />
         </div>
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18 }}>
+            <div style={{ fontWeight: 850, fontSize: 18 }}>Расходы Ozon по видам услуг</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+              Кросс-докинг, приёмка FBO, логистика, возвраты, упаковка и другие начисления за выбранный период.
+            </div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+                  {["Услуга", "Type ID", "Начислений", "Сумма"].map((title) => (
+                    <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {feeBreakdown.map((row) => (
+                  <tr key={row.typeId} style={{ borderTop: "1px solid #eef2f7" }}>
+                    <td style={{ padding: 12, fontWeight: row.typeId === 12 || row.typeId === 77 ? 850 : 600 }}>
+                      {row.label}
+                    </td>
+                    <td style={{ padding: 12 }}>{row.typeId}</td>
+                    <td style={{ padding: 12 }}>{row.count}</td>
+                    <td style={{ padding: 12, fontWeight: 800, color: row.amount < 0 ? "#b91c1c" : "#15803d" }}>
+                      {money(row.amount)}
+                    </td>
+                  </tr>
+                ))}
+                {!loading && feeBreakdown.length === 0 && (
+                  <tr><td colSpan={4}><EmptyState title="Нет расходов" text="За выбранный период начисления Ozon не найдены." /></td></tr>
+                )}
+                {loading && (
+                  <tr><td colSpan={4}><EmptyState title="Считаю расходы" text="Разбираю финансовые начисления Ozon…" /></td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <section style={{ ...panelStyle, overflow: "hidden" }}>
           <div style={{ padding: 18, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <div><div style={{ fontWeight: 850, fontSize: 18 }}>Аналитика по артикулам</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div></div>
