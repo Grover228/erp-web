@@ -341,6 +341,7 @@ export default function OzonPage() {
   const [fboCards, setFboCards] = useState<SavedFboDraft[]>([]);
   const [fboView, setFboView] = useState<"board" | "picker" | "wizard">("board");
   const [fboStatusSyncing, setFboStatusSyncing] = useState(false);
+  const [fboCancellingDraftId, setFboCancellingDraftId] = useState<number | null>(null);
   const [fboSelectedArticle, setFboSelectedArticle] = useState("");
   const [fboSelectedName, setFboSelectedName] = useState("");
   const [fboQuantity, setFboQuantity] = useState(1);
@@ -585,6 +586,50 @@ export default function OzonPage() {
       setFboError(cause instanceof Error ? cause.message : "Не удалось обновить статусы поставок Ozon");
     } finally {
       setFboStatusSyncing(false);
+    }
+  }
+
+  async function cancelFboSupplyOrder(row: SavedFboDraft) {
+    const orderId = Number(row.order_id || 0);
+    if (!orderId) {
+      setFboError("Эта запись ещё не стала заявкой Ozon. Её можно только архивировать в ERP.");
+      return;
+    }
+
+    const displayNumber = row.supply_id || row.order_id || row.draft_id;
+    const confirmed = window.confirm(
+      `Отменить заявку №${displayNumber} в Ozon?\n\nЭто реальная отмена на стороне Ozon. После подтверждения вернуть заявку обратно нельзя.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setFboCancellingDraftId(Number(row.draft_id));
+      setFboError("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "cancel_supply_order",
+          draftId: Number(row.draft_id),
+          orderId,
+        },
+      });
+
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      if (data?.cancelled) {
+        setFboCards((rows) => rows.map((item) =>
+          Number(item.draft_id) === Number(row.draft_id)
+            ? { ...item, kanban_stage: "CANCELLED", ozon_state: "CANCELLED", updated_at: new Date().toISOString() }
+            : item
+        ));
+        return;
+      }
+
+      setFboError("Ozon принял команду отмены, но операция ещё выполняется. Нажмите «Обновить статусы Ozon» через несколько секунд.");
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось отменить заявку в Ozon");
+    } finally {
+      setFboCancellingDraftId(null);
     }
   }
 
@@ -1765,7 +1810,8 @@ export default function OzonPage() {
       { id: "OZON_ACCEPTANCE", title: "🏭 Приёмка Ozon", hint: "Принимают на складе" },
       { id: "REPORTS", title: "📄 Согласование", hint: "Акты и расхождения" },
       { id: "COMPLETED", title: "🏁 Завершено", hint: "Поставка закрыта" },
-      { id: "PROBLEM", title: "⚠️ Проблема", hint: "Отказ, отмена, просрочка" },
+      { id: "CANCELLED", title: "🚫 Отменено", hint: "Отменено в Ozon" },
+      { id: "PROBLEM", title: "⚠️ Проблема", hint: "Отказ или просрочка" },
     ] as const;
 
     const cardsByKanbanStage = (stage: string) =>
@@ -1833,14 +1879,14 @@ export default function OzonPage() {
                       {cards.map((row) => {
                         const step = Math.max(1, Math.min(9, Number(row.workflow_step || (row.order_id ? 6 : String(row.status || "") === "SUCCESS" ? 4 : 3))));
                         const displayNumber = row.supply_id || row.order_id || row.draft_id;
+                        const canCancel = Boolean(row.order_id) && column.id !== "CANCELLED" && column.id !== "COMPLETED";
                         return (
-                          <button key={row.draft_id} type="button" onClick={() => openFboCard(row)} style={{
+                          <div key={row.draft_id} style={{
                             textAlign: "left",
                             border: "1px solid #e2e8f0",
                             background: "#fff",
                             borderRadius: 13,
                             padding: 13,
-                            cursor: "pointer",
                             boxShadow: "0 4px 14px rgba(15,23,42,.05)",
                             width: "100%",
                           }}>
@@ -1873,8 +1919,35 @@ export default function OzonPage() {
                               </div>
                             )}
 
-                            <div style={{ marginTop: 10, color: "#005bff", fontWeight: 900, fontSize: 11 }}>Открыть →</div>
-                          </button>
+                            <div style={{ marginTop: 11, display: "flex", gap: 7, flexWrap: "wrap" }}>
+                              <button
+                                type="button"
+                                onClick={() => openFboCard(row)}
+                                style={{ border: 0, background: "#eff6ff", color: "#005bff", borderRadius: 9, padding: "7px 9px", fontWeight: 900, fontSize: 11, cursor: "pointer" }}
+                              >
+                                Открыть →
+                              </button>
+                              {canCancel && (
+                                <button
+                                  type="button"
+                                  onClick={() => void cancelFboSupplyOrder(row)}
+                                  disabled={fboCancellingDraftId === Number(row.draft_id)}
+                                  style={{
+                                    border: "1px solid #fecaca",
+                                    background: "#fff",
+                                    color: "#b91c1c",
+                                    borderRadius: 9,
+                                    padding: "7px 9px",
+                                    fontWeight: 900,
+                                    fontSize: 11,
+                                    cursor: fboCancellingDraftId === Number(row.draft_id) ? "wait" : "pointer",
+                                  }}
+                                >
+                                  {fboCancellingDraftId === Number(row.draft_id) ? "Отменяю…" : "🚫 Отменить в Ozon"}
+                                </button>
+                              )}
+                            </div>
+                          </div>
                         );
                       })}
 
