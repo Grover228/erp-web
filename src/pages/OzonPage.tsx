@@ -107,6 +107,8 @@ type SavedFboDraft = {
   workflow_step?: number | null;
   workflow_data?: Record<string, any> | null;
   archived?: boolean | null;
+  kanban_stage?: string | null;
+  ozon_state?: string | null;
 };
 
 type FboCluster = {
@@ -338,7 +340,7 @@ export default function OzonPage() {
   const [fboLabelUrl, setFboLabelUrl] = useState("");
   const [fboCards, setFboCards] = useState<SavedFboDraft[]>([]);
   const [fboView, setFboView] = useState<"board" | "wizard">("board");
-  const [fboStageFilter, setFboStageFilter] = useState("all");
+  const [fboStatusSyncing, setFboStatusSyncing] = useState(false);
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -548,7 +550,7 @@ export default function OzonPage() {
     }
   }
 
-  const fboCardSelectFields = "draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,supply_type,drop_off_warehouse_id,drop_off_warehouse_name,drop_off_warehouse_type,seller_warehouse_id,order_id,supply_id,workflow_step,workflow_data,archived,created_at,updated_at";
+  const fboCardSelectFields = "draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,supply_type,drop_off_warehouse_id,drop_off_warehouse_name,drop_off_warehouse_type,seller_warehouse_id,order_id,supply_id,workflow_step,workflow_data,archived,kanban_stage,ozon_state,created_at,updated_at";
 
   async function loadFboCards() {
     try {
@@ -562,6 +564,23 @@ export default function OzonPage() {
       setFboCards((data as SavedFboDraft[]) || []);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось загрузить список поставок");
+    }
+  }
+
+  async function syncFboKanbanStatuses() {
+    try {
+      setFboStatusSyncing(true);
+      setFboError("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "sync_supply_states" },
+      });
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(data.error);
+      await loadFboCards();
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось обновить статусы поставок Ozon");
+    } finally {
+      setFboStatusSyncing(false);
     }
   }
 
@@ -1720,137 +1739,136 @@ export default function OzonPage() {
         ? fboTimeslots[Number(fboTimeslotIndex)]
         : null;
 
-    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение", "Коробки", "Грузоместа", "Наклейки", "Готово"];
+    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение", "Коробки", "Грузоместа", "Наклейки", "Готово к отгрузке"];
 
-    const stageFilters = [
-      { id: "all", label: "Все" },
-      { id: "prep", label: "Подготовка" },
-      { id: "boxes", label: "Коробки" },
-      { id: "cargo", label: "Грузоместа" },
-      { id: "labels", label: "Наклейки" },
-      { id: "done", label: "Готово" },
-    ];
+    const kanbanColumns = [
+      { id: "PREPARATION", title: "🛠️ Подготовка", hint: "Кластер, точка, таймслот" },
+      { id: "BOXES", title: "📦 Коробки", hint: "Разложить товар" },
+      { id: "LABELS", title: "🏷️ Наклейки", hint: "Грузоместа и PDF" },
+      { id: "READY_TO_SUPPLY", title: "🚚 Готово к отгрузке", hint: "Можно везти" },
+      { id: "ACCEPTED_DROPOFF", title: "✅ Принято в точке", hint: "Сдали Ozon" },
+      { id: "IN_TRANSIT", title: "🛣️ В пути", hint: "Едет на склад" },
+      { id: "OZON_ACCEPTANCE", title: "🏭 Приёмка Ozon", hint: "Принимают на складе" },
+      { id: "REPORTS", title: "📄 Согласование", hint: "Акты и расхождения" },
+      { id: "COMPLETED", title: "🏁 Завершено", hint: "Поставка закрыта" },
+      { id: "PROBLEM", title: "⚠️ Проблема", hint: "Отказ, отмена, просрочка" },
+    ] as const;
 
-    const matchesStageFilter = (row: SavedFboDraft) => {
-      const step = Number(row.workflow_step || (row.order_id ? 6 : String(row.status || "") === "SUCCESS" ? 4 : 3));
-      if (fboStageFilter === "prep") return step <= 5;
-      if (fboStageFilter === "boxes") return step === 6;
-      if (fboStageFilter === "cargo") return step === 7;
-      if (fboStageFilter === "labels") return step === 8;
-      if (fboStageFilter === "done") return step >= 9;
-      return true;
-    };
-
-    const visibleFboCards = fboCards.filter(matchesStageFilter);
+    const cardsByKanbanStage = (stage: string) =>
+      fboCards.filter((row) => String(row.kanban_stage || "PREPARATION") === stage);
 
     if (fboView === "board") {
       return (
-        <section style={{ display: "grid", gap: 16 }}>
+        <section style={{ display: "grid", gap: 14 }}>
           <div style={{ ...panelStyle, padding: 18 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontWeight: 900, fontSize: 22 }}>🚚 Поставки FBO</div>
-                <div style={{ color: "#64748b", marginTop: 5 }}>Карточки поставок. Этап показывает, что нужно сделать дальше.</div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>🚚 Канбан поставок FBO</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>
+                  Подготовительные этапы ведёт ERP, после отгрузки статус приходит из Ozon.
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button type="button" onClick={() => void loadFboCards()} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 11, padding: "10px 13px", fontWeight: 800, cursor: "pointer" }}>🔄 Обновить</button>
-                <button type="button" onClick={startNewFboSupply} style={{ border: 0, background: "#005bff", color: "#fff", borderRadius: 11, padding: "11px 16px", fontWeight: 900, cursor: "pointer" }}>➕ Новая поставка</button>
+                <button
+                  type="button"
+                  onClick={() => void syncFboKanbanStatuses()}
+                  disabled={fboStatusSyncing}
+                  style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 11, padding: "10px 13px", fontWeight: 800, cursor: fboStatusSyncing ? "wait" : "pointer" }}
+                >
+                  {fboStatusSyncing ? "⏳ Проверяю Ozon…" : "🔄 Обновить статусы Ozon"}
+                </button>
+                <button type="button" onClick={startNewFboSupply} style={{ border: 0, background: "#005bff", color: "#fff", borderRadius: 11, padding: "11px 16px", fontWeight: 900, cursor: "pointer" }}>
+                  ➕ Новая поставка
+                </button>
               </div>
-            </div>
-
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 16 }}>
-              {stageFilters.map((filter) => {
-                const active = fboStageFilter === filter.id;
-                const count = fboCards.filter((row) => {
-                  if (filter.id === "all") return true;
-                  const step = Number(row.workflow_step || (row.order_id ? 6 : String(row.status || "") === "SUCCESS" ? 4 : 3));
-                  if (filter.id === "prep") return step <= 5;
-                  if (filter.id === "boxes") return step === 6;
-                  if (filter.id === "cargo") return step === 7;
-                  if (filter.id === "labels") return step === 8;
-                  if (filter.id === "done") return step >= 9;
-                  return false;
-                }).length;
-                return (
-                  <button key={filter.id} type="button" onClick={() => setFboStageFilter(filter.id)} style={{
-                    border: active ? "1px solid #93c5fd" : "1px solid #e2e8f0",
-                    background: active ? "#eff6ff" : "#fff",
-                    color: active ? "#005bff" : "#475569",
-                    borderRadius: 999,
-                    padding: "8px 12px",
-                    fontWeight: 850,
-                    cursor: "pointer",
-                  }}>
-                    {filter.label} · {count}
-                  </button>
-                );
-              })}
             </div>
           </div>
 
           {fboError && <div style={{ background: "#fef2f2", color: "#b91c1c", borderRadius: 12, padding: 13 }}>{fboError}</div>}
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 14 }}>
-            {visibleFboCards.map((row) => {
-              const step = Math.max(1, Math.min(9, Number(row.workflow_step || (row.order_id ? 6 : String(row.status || "") === "SUCCESS" ? 4 : 3))));
-              const displayNumber = row.supply_id || row.order_id || row.draft_id;
-              const isDone = step >= 9;
-              return (
-                <button key={row.draft_id} type="button" onClick={() => openFboCard(row)} style={{
-                  textAlign: "left",
-                  border: "1px solid #e2e8f0",
-                  background: "#fff",
-                  borderRadius: 18,
-                  padding: 17,
-                  cursor: "pointer",
-                  boxShadow: "0 8px 26px rgba(15,23,42,.05)",
-                  minWidth: 0,
-                }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "start" }}>
-                    <div>
-                      <div style={{ fontSize: 12, color: "#64748b" }}>{row.supply_id ? "Заявка Ozon" : "Черновик Ozon"}</div>
-                      <div style={{ fontSize: 19, fontWeight: 900, color: "#0f172a", marginTop: 2 }}>№{displayNumber}</div>
+          <div style={{ overflowX: "auto", paddingBottom: 8 }}>
+            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", minWidth: "max-content" }}>
+              {kanbanColumns.map((column) => {
+                const cards = cardsByKanbanStage(column.id);
+                return (
+                  <div key={column.id} style={{
+                    width: 285,
+                    background: column.id === "PROBLEM" ? "#fff7ed" : "#f8fafc",
+                    border: column.id === "PROBLEM" ? "1px solid #fed7aa" : "1px solid #e2e8f0",
+                    borderRadius: 16,
+                    padding: 10,
+                    minHeight: 220,
+                  }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start", padding: "4px 4px 10px" }}>
+                      <div>
+                        <div style={{ fontWeight: 900, color: "#0f172a" }}>{column.title}</div>
+                        <div style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}>{column.hint}</div>
+                      </div>
+                      <span style={{ minWidth: 25, height: 25, borderRadius: 999, display: "grid", placeItems: "center", background: "#e2e8f0", color: "#475569", fontSize: 12, fontWeight: 900 }}>
+                        {cards.length}
+                      </span>
                     </div>
-                    <span style={{
-                      borderRadius: 999,
-                      padding: "5px 9px",
-                      fontSize: 11,
-                      fontWeight: 900,
-                      background: isDone ? "#dcfce7" : "#eff6ff",
-                      color: isDone ? "#15803d" : "#1d4ed8",
-                    }}>
-                      {isDone ? "✅ Готово" : `${step}/9 · ${stepNames[step - 1]}`}
-                    </span>
-                  </div>
 
-                  <div style={{ marginTop: 14, display: "grid", gap: 7, color: "#334155", fontSize: 13 }}>
-                    <div><b>{row.offer_id || `SKU ${row.sku}`}</b> · {number(Number(row.quantity || 0))} шт.</div>
-                    <div>📍 {row.drop_off_warehouse_name || "Точка сдачи ещё не выбрана"}</div>
-                    <div style={{ color: "#64748b" }}>Обновлено {new Date(row.updated_at).toLocaleString("ru-RU")}</div>
-                  </div>
+                    <div style={{ display: "grid", gap: 9 }}>
+                      {cards.map((row) => {
+                        const step = Math.max(1, Math.min(9, Number(row.workflow_step || (row.order_id ? 6 : String(row.status || "") === "SUCCESS" ? 4 : 3))));
+                        const displayNumber = row.supply_id || row.order_id || row.draft_id;
+                        return (
+                          <button key={row.draft_id} type="button" onClick={() => openFboCard(row)} style={{
+                            textAlign: "left",
+                            border: "1px solid #e2e8f0",
+                            background: "#fff",
+                            borderRadius: 13,
+                            padding: 13,
+                            cursor: "pointer",
+                            boxShadow: "0 4px 14px rgba(15,23,42,.05)",
+                            width: "100%",
+                          }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "start" }}>
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ color: "#64748b", fontSize: 10 }}>{row.supply_id ? "Заявка Ozon" : "Черновик"}</div>
+                                <div style={{ fontWeight: 900, fontSize: 15, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis" }}>№{displayNumber}</div>
+                              </div>
+                              {column.id === "PREPARATION" || column.id === "BOXES" || column.id === "LABELS" ? (
+                                <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "4px 7px", fontSize: 10, fontWeight: 900, whiteSpace: "nowrap" }}>
+                                  {step}/9
+                                </span>
+                              ) : row.ozon_state ? (
+                                <span title={row.ozon_state} style={{ background: "#f1f5f9", color: "#475569", borderRadius: 999, padding: "4px 7px", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap" }}>
+                                  Ozon
+                                </span>
+                              ) : null}
+                            </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(9,1fr)", gap: 4, marginTop: 15 }}>
-                    {stepNames.map((_, index) => (
-                      <span key={index} style={{ height: 5, borderRadius: 999, background: index + 1 <= step ? "#005bff" : "#e2e8f0" }} />
-                    ))}
-                  </div>
+                            <div style={{ marginTop: 10, fontSize: 12, color: "#334155", display: "grid", gap: 5 }}>
+                              <div><b>{row.offer_id || `SKU ${row.sku}`}</b> · {number(Number(row.quantity || 0))} шт.</div>
+                              <div style={{ color: "#64748b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📍 {row.drop_off_warehouse_name || "Точка не выбрана"}</div>
+                            </div>
 
-                  <div style={{ marginTop: 14, display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-                    <span style={{ color: "#64748b", fontSize: 12 }}>CROSSDOCK</span>
-                    <span style={{ color: "#005bff", fontWeight: 900, fontSize: 13 }}>Открыть →</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+                            {(column.id === "PREPARATION" || column.id === "BOXES" || column.id === "LABELS") && (
+                              <div style={{ display: "grid", gridTemplateColumns: "repeat(9,1fr)", gap: 3, marginTop: 10 }}>
+                                {stepNames.map((_, index) => (
+                                  <span key={index} style={{ height: 4, borderRadius: 999, background: index + 1 <= step ? "#005bff" : "#e2e8f0" }} />
+                                ))}
+                              </div>
+                            )}
 
-          {!visibleFboCards.length && (
-            <div style={{ ...panelStyle, padding: 36, textAlign: "center", color: "#64748b" }}>
-              <div style={{ fontSize: 34 }}>📭</div>
-              <div style={{ fontWeight: 900, color: "#334155", marginTop: 8 }}>Поставок на этом этапе нет</div>
-              <div style={{ marginTop: 4 }}>Создайте новую поставку или переключите фильтр.</div>
+                            <div style={{ marginTop: 10, color: "#005bff", fontWeight: 900, fontSize: 11 }}>Открыть →</div>
+                          </button>
+                        );
+                      })}
+
+                      {!cards.length && (
+                        <div style={{ border: "1px dashed #cbd5e1", borderRadius: 12, padding: "22px 12px", textAlign: "center", color: "#94a3b8", fontSize: 12 }}>
+                          Пусто
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          )}
+          </div>
         </section>
       );
     }
@@ -2225,8 +2243,8 @@ export default function OzonPage() {
           {fboStep === 9 && (
             <div style={{ display: "grid", gap: 18 }}>
               <div>
-                <div style={{ fontWeight: 900, fontSize: 22 }}>Поставка подготовлена</div>
-                <div style={{ color: "#64748b", marginTop: 5 }}>Коробки зарегистрированы, этикетки сформированы. Осталось распечатать PDF и наклеить этикетки на коробки.</div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Готово к отгрузке</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>Коробки зарегистрированы, этикетки сформированы. После фактической сдачи статус карточки продолжит двигаться уже по данным Ozon.</div>
               </div>
 
               <div style={{ display: "grid", gap: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 14, padding: 16 }}>
