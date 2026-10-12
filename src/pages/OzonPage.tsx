@@ -188,6 +188,7 @@ export default function OzonPage() {
   const [fboSupplyResult, setFboSupplyResult] = useState<any>(null);
   const [fboSellerWarehouses, setFboSellerWarehouses] = useState<any[]>([]);
   const [fboSellerWarehouseId, setFboSellerWarehouseId] = useState("");
+  const [fboGeneralWarehouses, setFboGeneralWarehouses] = useState<any[]>([]);
   const [fboDropoffSearch, setFboDropoffSearch] = useState("");
   const [fboDropoffPoints, setFboDropoffPoints] = useState<any[]>([]);
   const [fboDropoffWarehouseId, setFboDropoffWarehouseId] = useState("");
@@ -451,10 +452,15 @@ export default function OzonPage() {
 
       const rows = Array.isArray(data?.data?.warehouses) ? data.data.warehouses : [];
       const active = rows.filter((row: any) => row?.is_active !== false);
+      const general = Array.isArray(data?.data?.generalWarehouses) ? data.data.generalWarehouses : [];
       setFboSellerWarehouses(active);
+      setFboGeneralWarehouses(general);
 
       if (!active.length) {
-        setFboMessage("Ozon вернул 0 активных складов продавца. Точки CROSSDOCK можно искать ниже отдельно.");
+        const generalText = general.length
+          ? ` При этом общий API Ozon видит складов: ${general.length}.`
+          : "";
+        setFboMessage(`Ozon вернул 0 активных FBO-складов продавца.${generalText}`);
       } else if (!fboSellerWarehouseId && active.length === 1) {
         setFboSellerWarehouseId(String(active[0].seller_warehouse_id || ""));
       }
@@ -1096,6 +1102,11 @@ export default function OzonPage() {
                 ))}
                 </select>
               </label>
+              {fboGeneralWarehouses.length > 0 && fboSellerWarehouses.length === 0 && (
+                <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 10, padding: 10, fontSize: 12 }}>
+                  Общий список Ozon видит {fboGeneralWarehouses.length} склад(а), но FBO API не возвращает ни одного seller warehouse. Это разные сущности — общий склад нельзя подставлять автоматически вместо FBO seller warehouse.
+                </div>
+              )}
               <div>
                 <button
                   type="button"
