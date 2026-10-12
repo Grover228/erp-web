@@ -1339,7 +1339,7 @@ export default function OzonPage() {
         ? fboTimeslots[Number(fboTimeslotIndex)]
         : null;
 
-    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение", "Коробки"];
+    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение", "Коробки", "Грузоместа", "Наклейки", "Готово"];
 
     return (
       <section style={{ ...panelStyle, padding: 18, maxWidth: 980, width: "100%", margin: "0 auto" }}>
@@ -1351,11 +1351,11 @@ export default function OzonPage() {
             </div>
           </div>
           <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
-            Шаг {fboStep} из 6
+            Шаг {fboStep} из 9
           </span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(6,minmax(90px,1fr))", gap: 6, marginTop: 16, overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(9,minmax(82px,1fr))", gap: 6, marginTop: 16, overflowX: "auto" }}>
           {stepNames.map((name, index) => {
             const step = index + 1;
             const active = step === fboStep;
