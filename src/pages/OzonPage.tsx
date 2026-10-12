@@ -46,6 +46,29 @@ type PeriodSummary = {
   unmatched: number;
 };
 
+type OzonStock = {
+  productId: string;
+  article: string;
+  name: string;
+  fboPresent: number;
+  fboReserved: number;
+  fboSku: string;
+  fboWarehouseIds: string[];
+  fbsPresent: number;
+  fbsReserved: number;
+  fbsSku: string;
+  totalPresent: number;
+  totalReserved: number;
+};
+
+type OzonStockSummary = {
+  products: number;
+  fboPresent: number;
+  fboReserved: number;
+  fbsPresent: number;
+  fbsReserved: number;
+};
+
 const inputStyle = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 12px" };
 
 function dateInput(date: Date) {
@@ -83,6 +106,11 @@ export default function OzonPage() {
   const [articleAnalytics, setArticleAnalytics] = useState<ArticleAnalytics[]>([]);
   const [analyticsSummary, setAnalyticsSummary] = useState<PeriodSummary | null>(null);
   const [operationCount, setOperationCount] = useState(0);
+  const [stocks, setStocks] = useState<OzonStock[]>([]);
+  const [stockSummary, setStockSummary] = useState<OzonStockSummary | null>(null);
+  const [stocksLoading, setStocksLoading] = useState(false);
+  const [stocksError, setStocksError] = useState("");
+  const [stocksFetchedAt, setStocksFetchedAt] = useState("");
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -99,6 +127,7 @@ export default function OzonPage() {
   const summary = analyticsSummary || localSummary;
 
   useEffect(() => { void loadData(); }, [from, to]);
+  useEffect(() => { void loadStocks(); }, []);
 
   async function loadData() {
     try {
@@ -131,6 +160,23 @@ export default function OzonPage() {
     }
   }
 
+  async function loadStocks() {
+    try {
+      setStocksLoading(true);
+      setStocksError("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-stocks", { body: {} });
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(data.error);
+      setStocks((data?.stocks as OzonStock[]) || []);
+      setStockSummary((data?.summary as OzonStockSummary) || null);
+      setStocksFetchedAt(String(data?.fetchedAt || ""));
+    } catch (cause) {
+      setStocksError(cause instanceof Error ? cause.message : "Не удалось загрузить остатки Ozon");
+    } finally {
+      setStocksLoading(false);
+    }
+  }
+
   async function syncOzon() {
     try {
       setSyncing(true);
@@ -140,7 +186,7 @@ export default function OzonPage() {
       if (invokeError) throw invokeError;
       if (data?.error) throw new Error(data.error);
       setMessage(`Готово: получено ${data?.loaded || 0}, обновлено ${data?.updated || 0} операций.`);
-      await loadData();
+      await Promise.all([loadData(), loadStocks()]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Ошибка синхронизации с Ozon");
     } finally {
@@ -191,6 +237,66 @@ export default function OzonPage() {
         <SummaryCard title="Прибыль до налога" value={money(summary.profit)} color={summary.profit >= 0 ? "#15803d" : "#b91c1c"} />
         <SummaryCard title="Не сопоставлено" value={String(summary.unmatched)} color={summary.unmatched ? "#c2410c" : "#15803d"} />
       </div>
+
+      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
+        <div style={{ padding: 18, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 850, fontSize: 18 }}>Остатки Ozon</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+              Только чтение из Ozon API. Остатки ERP пока не изменяются.
+              {stocksFetchedAt ? ` Обновлено: ${new Date(stocksFetchedAt).toLocaleString("ru-RU")}.` : ""}
+            </div>
+          </div>
+          <button
+            disabled={stocksLoading}
+            onClick={() => void loadStocks()}
+            style={{ border: 0, background: stocksLoading ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 11, padding: "10px 14px", fontWeight: 800, cursor: stocksLoading ? "wait" : "pointer" }}
+          >
+            {stocksLoading ? "Обновляю…" : "Обновить остатки"}
+          </button>
+        </div>
+
+        {stocksError && <div style={{ margin: "0 18px 14px", color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{stocksError}</div>}
+
+        <div style={{ padding: "0 18px 18px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
+          <SummaryCard title="FBO в наличии" value={String(stockSummary?.fboPresent || 0)} color="#005bff" />
+          <SummaryCard title="FBO в резерве" value={String(stockSummary?.fboReserved || 0)} />
+          <SummaryCard title="FBS в наличии" value={String(stockSummary?.fbsPresent || 0)} />
+          <SummaryCard title="FBS в резерве" value={String(stockSummary?.fbsReserved || 0)} />
+          <SummaryCard title="Позиций с остатком" value={String(stockSummary?.products || 0)} />
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+                {["Артикул", "Товар", "FBO в наличии", "FBO резерв", "FBS в наличии", "FBS резерв", "Всего в наличии"].map((title) => (
+                  <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {!stocksLoading && stocks.filter((row) => row.totalPresent > 0 || row.totalReserved > 0).map((row) => (
+                <tr key={row.productId || row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                  <td style={{ padding: 12, fontWeight: 800, whiteSpace: "nowrap" }}>{row.article || "—"}</td>
+                  <td style={{ padding: 12 }}>{row.name || "—"}</td>
+                  <td style={{ padding: 12, fontWeight: 800, color: row.fboPresent > 0 ? "#005bff" : "#64748b" }}>{row.fboPresent}</td>
+                  <td style={{ padding: 12 }}>{row.fboReserved}</td>
+                  <td style={{ padding: 12 }}>{row.fbsPresent}</td>
+                  <td style={{ padding: 12 }}>{row.fbsReserved}</td>
+                  <td style={{ padding: 12, fontWeight: 800 }}>{row.totalPresent}</td>
+                </tr>
+              ))}
+              {!stocksLoading && !stocksError && stocks.filter((row) => row.totalPresent > 0 || row.totalReserved > 0).length === 0 && (
+                <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Ozon не вернул товаров с остатком.</td></tr>
+              )}
+              {stocksLoading && (
+                <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Загружаю актуальные остатки Ozon…</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
         <div style={{ padding: 18, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
