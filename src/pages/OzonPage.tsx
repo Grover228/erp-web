@@ -109,6 +109,13 @@ type ComparisonRow = {
 const inputStyle = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 12px" };
 const panelStyle = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18 };
 
+const DEFAULT_FBO_DROPOFF = {
+  warehouse_id: 1020005011665480,
+  name: "САРАНСК_ДО_ВОСТОЧНОЕ_ШОССЕ",
+  warehouse_type: "WAREHOUSE_TYPE_SORTING_CENTER",
+  address: "Россия, Республика Мордовия, Саранск, Северо-Восточное шоссе, 15Б/5",
+};
+
 function dateInput(date: Date) {
   return date.toISOString().slice(0, 10);
 }
@@ -191,8 +198,8 @@ export default function OzonPage() {
   const [fboSellerWarehouseId, setFboSellerWarehouseId] = useState("");
   const [fboGeneralWarehouses, setFboGeneralWarehouses] = useState<any[]>([]);
   const [fboDropoffSearch, setFboDropoffSearch] = useState("");
-  const [fboDropoffPoints, setFboDropoffPoints] = useState<any[]>([]);
-  const [fboDropoffWarehouseId, setFboDropoffWarehouseId] = useState("");
+  const [fboDropoffPoints, setFboDropoffPoints] = useState<any[]>([DEFAULT_FBO_DROPOFF]);
+  const [fboDropoffWarehouseId, setFboDropoffWarehouseId] = useState(String(DEFAULT_FBO_DROPOFF.warehouse_id));
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -431,9 +438,15 @@ export default function OzonPage() {
             warehouse_id: row.drop_off_warehouse_id,
             name: row.drop_off_warehouse_name,
             warehouse_type: row.drop_off_warehouse_type || "",
-            address: "",
+            address:
+              Number(row.drop_off_warehouse_id) === DEFAULT_FBO_DROPOFF.warehouse_id
+                ? DEFAULT_FBO_DROPOFF.address
+                : "",
           }]);
         }
+      } else {
+        setFboDropoffWarehouseId(String(DEFAULT_FBO_DROPOFF.warehouse_id));
+        setFboDropoffPoints([DEFAULT_FBO_DROPOFF]);
       }
       setFboDraftInfo(
         row.ozon_response && typeof row.ozon_response === "object"
@@ -494,8 +507,13 @@ export default function OzonPage() {
       if (invokeError) throw invokeError;
 
       const rows = Array.isArray(data?.data?.search) ? data.data.search : [];
-      setFboDropoffPoints(rows);
-      if (!rows.length) setFboMessage("По этому запросу Ozon не нашёл точек отгрузки.");
+      setFboDropoffPoints(rows.length ? rows : [DEFAULT_FBO_DROPOFF]);
+      if (rows.length) {
+        setFboDropoffWarehouseId(String(rows[0]?.warehouse_id || ""));
+      } else {
+        setFboDropoffWarehouseId(String(DEFAULT_FBO_DROPOFF.warehouse_id));
+        setFboMessage("По этому запросу Ozon не нашёл точек отгрузки. Оставлена точка по умолчанию в Саранске.");
+      }
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось найти точки отгрузки Ozon");
     } finally {
