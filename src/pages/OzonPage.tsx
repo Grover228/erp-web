@@ -181,6 +181,7 @@ export default function OzonPage() {
   const [fboError, setFboError] = useState("");
   const [fboMessage, setFboMessage] = useState("");
   const [fboWarehouseId, setFboWarehouseId] = useState("");
+  const [fboManualStorage, setFboManualStorage] = useState(false);
   const [fboTimeslotFrom, setFboTimeslotFrom] = useState(dateInput(new Date()));
   const [fboTimeslotTo, setFboTimeslotTo] = useState(dateInput(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)));
   const [fboTimeslots, setFboTimeslots] = useState<any[]>([]);
