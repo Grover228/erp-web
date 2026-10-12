@@ -1303,7 +1303,7 @@ export default function OzonPage() {
         ? fboTimeslots[Number(fboTimeslotIndex)]
         : null;
 
-    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение"];
+    const stepNames = ["Кластер", "Точка сдачи", "Черновик", "Таймслот", "Подтверждение", "Коробки"];
 
     return (
       <section style={{ ...panelStyle, padding: 18, maxWidth: 980, width: "100%", margin: "0 auto" }}>
@@ -1315,11 +1315,11 @@ export default function OzonPage() {
             </div>
           </div>
           <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
-            Шаг {fboStep} из 5
+            Шаг {fboStep} из 6
           </span>
         </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(90px,1fr))", gap: 6, marginTop: 16, overflowX: "auto" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6,minmax(90px,1fr))", gap: 6, marginTop: 16, overflowX: "auto" }}>
           {stepNames.map((name, index) => {
             const step = index + 1;
             const active = step === fboStep;
@@ -1508,6 +1508,154 @@ export default function OzonPage() {
                   {fboLoading ? "Создаю…" : "Создать поставку в Ozon"}
                 </button>
               </div>
+            </div>
+          )}
+
+          {fboStep === 6 && (
+            <div style={{ display: "grid", gap: 16 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Коробки и наклейки</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>
+                  Заявка <b>№{fboOrderId || "—"}</b>. Один SKU в одной коробке. Всего нужно распределить <b>42 шт.</b>
+                </div>
+              </div>
+
+              {!fboSupplyId && (
+                <button
+                  type="button"
+                  onClick={() => fboOrderId && void loadCreatedFboOrder(fboOrderId)}
+                  disabled={!fboOrderId || fboLoading}
+                  style={{ justifySelf: "start", border: 0, background: "#005bff", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
+                >
+                  {fboLoading ? "Загружаю…" : "Загрузить данные поставки"}
+                </button>
+              )}
+
+              {fboSupplyId && (
+                <>
+                  <div style={{ display: "grid", gap: 10 }}>
+                    {fboBoxes.map((quantity, index) => (
+                      <div key={index} style={{ display: "grid", gridTemplateColumns: "auto minmax(120px,1fr) auto", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+                        <div style={{ fontWeight: 900 }}>Коробка {index + 1}</div>
+                        <input
+                          type="number"
+                          min={1}
+                          max={42}
+                          value={quantity}
+                          onChange={(event) => {
+                            const next = [...fboBoxes];
+                            next[index] = Math.max(0, Number(event.target.value || 0));
+                            setFboBoxes(next);
+                            setFboCargoResult(null);
+                            setFboCargoOperationId("");
+                            setFboCargoes([]);
+                            setFboLabelOperationId("");
+                            setFboLabelUrl("");
+                          }}
+                          style={inputStyle}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (fboBoxes.length <= 1) return;
+                            setFboBoxes(fboBoxes.filter((_, rowIndex) => rowIndex !== index));
+                          }}
+                          disabled={fboBoxes.length <= 1}
+                          style={{ border: "1px solid #fecaca", background: "#fff", color: "#b91c1c", borderRadius: 9, padding: "8px 10px", fontWeight: 800 }}
+                        >
+                          Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      onClick={() => setFboBoxes([...fboBoxes, 0])}
+                      disabled={fboBoxes.length >= 30 || Boolean(fboCargoOperationId)}
+                      style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "9px 12px", fontWeight: 800 }}
+                    >
+                      + Добавить коробку
+                    </button>
+                    <div style={{ fontWeight: 900 }}>
+                      Итого: {fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0)} / 42 шт.
+                    </div>
+                  </div>
+
+                  {!fboCargoOperationId && (
+                    <button
+                      type="button"
+                      onClick={() => void submitFboCargoes()}
+                      disabled={
+                        fboLoading ||
+                        fboBoxes.some((value) => Number(value || 0) <= 0) ||
+                        fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== 42
+                      }
+                      style={{
+                        justifySelf: "start",
+                        border: 0,
+                        background:
+                          !fboLoading &&
+                          !fboBoxes.some((value) => Number(value || 0) <= 0) &&
+                          fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === 42
+                            ? "#005bff"
+                            : "#94a3b8",
+                        color: "#fff",
+                        borderRadius: 11,
+                        padding: "11px 17px",
+                        fontWeight: 900,
+                      }}
+                    >
+                      Передать коробки в Ozon
+                    </button>
+                  )}
+
+                  {fboCargoOperationId && fboCargoes.length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void checkFboCargoes()}
+                      disabled={fboLoading}
+                      style={{ justifySelf: "start", border: 0, background: "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
+                    >
+                      {fboLoading ? "Проверяю…" : "Проверить регистрацию коробок"}
+                    </button>
+                  )}
+
+                  {fboCargoes.length > 0 && !fboLabelOperationId && (
+                    <button
+                      type="button"
+                      onClick={() => void createFboCargoLabels()}
+                      disabled={fboLoading}
+                      style={{ justifySelf: "start", border: 0, background: "#005bff", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
+                    >
+                      Сформировать наклейки PDF
+                    </button>
+                  )}
+
+                  {fboLabelOperationId && !fboLabelUrl && (
+                    <button
+                      type="button"
+                      onClick={() => void checkFboCargoLabels()}
+                      disabled={fboLoading}
+                      style={{ justifySelf: "start", border: 0, background: "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
+                    >
+                      {fboLoading ? "Проверяю…" : "Проверить PDF"}
+                    </button>
+                  )}
+
+                  {fboLabelUrl && (
+                    <a
+                      href={fboLabelUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ justifySelf: "start", display: "inline-block", background: "#16a34a", color: "#fff", textDecoration: "none", borderRadius: 11, padding: "12px 17px", fontWeight: 900 }}
+                    >
+                      Открыть PDF с наклейками
+                    </a>
+                  )}
+                </>
+              )}
             </div>
           )}
         </div>
