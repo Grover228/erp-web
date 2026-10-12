@@ -140,6 +140,7 @@ export default function OzonPage() {
   const [stocksLoading, setStocksLoading] = useState(false);
   const [erpLoading, setErpLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [reportCreating, setReportCreating] = useState(false);
   const [error, setError] = useState("");
   const [stocksError, setStocksError] = useState("");
   const [message, setMessage] = useState("");
@@ -315,6 +316,25 @@ export default function OzonPage() {
     }
   }
 
+  async function createErpReport() {
+    try {
+      setReportCreating(true);
+      setError("");
+      setMessage("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-erp-report", { body: { from, to } });
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(data.error);
+      setMessage(
+        `Отчёт ERP сформирован: ${data.orderNumber} → ${data.shipmentNumber}, ${number(Number(data.totalQuantity || 0))} шт., ${money(Number(data.totalAmount || 0))}.`
+      );
+      await Promise.all([loadData(), loadErpStock()]);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось сформировать отчёт для ERP");
+    } finally {
+      setReportCreating(false);
+    }
+  }
+
   async function syncOzon() {
     try {
       setSyncing(true);
@@ -354,12 +374,21 @@ export default function OzonPage() {
               <input type="date" value={to} min={from} max={dateInput(today)} onChange={(event) => setTo(event.target.value)} style={inputStyle} />
             </label>
           </div>
-          <button disabled={syncing || !from || !to} onClick={syncOzon}
-            style={{ border: 0, background: syncing ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 800, cursor: syncing ? "wait" : "pointer" }}>
-            {syncing ? "Обновляю…" : "Обновить данные"}
-          </button>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <button disabled={syncing || !from || !to} onClick={syncOzon}
+              style={{ border: 0, background: syncing ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 800, cursor: syncing ? "wait" : "pointer" }}>
+              {syncing ? "Загружаю…" : "Загрузить данные Ozon"}
+            </button>
+            <button disabled={reportCreating || syncing || loading || !from || !to} onClick={createErpReport}
+              style={{ border: 0, background: reportCreating ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 850, cursor: reportCreating ? "wait" : "pointer" }}>
+              {reportCreating ? "Формирую…" : "Сформировать отчёт для ERP"}
+            </button>
+          </div>
         </div>
         {error && <div style={{ marginTop: 14, color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{error}</div>}
+        <div style={{ marginTop: 12, color: "#64748b", fontSize: 12 }}>
+          Сначала загрузите данные Ozon за выбранный период и проверьте цифры. «Сформировать отчёт для ERP» создаёт заказ, отгрузку и списание по текущей складской схеме. Пересекающийся период повторно провести нельзя.
+        </div>
         {message && <div style={{ marginTop: 14, color: "#166534", background: "#f0fdf4", padding: 12, borderRadius: 10 }}>{message}</div>}
       </section>
     );
