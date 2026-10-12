@@ -9,6 +9,7 @@ import ProcurementStatusesPage from "./pages/ProcurementStatusesPage";
 import WarehouseStatusesPage from "./pages/WarehouseStatusesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import FinancePage from "./pages/FinancePage";
+import OzonPage from "./pages/OzonPage";
 import WarehousePage from "./pages/WarehousePage";
 import StatusesDirectory from "./directories/StatusesDirectory";
 import VariantsDirectory from "./directories/VariantsDirectory";
@@ -30,6 +31,7 @@ type Screen =
   | "production-planning"
   | "warehouse"
   | "finance"
+  | "ozon"
   | "scanner"
   | "valera"
   | "employee-home"
@@ -115,6 +117,7 @@ function App() {
     isAdmin || isManager || currentEmployee?.can_use_scanner !== false;
   const canViewWarehouse = isAdmin || isManager;
   const canViewFinance = isAdmin;
+  const canViewOzon = isAdmin;
 
   const menuItems = [
     canViewDashboard && { key: "dashboard" as Screen, label: "Дашборд 📊" },
@@ -128,6 +131,7 @@ function App() {
     },
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
+    canViewOzon && { key: "ozon" as Screen, label: "Ozon 🟦" },
     { key: "valera" as Screen, label: "Валера ✦" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
     canManageDirectories && {
@@ -152,6 +156,8 @@ function App() {
       ? "Склад"
       : currentScreen === "finance"
       ? "Финансы"
+      : currentScreen === "ozon"
+      ? "Ozon"
       : currentScreen === "directories"
       ? "Справочники"
       : currentScreen === "directory-employees"
@@ -199,6 +205,8 @@ function App() {
       ? "Закупки, поступления, остатки и отгрузки"
       : currentScreen === "finance"
       ? "Счета, платежи и движение средств"
+      : currentScreen === "ozon"
+      ? "Начисления, удержания, себестоимость и прибыль"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -326,6 +334,11 @@ function App() {
       return;
     }
 
+    if (currentScreen === "ozon" && !canViewOzon) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
     if (
       (currentScreen === "directories" ||
         currentScreen === "directory-employees" ||
@@ -356,6 +369,7 @@ function App() {
     canManageProduction,
     canViewWarehouse,
     canViewFinance,
+    canViewOzon,
     canManageDirectories,
   ]);
 
@@ -534,7 +548,11 @@ function App() {
       return;
     }
 
-    if (currentScreen === "warehouse" || currentScreen === "finance") {
+    if (
+      currentScreen === "warehouse" ||
+      currentScreen === "finance" ||
+      currentScreen === "ozon"
+    ) {
       setCurrentScreen(getDefaultScreen());
       return;
     }
@@ -777,6 +795,12 @@ function App() {
       if (!canViewFinance) return renderAccessDenied();
 
       return <FinancePage />;
+    }
+
+    if (currentScreen === "ozon") {
+      if (!canViewOzon) return renderAccessDenied();
+
+      return <OzonPage />;
     }
 
     if (currentScreen === "directories") {
@@ -1041,6 +1065,7 @@ function App() {
                   (item.key === "warehouse" &&
                     currentScreen === "warehouse") ||
                   (item.key === "finance" && currentScreen === "finance") ||
+                  (item.key === "ozon" && currentScreen === "ozon") ||
                   (item.key === "valera" && currentScreen === "valera") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
@@ -1082,6 +1107,9 @@ function App() {
                           break;
                         case "finance":
                           setCurrentScreen("finance");
+                          break;
+                        case "ozon":
+                          setCurrentScreen("ozon");
                           break;
                         case "valera":
                           setCurrentScreen("valera");
