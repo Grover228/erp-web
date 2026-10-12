@@ -34,29 +34,30 @@ Deno.serve(async (req: Request) => {
     if (boxes.length > 30) throw new Error("Ozon разрешает не больше 30 коробок.");
 
     const cargoes = boxes.map((box: any, index: number) => {
-      const quantity = Math.max(0, Number(box?.quantity || 0));
-      const item = box?.item || {};
-      const barcode = String(item?.barcode || "");
-      const offerId = String(item?.offer_id || "");
-      const quant = Math.max(1, Number(item?.quant || 1));
+      const items = Array.isArray(box?.items) ? box.items : [];
+      if (!items.length) throw new Error(`Коробка ${index + 1} пустая.`);
 
-      if (!quantity) throw new Error(`В коробке ${index + 1} должно быть больше 0 штук.`);
-      if (!barcode && !offerId) {
-        throw new Error(`Для коробки ${index + 1} не удалось определить товар.`);
+      const normalizedItems = items
+        .map((item: any) => ({
+          barcode: String(item?.barcode || ""),
+          offer_id: String(item?.offer_id || ""),
+          quant: Math.max(1, Number(item?.quant || 1)),
+          quantity: Math.max(0, Number(item?.quantity || 0)),
+        }))
+        .filter((item: any) => item.quantity > 0);
+
+      if (!normalizedItems.length) throw new Error(`Коробка ${index + 1} пустая.`);
+      for (const item of normalizedItems) {
+        if (!item.barcode && !item.offer_id) {
+          throw new Error(`Для одного из товаров в коробке ${index + 1} не удалось определить идентификатор.`);
+        }
       }
 
       return {
         key: `box-${String(index + 1).padStart(3, "0")}`,
         value: {
           type: "BOX",
-          items: [
-            {
-              barcode,
-              offer_id: offerId,
-              quant,
-              quantity,
-            },
-          ],
+          items: normalizedItems,
         },
       };
     });
