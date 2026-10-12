@@ -1230,53 +1230,37 @@ export default function OzonPage() {
       setFboError("");
 
       const internalOrderIdInput = Number(orderId || 0);
-      if (!internalOrderIdInput) throw new Error("Не указан order_id созданной заявки Ozon.");
+      if (!internalOrderIdInput) throw new Error("Не указан внутренний order_id Ozon.");
 
-      let payload: any = null;
-      let usedInternalLookup = false;
-
-      const internalResult = await supabase.functions.invoke("ozon-fbo-supply", {
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-order", {
         body: {
-          action: "order_info",
           orderId: internalOrderIdInput,
+          draftId: fboDraftId,
         },
       });
 
-      if (!internalResult.error && !internalResult.data?.error && internalResult.data?.data) {
-        payload = internalResult.data.data;
-        usedInternalLookup = true;
-      } else {
-        const fallbackResult = await supabase.functions.invoke("ozon-fbo-supply", {
-          body: {
-            action: "resolve_order_number",
-            orderNumber: String(internalOrderIdInput),
-            draftId: fboDraftId,
-          },
-        });
-
-        if (fallbackResult.data?.error) throw new Error(fallbackResult.data.error);
-        if (fallbackResult.error) {
-          const context = (fallbackResult.error as any)?.context;
-          if (context && typeof context.json === "function") {
-            try {
-              const errorPayload = await context.json();
-              if (errorPayload?.error) throw new Error(errorPayload.error);
-            } catch (contextError) {
-              if (contextError instanceof Error && contextError.message !== fallbackResult.error.message) {
-                throw contextError;
-              }
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) {
+        const context = (invokeError as any)?.context;
+        if (context && typeof context.json === "function") {
+          try {
+            const errorPayload = await context.json();
+            if (errorPayload?.error) throw new Error(errorPayload.error);
+          } catch (contextError) {
+            if (contextError instanceof Error && contextError.message !== invokeError.message) {
+              throw contextError;
             }
           }
-          throw fallbackResult.error;
         }
-        payload = fallbackResult.data?.data || null;
+        throw invokeError;
       }
 
+      const payload = data?.data || null;
       const order = payload?.order || null;
       const internalOrderId = Number(payload?.order_id || order?.order_id || internalOrderIdInput || 0);
       const supplyId = Number(payload?.supply_id || payload?.supply?.supply_id || 0);
       const items = Array.isArray(payload?.items) ? payload.items : [];
-      const visibleOrderNumber = String(order?.order_number || supplyId || internalOrderId || "");
+      const visibleOrderNumber = String(payload?.order_number || order?.order_number || supplyId || internalOrderId || "");
 
       if (!internalOrderId) throw new Error("Ozon не вернул внутренний order_id заявки.");
       if (!supplyId) throw new Error("Ozon не вернул supply_id для созданной поставки.");
@@ -1298,7 +1282,7 @@ export default function OzonPage() {
         boxes: [totalQuantity],
         supplyItems: items,
         orderNumber: visibleOrderNumber,
-        internalOrderLookup: usedInternalLookup,
+        internalOrderLookup: true,
       });
 
       setFboMessage(
