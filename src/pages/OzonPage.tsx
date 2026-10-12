@@ -876,7 +876,20 @@ export default function OzonPage() {
       });
 
       if (data?.error) throw new Error(data.error);
-      if (invokeError) throw invokeError;
+      if (invokeError) {
+        const context = (invokeError as any)?.context;
+        if (context && typeof context.json === "function") {
+          try {
+            const payload = await context.json();
+            if (payload?.error) throw new Error(payload.error);
+          } catch (contextError) {
+            if (contextError instanceof Error && contextError.message !== invokeError.message) {
+              throw contextError;
+            }
+          }
+        }
+        throw invokeError;
+      }
 
       const internalOrderId = Number(data?.data?.order_id || 0);
       const supplyId = Number(data?.data?.supply_id || 0);
