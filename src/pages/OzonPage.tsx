@@ -87,6 +87,8 @@ type SavedFboDraft = {
   seller_warehouse_id?: number | null;
   created_at: string;
   updated_at: string;
+  order_id?: number | null;
+  supply_id?: number | null;
 };
 
 type FboCluster = {
@@ -201,6 +203,11 @@ export default function OzonPage() {
   const [fboDropoffSearch, setFboDropoffSearch] = useState("");
   const [fboDropoffPoints, setFboDropoffPoints] = useState<any[]>([DEFAULT_FBO_DROPOFF]);
   const [fboDropoffWarehouseId, setFboDropoffWarehouseId] = useState(String(DEFAULT_FBO_DROPOFF.warehouse_id));
+  const [fboOrderId, setFboOrderId] = useState<number | null>(null);
+  const [fboSupplyId, setFboSupplyId] = useState<number | null>(null);
+  const [fboSupplyItem, setFboSupplyItem] = useState<any>(null);
+  const [fboBoxes, setFboBoxes] = useState<number[]>([42]);
+  const [fboCargoResult, setFboCargoResult] = useState<any>(null);
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -412,7 +419,7 @@ export default function OzonPage() {
     try {
       const { data, error: loadError } = await supabase
         .from("ozon_fbo_drafts")
-        .select("draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,supply_type,drop_off_warehouse_id,drop_off_warehouse_name,drop_off_warehouse_type,seller_warehouse_id,created_at,updated_at")
+        .select("draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,supply_type,drop_off_warehouse_id,drop_off_warehouse_name,drop_off_warehouse_type,seller_warehouse_id,order_id,supply_id,created_at,updated_at")
         .eq("supply_type", "CROSSDOCK")
         .order("created_at", { ascending: false })
         .limit(1)
@@ -458,8 +465,15 @@ export default function OzonPage() {
       setFboMessage(
         `Восстановлен сохранённый черновик №${row.draft_id}: ${row.offer_id || "SKU " + row.sku}, ${number(Number(row.quantity || 0))} шт.`,
       );
-      if (String(row.status || "") === "SUCCESS") setFboStep(4);
-      else setFboStep(3);
+      if (row.order_id) {
+        setFboOrderId(Number(row.order_id));
+        if (row.supply_id) setFboSupplyId(Number(row.supply_id));
+        setFboStep(6);
+      } else if (String(row.status || "") === "SUCCESS") {
+        setFboStep(4);
+      } else {
+        setFboStep(3);
+      }
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось восстановить сохранённый черновик");
     }
