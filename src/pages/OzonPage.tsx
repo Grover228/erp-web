@@ -939,10 +939,117 @@ export default function OzonPage() {
       if (data?.error) throw new Error(data.error);
       if (invokeError) throw invokeError;
 
-      setFboCargoResult(data?.data || data);
-      setFboMessage(`Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, 42 шт.`);
+      const result = data?.data || data;
+      setFboCargoResult(result);
+      const operationId = String(result?.operation_id || "");
+      setFboCargoOperationId(operationId);
+      setFboMessage(
+        operationId
+          ? `Коробки отправлены в Ozon. Операция ${operationId} формируется — проверьте статус.`
+          : `Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, 42 шт.`,
+      );
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось передать коробки в Ozon");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+
+  async function checkFboCargoes() {
+    if (!fboCargoOperationId) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "cargoes_create_info", operationId: fboCargoOperationId },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const payload = data?.data || {};
+      const status = String(payload?.status || "");
+      const cargoes = Array.isArray(payload?.result?.cargoes) ? payload.result.cargoes : [];
+
+      if (status === "SUCCESS") {
+        setFboCargoes(cargoes);
+        setFboMessage(`Коробки зарегистрированы в Ozon: ${cargoes.length}. Теперь можно сформировать PDF-этикетки.`);
+      } else if (status === "FAILED") {
+        const reasons = payload?.errors?.error_reasons;
+        throw new Error(Array.isArray(reasons) && reasons.length ? reasons.join(", ") : "Ozon не зарегистрировал грузоместа.");
+      } else {
+        setFboMessage("Ozon ещё формирует грузоместа. Проверьте статус через несколько секунд.");
+      }
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось проверить грузоместа");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function createFboCargoLabels() {
+    if (!fboSupplyId || !fboCargoes.length) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+      setFboLabelUrl("");
+
+      const cargoIds = fboCargoes
+        .map((row: any) => Number(row?.value?.cargo_id || row?.cargo_id || 0))
+        .filter((value: number) => value > 0);
+
+      if (!cargoIds.length) throw new Error("Не удалось получить cargo_id коробок.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "cargo_labels_create",
+          supplyId: fboSupplyId,
+          cargoIds,
+        },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const operationId = String(data?.data?.operation_id || "");
+      if (!operationId) throw new Error("Ozon не вернул operation_id для этикеток.");
+
+      setFboLabelOperationId(operationId);
+      setFboMessage("Ozon формирует PDF с этикетками. Нажмите «Проверить PDF» через несколько секунд.");
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось запустить генерацию этикеток");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function checkFboCargoLabels() {
+    if (!fboLabelOperationId) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "cargo_labels_get", operationId: fboLabelOperationId },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const payload = data?.data || {};
+      const status = String(payload?.status || "");
+      const fileUrl = String(payload?.result?.file_url || "");
+
+      if (status === "SUCCESS" && fileUrl) {
+        setFboLabelUrl(fileUrl);
+        setFboMessage("PDF с этикетками готов.");
+      } else if (status === "FAILED") {
+        const reasons = payload?.errors?.error_reasons;
+        throw new Error(Array.isArray(reasons) && reasons.length ? reasons.join(", ") : "Ozon не сформировал этикетки.");
+      } else {
+        setFboMessage("PDF ещё формируется. Проверьте ещё раз через несколько секунд.");
+      }
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось получить PDF с этикетками");
     } finally {
       setFboLoading(false);
     }
