@@ -981,9 +981,10 @@ export default function OzonPage() {
       setFboCargoOperationId(operationId);
       setFboMessage(
         operationId
-          ? `Коробки отправлены в Ozon. Операция ${operationId} формируется — проверьте статус.`
+          ? `Коробки отправлены в Ozon. Операция ${operationId} формируется.`
           : `Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, 42 шт.`,
       );
+      setFboStep(7);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось передать коробки в Ozon");
     } finally {
@@ -1010,7 +1011,8 @@ export default function OzonPage() {
 
       if (status === "SUCCESS") {
         setFboCargoes(cargoes);
-        setFboMessage(`Коробки зарегистрированы в Ozon: ${cargoes.length}. Теперь можно сформировать PDF-этикетки.`);
+        setFboMessage(`Коробки зарегистрированы в Ozon: ${cargoes.length}.`);
+        setFboStep(8);
       } else if (status === "FAILED") {
         const reasons = payload?.errors?.error_reasons;
         throw new Error(Array.isArray(reasons) && reasons.length ? reasons.join(", ") : "Ozon не зарегистрировал грузоместа.");
@@ -1051,7 +1053,7 @@ export default function OzonPage() {
       if (!operationId) throw new Error("Ozon не вернул operation_id для этикеток.");
 
       setFboLabelOperationId(operationId);
-      setFboMessage("Ozon формирует PDF с этикетками. Нажмите «Проверить PDF» через несколько секунд.");
+      setFboMessage("Ozon формирует PDF с этикетками.");
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось запустить генерацию этикеток");
     } finally {
@@ -1078,6 +1080,7 @@ export default function OzonPage() {
       if (status === "SUCCESS" && fileUrl) {
         setFboLabelUrl(fileUrl);
         setFboMessage("PDF с этикетками готов.");
+        setFboStep(9);
       } else if (status === "FAILED") {
         const reasons = payload?.errors?.error_reasons;
         throw new Error(Array.isArray(reasons) && reasons.length ? reasons.join(", ") : "Ozon не сформировал этикетки.");
