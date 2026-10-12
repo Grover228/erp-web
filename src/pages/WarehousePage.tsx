@@ -3,8 +3,9 @@ import PurchasesPage from "./PurchasesPage";
 import ReceiptsPage from "./warehouse/ReceiptsPage";
 import StockPage from "./warehouse/StockPage";
 import SalesPage from "./warehouse/SalesPage";
+import TransfersPage from "./warehouse/TransfersPage";
 
-type WarehouseTab = "purchases" | "receipts" | "stock" | "shipments";
+type WarehouseTab = "purchases" | "receipts" | "stock" | "transfers" | "shipments";
 
 const tabs: {
   key: WarehouseTab;
@@ -29,6 +30,12 @@ const tabs: {
     title: "Остатки",
     subtitle: "Текущие складские остатки",
     icon: "📊",
+  },
+  {
+    key: "transfers",
+    title: "Перемещения",
+    subtitle: "Внутренние движения между складами",
+    icon: "↔️",
   },
   {
     key: "shipments",
@@ -67,6 +74,8 @@ export default function WarehousePage() {
         {activeTab === "receipts" && <ReceiptsPage />}
 
         {activeTab === "stock" && <StockPage />}
+
+        {activeTab === "transfers" && <TransfersPage />}
 
         {activeTab === "shipments" && <SalesPage />}
       </div>
