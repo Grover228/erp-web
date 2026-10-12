@@ -170,6 +170,7 @@ export default function OzonPage() {
   const [fboClusterId, setFboClusterId] = useState("");
   const [fboLoading, setFboLoading] = useState(false);
   const [fboDraftId, setFboDraftId] = useState<number | null>(null);
+  const [fboResolvedSku, setFboResolvedSku] = useState<number | null>(null);
   const [fboDraftInfo, setFboDraftInfo] = useState<any>(null);
   const [fboDiagnostics, setFboDiagnostics] = useState<string[]>([]);
   const [fboError, setFboError] = useState("");
@@ -394,6 +395,7 @@ export default function OzonPage() {
       if (!row) return;
 
       setFboDraftId(Number(row.draft_id));
+      setFboResolvedSku(Number(row.sku || 0) || null);
       setFboClusterId(String(row.macrolocal_cluster_id));
       setFboDraftInfo(
         row.ozon_response && typeof row.ozon_response === "object"
@@ -488,6 +490,7 @@ export default function OzonPage() {
       setFboError("");
       setFboMessage("");
       setFboDraftId(null);
+      setFboResolvedSku(null);
       setFboDraftInfo(null);
       setFboDiagnostics([]);
 
@@ -498,7 +501,6 @@ export default function OzonPage() {
         body: {
           action: "create_direct_draft",
           macrolocalClusterId: clusterId,
-          sku: 2492278688,
           quantity: 42,
           offerId: "bini-black-56",
         },
@@ -508,6 +510,7 @@ export default function OzonPage() {
       if (invokeError) throw invokeError;
 
       const draftId = Number(data?.data?.draft_id || 0);
+      const resolvedSku = Number(data?.resolvedSku || 0);
       const errors = data?.data?.errors || [];
       if (errors.length) {
         throw new Error(
@@ -518,6 +521,7 @@ export default function OzonPage() {
       if (!draftId) throw new Error("Ozon не вернул draft_id.");
 
       setFboDraftId(draftId);
+      setFboResolvedSku(resolvedSku || null);
       setFboDraftInfo({ status: "CREATED" });
       setFboDiagnostics([]);
       setFboMessage(
@@ -804,7 +808,7 @@ export default function OzonPage() {
             <div>
               <div style={{ fontWeight: 900, fontSize: 20 }}>Тестовая поставка FBO</div>
               <div style={{ color: "#64748b", fontSize: 13, marginTop: 5 }}>
-                Товар: <b>bini-black-56</b> · Ozon SKU <b>2492278688</b> · количество <b>42 шт.</b>
+                Товар: <b>bini-black-56</b> · FBO SKU <b>{fboResolvedSku || "определится при создании"}</b> · количество <b>42 шт.</b>
               </div>
             </div>
             <span style={{ border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
