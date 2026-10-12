@@ -158,6 +158,7 @@ export default function OzonPage() {
   const [fboLoading, setFboLoading] = useState(false);
   const [fboDraftId, setFboDraftId] = useState<number | null>(null);
   const [fboDraftInfo, setFboDraftInfo] = useState<any>(null);
+  const [fboDiagnostics, setFboDiagnostics] = useState<string[]>([]);
   const [fboError, setFboError] = useState("");
   const [fboMessage, setFboMessage] = useState("");
 
@@ -402,6 +403,7 @@ export default function OzonPage() {
       setFboMessage("");
       setFboDraftId(null);
       setFboDraftInfo(null);
+      setFboDiagnostics([]);
 
       const clusterId = Number(fboClusterId);
       if (!clusterId) throw new Error("Выберите кластер Ozon.");
@@ -437,6 +439,7 @@ export default function OzonPage() {
       if (infoResult.data?.error) throw new Error(infoResult.data.error);
       if (infoResult.error) throw infoResult.error;
       setFboDraftInfo(infoResult.data?.data || null);
+      setFboDiagnostics(Array.isArray(infoResult.data?.diagnostics) ? infoResult.data.diagnostics : []);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось создать тестовый черновик FBO");
     } finally {
@@ -455,6 +458,7 @@ export default function OzonPage() {
       if (data?.error) throw new Error(data.error);
       if (invokeError) throw invokeError;
       setFboDraftInfo(data?.data || null);
+      setFboDiagnostics(Array.isArray(data?.diagnostics) ? data.diagnostics : []);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось обновить черновик");
     } finally {
@@ -772,6 +776,17 @@ export default function OzonPage() {
                 Обновить статус
               </button>
             </div>
+
+            {fboDiagnostics.length > 0 && (
+              <div style={{ marginTop: 14, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 12 }}>
+                <div style={{ fontWeight: 900, color: "#991b1b", marginBottom: 6 }}>Причина ответа Ozon</div>
+                {fboDiagnostics.map((reason, index) => (
+                  <div key={index} style={{ color: "#b91c1c", fontSize: 13, marginTop: index ? 5 : 0 }}>
+                    {reason}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {draftClusters.length > 0 && (
               <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
