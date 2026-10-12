@@ -477,23 +477,11 @@ export default function OzonPage() {
       if (!draftId) throw new Error("Ozon не вернул draft_id.");
 
       setFboDraftId(draftId);
-      setFboMessage(`Черновик №${draftId} создан: bini-black-56, 42 шт. Финальная заявка ещё не создана.`);
-
-      const infoResult = await supabase.functions.invoke("ozon-fbo-supply", {
-        body: { action: "draft_info", draftId },
-      });
-
-      if (infoResult.data?.error || infoResult.error) {
-        setFboDraftInfo({ status: "IN_PROGRESS" });
-        setFboDiagnostics([]);
-        setFboMessage(
-          `Черновик №${draftId} создан: bini-black-56, 42 шт. Ozon ещё рассчитывает варианты поставки. Обновите статус через несколько секунд.`,
-        );
-        return;
-      }
-
-      setFboDraftInfo(infoResult.data?.data || null);
-      setFboDiagnostics(Array.isArray(infoResult.data?.diagnostics) ? infoResult.data.diagnostics : []);
+      setFboDraftInfo({ status: "CREATED" });
+      setFboDiagnostics([]);
+      setFboMessage(
+        `Черновик №${draftId} создан: bini-black-56, 42 шт. Подождите 5–10 секунд и нажмите «Обновить статус» — сразу после создания Ozon ограничивает частоту запросов.`,
+      );
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось создать тестовый черновик FBO");
     } finally {
