@@ -866,8 +866,25 @@ export default function OzonPage() {
 
 
   async function loadCreatedFboOrder(orderId: number) {
+    let resolvedOrderId = String(orderId || "");
+
+    if (fboDraftId) {
+      const statusResult = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "create_supply_status", draftId: fboDraftId },
+      });
+      if (statusResult.data?.error) throw new Error(statusResult.data.error);
+      if (statusResult.error) throw statusResult.error;
+
+      const apiOrderId = String(statusResult.data?.orderId || "");
+      if (apiOrderId) resolvedOrderId = apiOrderId;
+    }
+
+    if (!resolvedOrderId) {
+      throw new Error("Ozon не вернул внутренний ID созданной заявки.");
+    }
+
     const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
-      body: { action: "order_info", orderId },
+      body: { action: "order_info", orderId: resolvedOrderId },
     });
     if (data?.error) throw new Error(data.error);
     if (invokeError) throw invokeError;
@@ -882,12 +899,12 @@ export default function OzonPage() {
     if (!supplyId) throw new Error("Ozon не вернул supply_id для созданной поставки.");
     if (!item) throw new Error("Ozon не вернул товарный состав поставки.");
 
-    setFboOrderId(orderId);
+    setFboOrderId(Number(resolvedOrderId));
     setFboSupplyId(supplyId);
     setFboSupplyItem(item);
     setFboBoxes([42]);
     setFboStep(6);
-    setFboMessage(`Заявка №${orderId} загружена. Теперь распределите 42 шт. по коробкам.`);
+    setFboMessage(`Заявка Ozon загружена. Теперь распределите 42 шт. по коробкам.`);
   }
 
   async function refreshCreatedFboSupply() {
