@@ -69,13 +69,49 @@ type Employee = {
   can_view_dashboard?: boolean | null;
 };
 
+const SCREEN_STORAGE_KEY = "erp:last-screen";
+
+function isScreen(value: string | null): value is Screen {
+  return value === "dashboard" ||
+    value === "production" ||
+    value === "production-planning" ||
+    value === "warehouse" ||
+    value === "finance" ||
+    value === "ozon" ||
+    value === "scanner" ||
+    value === "valera" ||
+    value === "employee-home" ||
+    value === "directories" ||
+    value === "directory-employees" ||
+    value === "directory-suppliers" ||
+    value === "directory-counterparties" ||
+    value === "directory-products" ||
+    value === "directory-resale-products" ||
+    value === "directory-assets" ||
+    value === "directory-materials" ||
+    value === "directory-consumables" ||
+    value === "directory-operations" ||
+    value === "directory-variants" ||
+    value === "directory-units" ||
+    value === "directory-statuses" ||
+    value === "procurement-statuses" ||
+    value === "warehouse-statuses";
+}
+
 function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
-  const [currentScreen, setCurrentScreen] = useState<Screen>(() =>
-    shouldOpenValera() ? "valera" : "dashboard"
-  );
+  const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
+    if (shouldOpenValera()) return "valera";
+
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(SCREEN_STORAGE_KEY);
+      if (isScreen(saved)) return saved;
+    }
+
+    return "dashboard";
+  });
   const [productionInitialTab, setProductionInitialTab] =
     useState<ProductionTab>("jobs");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -241,6 +277,27 @@ function App() {
 
   const userEmail = session?.user?.email || "";
   const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SCREEN_STORAGE_KEY, currentScreen);
+
+      if (currentScreen !== "valera") {
+        const url = new URL(window.location.href);
+        const hadValeraFlag =
+          url.searchParams.get("valera") === "1" ||
+          url.searchParams.get("assistant") === "valera" ||
+          url.hash === "#valera";
+
+        if (hadValeraFlag) {
+          url.searchParams.delete("valera");
+          url.searchParams.delete("assistant");
+          if (url.hash === "#valera") url.hash = "";
+          window.history.replaceState(null, "", url.toString());
+        }
+      }
+    }
+  }, [currentScreen]);
 
   useEffect(() => {
     document.body.style.overflow = menuOpen ? "hidden" : "auto";
