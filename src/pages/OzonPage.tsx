@@ -175,6 +175,12 @@ export default function OzonPage() {
   const [fboDiagnostics, setFboDiagnostics] = useState<string[]>([]);
   const [fboError, setFboError] = useState("");
   const [fboMessage, setFboMessage] = useState("");
+  const [fboWarehouseId, setFboWarehouseId] = useState("");
+  const [fboTimeslotFrom, setFboTimeslotFrom] = useState(dateInput(new Date()));
+  const [fboTimeslotTo, setFboTimeslotTo] = useState(dateInput(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)));
+  const [fboTimeslots, setFboTimeslots] = useState<any[]>([]);
+  const [fboTimeslotIndex, setFboTimeslotIndex] = useState("");
+  const [fboSupplyResult, setFboSupplyResult] = useState<any>(null);
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -561,6 +567,129 @@ export default function OzonPage() {
     }
   }
 
+  async function loadFboTimeslots() {
+    if (!fboDraftId) return;
+
+    try {
+      setFboLoading(true);
+      setFboError("");
+      setFboSupplyResult(null);
+      setFboTimeslots([]);
+      setFboTimeslotIndex("");
+
+      const cluster = Array.isArray(fboDraftInfo?.clusters)
+        ? fboDraftInfo.clusters.find((row: any) =>
+            Number(row?.macrolocal_cluster_id || 0) === Number(fboClusterId)
+          ) || fboDraftInfo.clusters[0]
+        : null;
+
+      const clusterId = Number(cluster?.macrolocal_cluster_id || fboClusterId || 0);
+      const warehouseId = Number(fboWarehouseId || 0);
+
+      if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
+      if (!warehouseId) throw new Error("Выберите доступный склад Ozon.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "timeslots",
+          draftId: fboDraftId,
+          macrolocalClusterId: clusterId,
+          storageWarehouseId: warehouseId,
+          dateFrom: `${fboTimeslotFrom}T00:00:00Z`,
+          dateTo: `${fboTimeslotTo}T23:59:59Z`,
+        },
+      });
+
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const payload = data?.data || {};
+      const slots =
+        (Array.isArray(payload?.timeslots) && payload.timeslots) ||
+        (Array.isArray(payload?.result?.timeslots) && payload.result.timeslots) ||
+        (Array.isArray(payload?.result) && payload.result) ||
+        [];
+
+      setFboTimeslots(slots);
+
+      if (!slots.length) {
+        setFboMessage("Ozon не вернул свободных таймслотов для выбранного склада и периода.");
+      } else {
+        setFboMessage(`Получено таймслотов: ${slots.length}. Выберите время для поставки.`);
+      }
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось получить таймслоты Ozon");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function createRealFboSupply() {
+    if (!fboDraftId) return;
+
+    try {
+      setFboLoading(true);
+      setFboError("");
+      setFboSupplyResult(null);
+
+      const slotIndex = Number(fboTimeslotIndex);
+      const timeslot = Number.isInteger(slotIndex) ? fboTimeslots[slotIndex] : null;
+      if (!timeslot) throw new Error("Выберите таймслот.");
+      if (!fboWarehouseId) throw new Error("Выберите склад Ozon.");
+
+      const cluster = Array.isArray(fboDraftInfo?.clusters)
+        ? fboDraftInfo.clusters.find((row: any) =>
+            Number(row?.macrolocal_cluster_id || 0) === Number(fboClusterId)
+          ) || fboDraftInfo.clusters[0]
+        : null;
+
+      const clusterId = Number(cluster?.macrolocal_cluster_id || fboClusterId || 0);
+      if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
+
+      const confirmed = window.confirm(
+        `Создать реальную заявку Ozon FBO по черновику №${fboDraftId}?\n\nТовар: bini-black-56\nКоличество: 42 шт.\nСклад: ${fboWarehouseId}\nПосле подтверждения заявка будет создана в Ozon.`,
+      );
+      if (!confirmed) return;
+
+      const normalizedTimeslot = {
+        from_in_timezone:
+          timeslot?.from_in_timezone ||
+          timeslot?.from ||
+          timeslot?.start_at ||
+          timeslot?.date_from,
+        to_in_timezone:
+          timeslot?.to_in_timezone ||
+          timeslot?.to ||
+          timeslot?.end_at ||
+          timeslot?.date_to,
+      };
+
+      if (!normalizedTimeslot.from_in_timezone || !normalizedTimeslot.to_in_timezone) {
+        throw new Error("Ozon вернул таймслот в неизвестном формате.");
+      }
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "create_supply",
+          draftId: fboDraftId,
+          macrolocalClusterId: clusterId,
+          storageWarehouseId: Number(fboWarehouseId),
+          timeslot: normalizedTimeslot,
+        },
+      });
+
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      setFboSupplyResult(data?.data || data);
+      setFboMessage("Команда на создание реальной поставки отправлена в Ozon. Проверяем результат.");
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось создать поставку Ozon");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
   async function syncOzon() {
     try {
       setSyncing(true);
@@ -800,6 +929,13 @@ export default function OzonPage() {
       Array.isArray(fboDraftInfo?.errors) &&
       fboDraftInfo.errors.length === 0;
     const draftClusters = Array.isArray(fboDraftInfo?.clusters) ? fboDraftInfo.clusters : [];
+    const availableWarehouses = draftClusters.flatMap((cluster: any) =>
+      Array.isArray(cluster?.warehouses)
+        ? cluster.warehouses.filter((warehouse: any) =>
+            String(warehouse?.availability_status?.state || "") === "FULL_AVAILABLE"
+          )
+        : []
+    );
 
     return (
       <>
@@ -917,9 +1053,111 @@ export default function OzonPage() {
               </div>
             )}
 
-            <div style={{ marginTop: 14, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: 12, fontSize: 13 }}>
-              Финальную заявку и таймслот пока не создаём. Сначала проверяем, что Ozon принял состав и предложил корректные склады.
-            </div>
+            {draftStatus === "SUCCESS" && availableWarehouses.length > 0 && (
+              <div style={{ marginTop: 16, borderTop: "1px solid #e2e8f0", paddingTop: 16, display: "grid", gap: 12 }}>
+                <div>
+                  <div style={{ fontWeight: 900, fontSize: 17 }}>2. Выберите склад и таймслот</div>
+                  <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                    Показываем только склады со статусом FULL_AVAILABLE.
+                  </div>
+                </div>
+
+                <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                  Доступный склад
+                  <select
+                    value={fboWarehouseId}
+                    onChange={(event) => {
+                      setFboWarehouseId(event.target.value);
+                      setFboTimeslots([]);
+                      setFboTimeslotIndex("");
+                    }}
+                    style={inputStyle}
+                  >
+                    <option value="">Выберите склад</option>
+                    {availableWarehouses.map((warehouse: any) => (
+                      <option
+                        key={warehouse.storage_warehouse?.warehouse_id || warehouse.bundle_id}
+                        value={String(warehouse.storage_warehouse?.warehouse_id || "")}
+                      >
+                        {warehouse.storage_warehouse?.name || warehouse.storage_warehouse?.warehouse_id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+                  <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                    Таймслоты с даты
+                    <input
+                      type="date"
+                      value={fboTimeslotFrom}
+                      onChange={(event) => setFboTimeslotFrom(event.target.value)}
+                      style={inputStyle}
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                    По дату
+                    <input
+                      type="date"
+                      value={fboTimeslotTo}
+                      min={fboTimeslotFrom}
+                      onChange={(event) => setFboTimeslotTo(event.target.value)}
+                      style={inputStyle}
+                    />
+                  </label>
+                </div>
+
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => void loadFboTimeslots()}
+                    disabled={fboLoading || !fboWarehouseId}
+                    style={{ border: 0, background: fboLoading || !fboWarehouseId ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850, cursor: fboLoading ? "wait" : "pointer" }}
+                  >
+                    Получить свободные таймслоты
+                  </button>
+                </div>
+
+                {fboTimeslots.length > 0 && (
+                  <>
+                    <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                      Время поставки
+                      <select value={fboTimeslotIndex} onChange={(event) => setFboTimeslotIndex(event.target.value)} style={inputStyle}>
+                        <option value="">Выберите таймслот</option>
+                        {fboTimeslots.map((slot: any, index: number) => {
+                          const fromValue = slot?.from_in_timezone || slot?.from || slot?.start_at || slot?.date_from || "";
+                          const toValue = slot?.to_in_timezone || slot?.to || slot?.end_at || slot?.date_to || "";
+                          const fromText = fromValue ? new Date(fromValue).toLocaleString("ru-RU") : "Начало";
+                          const toText = toValue ? new Date(toValue).toLocaleString("ru-RU") : "конец";
+                          return <option key={index} value={String(index)}>{fromText} — {toText}</option>;
+                        })}
+                      </select>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() => void createRealFboSupply()}
+                      disabled={fboLoading || fboTimeslotIndex === ""}
+                      style={{ border: 0, background: fboLoading || fboTimeslotIndex === "" ? "#94a3b8" : "#16a34a", color: "#fff", borderRadius: 11, padding: "12px 17px", fontWeight: 900, cursor: fboLoading ? "wait" : "pointer" }}
+                    >
+                      Создать реальную поставку в Ozon
+                    </button>
+                  </>
+                )}
+
+                {fboSupplyResult && (
+                  <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 12, padding: 12, fontSize: 13 }}>
+                    Ozon принял команду создания поставки. Ответ: <b>{JSON.stringify(fboSupplyResult)}</b>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {draftStatus !== "SUCCESS" && (
+              <div style={{ marginTop: 14, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: 12, fontSize: 13 }}>
+                Сначала нужно получить статус SUCCESS и доступный склад.
+              </div>
+            )}
           </section>
         )}
       </>
