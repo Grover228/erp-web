@@ -208,6 +208,10 @@ export default function OzonPage() {
   const [fboSupplyItem, setFboSupplyItem] = useState<any>(null);
   const [fboBoxes, setFboBoxes] = useState<number[]>([42]);
   const [fboCargoResult, setFboCargoResult] = useState<any>(null);
+  const [fboCargoOperationId, setFboCargoOperationId] = useState("");
+  const [fboCargoes, setFboCargoes] = useState<any[]>([]);
+  const [fboLabelOperationId, setFboLabelOperationId] = useState("");
+  const [fboLabelUrl, setFboLabelUrl] = useState("");
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -291,6 +295,12 @@ export default function OzonPage() {
       void loadSavedFboDraft();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === "fbo" && fboStep === 6 && fboOrderId && !fboSupplyItem) {
+      void loadCreatedFboOrder(fboOrderId);
+    }
+  }, [activeTab, fboStep, fboOrderId]);
 
   async function loadData() {
     try {
