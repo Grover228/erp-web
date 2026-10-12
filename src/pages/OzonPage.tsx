@@ -436,8 +436,16 @@ export default function OzonPage() {
       const infoResult = await supabase.functions.invoke("ozon-fbo-supply", {
         body: { action: "draft_info", draftId },
       });
-      if (infoResult.data?.error) throw new Error(infoResult.data.error);
-      if (infoResult.error) throw infoResult.error;
+
+      if (infoResult.data?.error || infoResult.error) {
+        setFboDraftInfo({ status: "IN_PROGRESS" });
+        setFboDiagnostics([]);
+        setFboMessage(
+          `Черновик №${draftId} создан: bini-black-56, 42 шт. Ozon ещё рассчитывает варианты поставки. Обновите статус через несколько секунд.`,
+        );
+        return;
+      }
+
       setFboDraftInfo(infoResult.data?.data || null);
       setFboDiagnostics(Array.isArray(infoResult.data?.diagnostics) ? infoResult.data.diagnostics : []);
     } catch (cause) {
@@ -460,7 +468,15 @@ export default function OzonPage() {
       setFboDraftInfo(data?.data || null);
       setFboDiagnostics(Array.isArray(data?.diagnostics) ? data.diagnostics : []);
     } catch (cause) {
-      setFboError(cause instanceof Error ? cause.message : "Не удалось обновить черновик");
+      const currentStatus = String(fboDraftInfo?.status || "");
+      if (currentStatus === "IN_PROGRESS") {
+        setFboError("");
+        setFboMessage(
+          `Черновик №${fboDraftId} создан. Ozon ещё рассчитывает варианты поставки — повторите обновление статуса через несколько секунд.`,
+        );
+      } else {
+        setFboError(cause instanceof Error ? cause.message : "Не удалось обновить черновик");
+      }
     } finally {
       setFboLoading(false);
     }
