@@ -453,7 +453,9 @@ export default function OzonPage() {
       const active = rows.filter((row: any) => row?.is_active !== false);
       setFboSellerWarehouses(active);
 
-      if (!fboSellerWarehouseId && active.length === 1) {
+      if (!active.length) {
+        setFboMessage("Ozon вернул 0 активных складов продавца. Точки CROSSDOCK можно искать ниже отдельно.");
+      } else if (!fboSellerWarehouseId && active.length === 1) {
         setFboSellerWarehouseId(String(active[0].seller_warehouse_id || ""));
       }
     } catch (cause) {
@@ -1074,9 +1076,10 @@ export default function OzonPage() {
           )}
 
           <div style={{ marginTop: 16, display: "grid", gap: 12 }}>
-            <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
-              Склад продавца Ozon
-              <select
+            <div style={{ display: "grid", gap: 8 }}>
+              <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+                Склад продавца Ozon
+                <select
                 value={fboSellerWarehouseId}
                 onChange={(event) => setFboSellerWarehouseId(event.target.value)}
                 style={inputStyle}
@@ -1088,11 +1091,22 @@ export default function OzonPage() {
                     key={warehouse.seller_warehouse_id}
                     value={String(warehouse.seller_warehouse_id)}
                   >
-                    {warehouse?.address?.address || warehouse?.name || `Склад продавца ${warehouse.seller_warehouse_id}`}
+                    {warehouse?.seller_warehouse_name || warehouse?.address?.address || warehouse?.name || `Склад продавца ${warehouse.seller_warehouse_id}`}
                   </option>
                 ))}
-              </select>
-            </label>
+                </select>
+              </label>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => void loadFboSellerWarehouses()}
+                  disabled={fboLoading}
+                  style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "8px 11px", fontWeight: 800, cursor: "pointer" }}
+                >
+                  Обновить склады продавца
+                </button>
+              </div>
+            </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1fr) auto", gap: 10, alignItems: "end" }}>
               <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
@@ -1100,7 +1114,7 @@ export default function OzonPage() {
                 <input
                   value={fboDropoffSearch}
                   onChange={(event) => setFboDropoffSearch(event.target.value)}
-                  placeholder="Например: Саранск, Казань, название ПВЗ"
+                  placeholder="Например: Казань, Воронеж, название ПВЗ"
                   style={inputStyle}
                 />
               </label>
@@ -1112,6 +1126,10 @@ export default function OzonPage() {
               >
                 Найти точки
               </button>
+            </div>
+
+            <div style={{ color: "#64748b", fontSize: 12 }}>
+              Ozon не отдаёт весь список точек сразу: введите минимум 4 символа города или названия точки и нажмите «Найти точки».
             </div>
 
             {fboDropoffPoints.length > 0 && (
