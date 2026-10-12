@@ -23,6 +23,29 @@ type SyncRun = {
   error_message: string | null;
 };
 
+type ArticleAnalytics = {
+  article: string;
+  name: string;
+  soldQty: number;
+  returnQty: number;
+  gross: number;
+  ozon: number;
+  net: number;
+  cost: number;
+  profit: number;
+  margin: number;
+  missingCostQty: number;
+};
+
+type PeriodSummary = {
+  gross: number;
+  ozon: number;
+  net: number;
+  cost: number;
+  profit: number;
+  unmatched: number;
+};
+
 const inputStyle = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 12px" };
 
 function dateInput(date: Date) {
@@ -57,8 +80,11 @@ export default function OzonPage() {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [instructionOpen, setInstructionOpen] = useState(false);
+  const [articleAnalytics, setArticleAnalytics] = useState<ArticleAnalytics[]>([]);
+  const [analyticsSummary, setAnalyticsSummary] = useState<PeriodSummary | null>(null);
+  const [operationCount, setOperationCount] = useState(0);
 
-  const summary = useMemo(() => operations.reduce(
+  const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
       gross: sum.gross + Number(row.accruals_for_sale || 0),
       ozon: sum.ozon + Number(row.sale_commission || 0) + Number(row.services_total || 0),
@@ -70,13 +96,15 @@ export default function OzonPage() {
     { gross: 0, ozon: 0, net: 0, cost: 0, profit: 0, unmatched: 0 }
   ), [operations]);
 
+  const summary = analyticsSummary || localSummary;
+
   useEffect(() => { void loadData(); }, [from, to]);
 
   async function loadData() {
     try {
       setLoading(true);
       setError("");
-      const [operationResult, runResult] = await Promise.all([
+      const [operationResult, runResult, analyticsResult] = await Promise.all([
         supabase.from("ozon_operations")
           .select("id,operation_date,operation_type_name,posting_number,amount,accruals_for_sale,sale_commission,services_total,cost_of_goods,profit,matched")
           .gte("operation_date", `${from}T00:00:00.000Z`)
@@ -85,11 +113,17 @@ export default function OzonPage() {
         supabase.from("ozon_sync_runs")
           .select("id,started_at,status,operations_loaded,error_message")
           .order("started_at", { ascending: false }).limit(10),
+        supabase.functions.invoke("ozon-analytics", { body: { from, to } }),
       ]);
       if (operationResult.error) throw operationResult.error;
       if (runResult.error) throw runResult.error;
+      if (analyticsResult.error) throw analyticsResult.error;
+      if (analyticsResult.data?.error) throw new Error(analyticsResult.data.error);
       setOperations((operationResult.data as Operation[]) || []);
       setRuns((runResult.data as SyncRun[]) || []);
+      setArticleAnalytics((analyticsResult.data?.articles as ArticleAnalytics[]) || []);
+      setAnalyticsSummary((analyticsResult.data?.summary as PeriodSummary) || null);
+      setOperationCount(Number(analyticsResult.data?.operationCount || 0));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить данные Ozon");
     } finally {
@@ -159,7 +193,53 @@ export default function OzonPage() {
       </div>
 
       <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
-        <div style={{ padding: 18, fontWeight: 850, fontSize: 18 }}>Операции</div>
+        <div style={{ padding: 18, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
+          <div>
+            <div style={{ fontWeight: 850, fontSize: 18 }}>Аналитика по артикулам</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div>
+          </div>
+          <div style={{ color: "#64748b", fontSize: 13 }}>Сортировка: по прибыли</div>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}>
+            <thead>
+              <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+                {["Артикул", "Товар", "Продажи", "Возвраты", "Выручка", "Ozon", "Себестоимость", "Прибыль", "Маржа", "Без себест."].map((title) => (
+                  <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {!loading && articleAnalytics.map((row) => (
+                <tr key={row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                  <td style={{ padding: 12, fontWeight: 800, whiteSpace: "nowrap" }}>{row.article}</td>
+                  <td style={{ padding: 12 }}>{row.name}</td>
+                  <td style={{ padding: 12 }}>{row.soldQty}</td>
+                  <td style={{ padding: 12 }}>{row.returnQty || "—"}</td>
+                  <td style={{ padding: 12 }}>{money(row.gross)}</td>
+                  <td style={{ padding: 12, color: row.ozon < 0 ? "#b91c1c" : "#0f172a" }}>{money(row.ozon)}</td>
+                  <td style={{ padding: 12 }}>{money(row.cost)}</td>
+                  <td style={{ padding: 12, fontWeight: 800, color: row.profit >= 0 ? "#15803d" : "#b91c1c" }}>{money(row.profit)}</td>
+                  <td style={{ padding: 12, fontWeight: 700, color: row.margin >= 0 ? "#15803d" : "#b91c1c" }}>{row.margin.toFixed(1)}%</td>
+                  <td style={{ padding: 12, color: row.missingCostQty ? "#c2410c" : "#15803d", fontWeight: 700 }}>{row.missingCostQty || "0"}</td>
+                </tr>
+              ))}
+              {!loading && articleAnalytics.length === 0 && (
+                <tr><td colSpan={10} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>За выбранный период аналитики пока нет.</td></tr>
+              )}
+              {loading && (
+                <tr><td colSpan={10} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Считаю аналитику…</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
+        <div style={{ padding: 18 }}>
+          <div style={{ fontWeight: 850, fontSize: 18 }}>Операции</div>
+          <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Показаны последние {Math.min(operationCount, 1000)} из {operationCount} операций периода.</div>
+        </div>
         <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
           <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Дата", "Операция", "Отправление", "Продажа", "Ozon", "Начислено", "Себестоимость", "Прибыль", "Связь"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
           <tbody>
