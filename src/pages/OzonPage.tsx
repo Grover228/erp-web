@@ -419,18 +419,24 @@ export default function OzonPage() {
       if (data?.error) throw new Error(data.error);
       if (invokeError) throw invokeError;
 
-      const rows = Array.isArray(data?.data?.result) ? data.data.result : [];
-      const next: FboCluster[] = rows.map((row: any) => ({
-        id: Number(row.macrolocal_cluster_id || 0),
-        name: String(row.data?.macrolocal_cluster?.name || `Кластер ${row.macrolocal_cluster_id}`),
-        country: String(row.data?.macrolocal_cluster?.country?.name || ""),
-        fulfillments: Array.isArray(row.data?.fulfillments)
-          ? row.data.fulfillments.map((warehouse: any) => ({
-              warehouse_id: Number(warehouse.warehouse_id || 0),
-              name: String(warehouse.name || warehouse.warehouse_id || ""),
-            }))
-          : [],
-      })).filter((row: FboCluster) => row.id > 0);
+      const rows = Array.isArray(data?.data?.clusters) ? data.data.clusters : [];
+      const next: FboCluster[] = rows.map((row: any) => {
+        const warehouses = Array.isArray(row.logistic_clusters)
+          ? row.logistic_clusters.flatMap((cluster: any) =>
+              Array.isArray(cluster?.warehouses) ? cluster.warehouses : [],
+            )
+          : [];
+
+        return {
+          id: Number(row.macrolocal_cluster_id || row.id || 0),
+          name: String(row.name || `Кластер ${row.macrolocal_cluster_id || row.id}`),
+          country: "Россия",
+          fulfillments: warehouses.map((warehouse: any) => ({
+            warehouse_id: Number(warehouse.warehouse_id || 0),
+            name: String(warehouse.name || warehouse.warehouse_id || ""),
+          })),
+        };
+      }).filter((row: FboCluster) => row.id > 0);
 
       setFboClusters(next);
       if (!fboClusterId && next.length) setFboClusterId(String(next[0].id));
@@ -748,6 +754,12 @@ export default function OzonPage() {
   function FboSupply() {
     const selected = fboClusters.find((row) => String(row.id) === fboClusterId);
     const draftStatus = String(fboDraftInfo?.status || "");
+    const noPlacementWarehouses =
+      draftStatus === "FAILED" &&
+      Array.isArray(fboDraftInfo?.clusters) &&
+      fboDraftInfo.clusters.length === 0 &&
+      Array.isArray(fboDraftInfo?.errors) &&
+      fboDraftInfo.errors.length === 0;
     const draftClusters = Array.isArray(fboDraftInfo?.clusters) ? fboDraftInfo.clusters : [];
 
     return (
@@ -826,6 +838,15 @@ export default function OzonPage() {
                 Обновить статус
               </button>
             </div>
+
+            {noPlacementWarehouses && (
+              <div style={{ marginTop: 14, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 12 }}>
+                <div style={{ fontWeight: 900, color: "#991b1b", marginBottom: 6 }}>Ozon не предложил склад размещения</div>
+                <div style={{ color: "#b91c1c", fontSize: 13 }}>
+                  Для этого товара и выбранного кластера Ozon вернул FAILED без ошибок и без доступных складов. Выберите другой FBO-кластер и создайте новый черновик.
+                </div>
+              </div>
+            )}
 
             {fboDiagnostics.length > 0 && (
               <div style={{ marginTop: 14, background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 12 }}>
