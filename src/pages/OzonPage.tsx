@@ -866,45 +866,47 @@ export default function OzonPage() {
 
 
   async function loadCreatedFboOrder(orderId: number) {
-    let resolvedOrderId = String(orderId || "");
+    try {
+      setFboLoading(true);
+      setFboError("");
 
-    if (fboDraftId) {
-      const statusResult = await supabase.functions.invoke("ozon-fbo-supply", {
-        body: { action: "create_supply_status", draftId: fboDraftId },
+      const visibleOrderNumber = String(orderId || "");
+      if (!visibleOrderNumber) throw new Error("Не указан номер созданной заявки Ozon.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "resolve_order_number",
+          orderNumber: visibleOrderNumber,
+          draftId: fboDraftId,
+        },
       });
-      if (statusResult.data?.error) throw new Error(statusResult.data.error);
-      if (statusResult.error) throw statusResult.error;
 
-      const apiOrderId = String(statusResult.data?.orderId || "");
-      if (apiOrderId) resolvedOrderId = apiOrderId;
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const internalOrderId = Number(data?.data?.order_id || 0);
+      const supplyId = Number(data?.data?.supply_id || 0);
+      const items = Array.isArray(data?.data?.items) ? data.data.items : [];
+      const item =
+        items.find((row: any) => String(row?.contractor_item_code || row?.offer_id || "").toLowerCase() === "bini-black-56") ||
+        items[0] ||
+        null;
+
+      if (!internalOrderId) throw new Error("Ozon не вернул внутренний order_id заявки.");
+      if (!supplyId) throw new Error("Ozon не вернул supply_id для созданной поставки.");
+      if (!item) throw new Error("Ozon не вернул товарный состав поставки.");
+
+      setFboOrderId(internalOrderId);
+      setFboSupplyId(supplyId);
+      setFboSupplyItem(item);
+      setFboBoxes([42]);
+      setFboStep(6);
+      setFboMessage(`Заявка №${visibleOrderNumber} загружена. Теперь распределите 42 шт. по коробкам.`);
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось загрузить данные созданной поставки");
+    } finally {
+      setFboLoading(false);
     }
-
-    if (!resolvedOrderId) {
-      throw new Error("Ozon не вернул внутренний ID созданной заявки.");
-    }
-
-    const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
-      body: { action: "order_info", orderId: resolvedOrderId },
-    });
-    if (data?.error) throw new Error(data.error);
-    if (invokeError) throw invokeError;
-
-    const supplyId = Number(data?.data?.supply_id || 0);
-    const items = Array.isArray(data?.data?.items) ? data.data.items : [];
-    const item =
-      items.find((row: any) => String(row?.contractor_item_code || row?.offer_id || "").toLowerCase() === "bini-black-56") ||
-      items[0] ||
-      null;
-
-    if (!supplyId) throw new Error("Ozon не вернул supply_id для созданной поставки.");
-    if (!item) throw new Error("Ozon не вернул товарный состав поставки.");
-
-    setFboOrderId(Number(resolvedOrderId));
-    setFboSupplyId(supplyId);
-    setFboSupplyItem(item);
-    setFboBoxes([42]);
-    setFboStep(6);
-    setFboMessage(`Заявка Ozon загружена. Теперь распределите 42 шт. по коробкам.`);
   }
 
   async function refreshCreatedFboSupply() {
