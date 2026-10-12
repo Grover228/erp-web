@@ -332,6 +332,7 @@ export default function OzonPage() {
   const [fboOrderId, setFboOrderId] = useState<number | null>(null);
   const [fboSupplyId, setFboSupplyId] = useState<number | null>(null);
   const [fboSupplyItem, setFboSupplyItem] = useState<any>(null);
+  const [fboSupplyItems, setFboSupplyItems] = useState<any[]>([]);
   const [fboBoxes, setFboBoxes] = useState<number[]>([42]);
   const [fboCargoResult, setFboCargoResult] = useState<any>(null);
   const [fboCargoOperationId, setFboCargoOperationId] = useState("");
@@ -657,6 +658,7 @@ export default function OzonPage() {
     setFboOrderId(row.order_id ? Number(row.order_id) : null);
     setFboSupplyId(row.supply_id ? Number(row.supply_id) : null);
     setFboSupplyItem(null);
+    setFboSupplyItems(Array.isArray(workflow.supplyItems) ? workflow.supplyItems : []);
     setFboBoxes(Array.isArray(workflow.boxes) && workflow.boxes.length ? workflow.boxes.map((value: any) => Number(value || 0)) : [Number(row.quantity || 42)]);
     setFboCargoOperationId(String(workflow.cargoOperationId || ""));
     setFboCargoes(Array.isArray(workflow.cargoes) ? workflow.cargoes : []);
@@ -708,6 +710,7 @@ export default function OzonPage() {
     setFboOrderId(null);
     setFboSupplyId(null);
     setFboSupplyItem(null);
+    setFboSupplyItems([]);
     setFboBoxes([42]);
     setFboCargoResult(null);
     setFboCargoOperationId("");
@@ -1148,6 +1151,11 @@ export default function OzonPage() {
   async function createRealFboSupply() {
     if (!fboDraftId) return;
 
+    if (fboOrderId) {
+      await loadCreatedFboOrder(fboOrderId);
+      return;
+    }
+
     try {
       setFboLoading(true);
       setFboError("");
@@ -1221,51 +1229,81 @@ export default function OzonPage() {
       setFboLoading(true);
       setFboError("");
 
-      const visibleOrderNumber = String(orderId || "");
-      if (!visibleOrderNumber) throw new Error("Не указан номер созданной заявки Ozon.");
+      const internalOrderIdInput = Number(orderId || 0);
+      if (!internalOrderIdInput) throw new Error("Не указан order_id созданной заявки Ozon.");
 
-      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+      let payload: any = null;
+      let usedInternalLookup = false;
+
+      const internalResult = await supabase.functions.invoke("ozon-fbo-supply", {
         body: {
-          action: "resolve_order_number",
-          orderNumber: visibleOrderNumber,
-          draftId: fboDraftId,
+          action: "order_info",
+          orderId: internalOrderIdInput,
         },
       });
 
-      if (data?.error) throw new Error(data.error);
-      if (invokeError) {
-        const context = (invokeError as any)?.context;
-        if (context && typeof context.json === "function") {
-          try {
-            const payload = await context.json();
-            if (payload?.error) throw new Error(payload.error);
-          } catch (contextError) {
-            if (contextError instanceof Error && contextError.message !== invokeError.message) {
-              throw contextError;
+      if (!internalResult.error && !internalResult.data?.error && internalResult.data?.data) {
+        payload = internalResult.data.data;
+        usedInternalLookup = true;
+      } else {
+        const fallbackResult = await supabase.functions.invoke("ozon-fbo-supply", {
+          body: {
+            action: "resolve_order_number",
+            orderNumber: String(internalOrderIdInput),
+            draftId: fboDraftId,
+          },
+        });
+
+        if (fallbackResult.data?.error) throw new Error(fallbackResult.data.error);
+        if (fallbackResult.error) {
+          const context = (fallbackResult.error as any)?.context;
+          if (context && typeof context.json === "function") {
+            try {
+              const errorPayload = await context.json();
+              if (errorPayload?.error) throw new Error(errorPayload.error);
+            } catch (contextError) {
+              if (contextError instanceof Error && contextError.message !== fallbackResult.error.message) {
+                throw contextError;
+              }
             }
           }
+          throw fallbackResult.error;
         }
-        throw invokeError;
+        payload = fallbackResult.data?.data || null;
       }
 
-      const internalOrderId = Number(data?.data?.order_id || 0);
-      const supplyId = Number(data?.data?.supply_id || 0);
-      const items = Array.isArray(data?.data?.items) ? data.data.items : [];
-      const item =
-        items.find((row: any) => String(row?.contractor_item_code || row?.offer_id || "").toLowerCase() === "bini-black-56") ||
-        items[0] ||
-        null;
+      const order = payload?.order || null;
+      const internalOrderId = Number(payload?.order_id || order?.order_id || internalOrderIdInput || 0);
+      const supplyId = Number(payload?.supply_id || payload?.supply?.supply_id || 0);
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      const visibleOrderNumber = String(order?.order_number || supplyId || internalOrderId || "");
 
       if (!internalOrderId) throw new Error("Ozon не вернул внутренний order_id заявки.");
       if (!supplyId) throw new Error("Ozon не вернул supply_id для созданной поставки.");
-      if (!item) throw new Error("Ozon не вернул товарный состав поставки.");
+      if (!items.length) throw new Error("Ozon не вернул товарный состав поставки.");
 
       setFboOrderId(internalOrderId);
       setFboSupplyId(supplyId);
-      setFboSupplyItem(item);
-      setFboBoxes([fboQuantity]);
-      advanceFboStep(6, { boxes: [fboQuantity] });
-      setFboMessage(`Заявка №${visibleOrderNumber} загружена. Теперь распределите ${fboQuantity} шт. по коробкам.`);
+      setFboSupplyItems(items);
+      setFboSupplyItem(items[0] || null);
+
+      const savedItems = stocks
+        .filter((row) => Number(fboSupplyDraft[row.article] || 0) > 0)
+        .map((row) => ({ offerId: row.article, quantity: Number(fboSupplyDraft[row.article] || 0) }));
+      const totalQuantity = savedItems.reduce((sum, row) => sum + row.quantity, 0) || fboQuantity;
+      setFboQuantity(totalQuantity);
+      setFboBoxes([totalQuantity]);
+
+      advanceFboStep(6, {
+        boxes: [totalQuantity],
+        supplyItems: items,
+        orderNumber: visibleOrderNumber,
+        internalOrderLookup: usedInternalLookup,
+      });
+
+      setFboMessage(
+        `Заявка №${visibleOrderNumber || internalOrderId} загружена: ${items.length} поз., ${totalQuantity} шт. Теперь распределите товар по коробкам.`,
+      );
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось загрузить данные созданной поставки");
     } finally {
@@ -2325,9 +2363,20 @@ export default function OzonPage() {
 
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
                 <button type="button" onClick={() => setFboStep(4)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Назад</button>
-                <button type="button" onClick={() => void createRealFboSupply()} disabled={fboLoading || !selectedSlot} style={{ border: 0, background: fboLoading || !selectedSlot ? "#94a3b8" : "#16a34a", color: "#fff", borderRadius: 11, padding: "12px 18px", fontWeight: 900 }}>
-                  {fboLoading ? "Создаю…" : "Создать поставку в Ozon"}
-                </button>
+                {fboOrderId ? (
+                  <button
+                    type="button"
+                    onClick={() => void loadCreatedFboOrder(fboOrderId)}
+                    disabled={fboLoading}
+                    style={{ border: 0, background: fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "12px 18px", fontWeight: 900 }}
+                  >
+                    {fboLoading ? "Загружаю…" : "Продолжить уже созданную заявку →"}
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => void createRealFboSupply()} disabled={fboLoading || !selectedSlot} style={{ border: 0, background: fboLoading || !selectedSlot ? "#94a3b8" : "#16a34a", color: "#fff", borderRadius: 11, padding: "12px 18px", fontWeight: 900 }}>
+                    {fboLoading ? "Создаю…" : "Создать поставку в Ozon"}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -2359,6 +2408,11 @@ export default function OzonPage() {
 
               {fboSupplyId && (
                 <>
+                  {fboSupplyItems.length > 1 && (
+                    <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 12, padding: 12 }}>
+                      В заявке {fboSupplyItems.length} SKU. ERP уже загрузила состав поставки, но передавать грузоместа как один SKU нельзя — ниже будет отдельная раскладка по товарам.
+                    </div>
+                  )}
                   <div style={{ display: "grid", gap: 10, maxHeight: 360, overflowY: "auto", paddingRight: 4 }}>
                     {fboBoxes.map((quantity, index) => (
                       <div key={index} style={{ display: "grid", gridTemplateColumns: "120px minmax(120px,1fr) auto", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
@@ -2407,13 +2461,14 @@ export default function OzonPage() {
                       type="button"
                       onClick={() => void submitFboCargoes()}
                       disabled={
+                        fboSupplyItems.length > 1 ||
                         fboLoading ||
                         fboBoxes.some((value) => Number(value || 0) <= 0) ||
                         fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== fboQuantity
                       }
-                      style={{ border: 0, background: fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === fboQuantity ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}
+                      style={{ border: 0, background: fboSupplyItems.length > 1 ? "#94a3b8" : (fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === fboQuantity ? "#005bff" : "#94a3b8"), color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}
                     >
-                      Передать коробки в Ozon →
+                      {fboSupplyItems.length > 1 ? "Нужна раскладка нескольких SKU" : "Передать коробки в Ozon →"}
                     </button>
                   </div>
                 </>
