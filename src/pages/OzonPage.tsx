@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 
-type Tab = "overview" | "analytics" | "stocks" | "matching" | "transfer";
+type Tab = "overview" | "analytics" | "stocks" | "matching" | "fbo" | "transfer";
 
 type Operation = {
   id: string;
@@ -69,6 +69,13 @@ type OzonStockSummary = {
   fboReserved: number;
   fbsPresent: number;
   fbsReserved: number;
+};
+
+type FboCluster = {
+  id: number;
+  name: string;
+  country: string;
+  fulfillments: Array<{ warehouse_id: number; name: string }>;
 };
 
 type ComparisonRow = {
@@ -146,6 +153,13 @@ export default function OzonPage() {
   const [message, setMessage] = useState("");
   const [instructionOpen, setInstructionOpen] = useState(false);
   const [transferDraft, setTransferDraft] = useState<Record<string, number>>({});
+  const [fboClusters, setFboClusters] = useState<FboCluster[]>([]);
+  const [fboClusterId, setFboClusterId] = useState("");
+  const [fboLoading, setFboLoading] = useState(false);
+  const [fboDraftId, setFboDraftId] = useState<number | null>(null);
+  const [fboDraftInfo, setFboDraftInfo] = useState<any>(null);
+  const [fboError, setFboError] = useState("");
+  const [fboMessage, setFboMessage] = useState("");
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -222,6 +236,9 @@ export default function OzonPage() {
 
   useEffect(() => { void loadData(); }, [from, to]);
   useEffect(() => { void Promise.all([loadStocks(), loadErpStock()]); }, []);
+  useEffect(() => {
+    if (activeTab === "fbo" && fboClusters.length === 0) void loadFboClusters();
+  }, [activeTab]);
 
   async function loadData() {
     try {
@@ -346,6 +363,105 @@ export default function OzonPage() {
     }
   }
 
+  async function loadFboClusters() {
+    try {
+      setFboLoading(true);
+      setFboError("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "clusters" },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const rows = Array.isArray(data?.data?.result) ? data.data.result : [];
+      const next: FboCluster[] = rows.map((row: any) => ({
+        id: Number(row.macrolocal_cluster_id || 0),
+        name: String(row.data?.macrolocal_cluster?.name || `Кластер ${row.macrolocal_cluster_id}`),
+        country: String(row.data?.macrolocal_cluster?.country?.name || ""),
+        fulfillments: Array.isArray(row.data?.fulfillments)
+          ? row.data.fulfillments.map((warehouse: any) => ({
+              warehouse_id: Number(warehouse.warehouse_id || 0),
+              name: String(warehouse.name || warehouse.warehouse_id || ""),
+            }))
+          : [],
+      })).filter((row: FboCluster) => row.id > 0);
+
+      setFboClusters(next);
+      if (!fboClusterId && next.length) setFboClusterId(String(next[0].id));
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось загрузить кластеры Ozon");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function createTestFboDraft() {
+    try {
+      setFboLoading(true);
+      setFboError("");
+      setFboMessage("");
+      setFboDraftId(null);
+      setFboDraftInfo(null);
+
+      const clusterId = Number(fboClusterId);
+      if (!clusterId) throw new Error("Выберите кластер Ozon.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "create_direct_draft",
+          macrolocalClusterId: clusterId,
+          sku: 2492278688,
+          quantity: 42,
+        },
+      });
+
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const draftId = Number(data?.data?.draft_id || 0);
+      const errors = data?.data?.errors || [];
+      if (errors.length) {
+        throw new Error(
+          errors.map((item: any) => item?.message || item?.error_message || (item?.error_reasons || []).join(", ")).filter(Boolean).join(" | ")
+          || "Ozon вернул ошибку при создании черновика."
+        );
+      }
+      if (!draftId) throw new Error("Ozon не вернул draft_id.");
+
+      setFboDraftId(draftId);
+      setFboMessage(`Черновик №${draftId} создан: bini-black-56, 42 шт. Финальная заявка ещё не создана.`);
+
+      const infoResult = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "draft_info", draftId },
+      });
+      if (infoResult.data?.error) throw new Error(infoResult.data.error);
+      if (infoResult.error) throw infoResult.error;
+      setFboDraftInfo(infoResult.data?.data || null);
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось создать тестовый черновик FBO");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function refreshFboDraftInfo() {
+    if (!fboDraftId) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "draft_info", draftId: fboDraftId },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+      setFboDraftInfo(data?.data || null);
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось обновить черновик");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
   async function syncOzon() {
     try {
       setSyncing(true);
@@ -368,6 +484,7 @@ export default function OzonPage() {
     { id: "analytics", label: "Аналитика", icon: "▥" },
     { id: "stocks", label: "Остатки", icon: "◫" },
     { id: "matching", label: "Сопоставление", icon: "↔" },
+    { id: "fbo", label: "Поставки FBO", icon: "▣" },
     { id: "transfer", label: "Перенос (тест)", icon: "⇄" },
   ];
 
@@ -574,6 +691,116 @@ export default function OzonPage() {
     );
   }
 
+  function FboSupply() {
+    const selected = fboClusters.find((row) => String(row.id) === fboClusterId);
+    const draftStatus = String(fboDraftInfo?.status || "");
+    const draftClusters = Array.isArray(fboDraftInfo?.clusters) ? fboDraftInfo.clusters : [];
+
+    return (
+      <>
+        <section style={{ ...panelStyle, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 900, fontSize: 20 }}>Тестовая поставка FBO</div>
+              <div style={{ color: "#64748b", fontSize: 13, marginTop: 5 }}>
+                Товар: <b>bini-black-56</b> · Ozon SKU <b>2492278688</b> · количество <b>42 шт.</b>
+              </div>
+            </div>
+            <span style={{ border: "1px solid #fde68a", background: "#fffbeb", color: "#92400e", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 850 }}>
+              Сначала только черновик
+            </span>
+          </div>
+
+          {fboError && <div style={{ marginTop: 14, color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{fboError}</div>}
+          {fboMessage && <div style={{ marginTop: 14, color: "#166534", background: "#f0fdf4", padding: 12, borderRadius: 10 }}>{fboMessage}</div>}
+
+          <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "minmax(260px,1fr) auto", gap: 12, alignItems: "end" }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+              Кластер Ozon
+              <select value={fboClusterId} onChange={(event) => setFboClusterId(event.target.value)} style={inputStyle} disabled={fboLoading}>
+                {fboClusters.map((cluster) => (
+                  <option key={cluster.id} value={cluster.id}>
+                    {cluster.name}{cluster.country ? ` · ${cluster.country}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => void loadFboClusters()}
+              disabled={fboLoading}
+              style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 800, cursor: "pointer" }}
+            >
+              Обновить кластеры
+            </button>
+          </div>
+
+          {selected && selected.fulfillments.length > 0 && (
+            <div style={{ marginTop: 10, color: "#64748b", fontSize: 12 }}>
+              Склады в кластере: {selected.fulfillments.slice(0, 8).map((row) => row.name).join(", ")}
+              {selected.fulfillments.length > 8 ? "…" : ""}
+            </div>
+          )}
+
+          <div style={{ marginTop: 16 }}>
+            <button
+              type="button"
+              onClick={() => void createTestFboDraft()}
+              disabled={fboLoading || !fboClusterId}
+              style={{ border: 0, background: fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 900, cursor: fboLoading ? "wait" : "pointer" }}
+            >
+              {fboLoading ? "Работаю…" : "Создать тестовый черновик на 42 шт."}
+            </button>
+          </div>
+        </section>
+
+        {fboDraftId && (
+          <section style={{ ...panelStyle, padding: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 18 }}>Черновик Ozon №{fboDraftId}</div>
+                <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                  Статус расчёта: <b>{draftStatus || "ожидаем ответ"}</b>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void refreshFboDraftInfo()}
+                disabled={fboLoading}
+                style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "9px 12px", fontWeight: 800, cursor: "pointer" }}
+              >
+                Обновить статус
+              </button>
+            </div>
+
+            {draftClusters.length > 0 && (
+              <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+                {draftClusters.map((cluster: any, index: number) => (
+                  <div key={cluster.macrolocal_cluster_id || index} style={{ border: "1px solid #e2e8f0", borderRadius: 14, padding: 14 }}>
+                    <div style={{ fontWeight: 850 }}>{cluster.cluster_name || `Кластер ${cluster.macrolocal_cluster_id}`}</div>
+                    <div style={{ color: "#64748b", fontSize: 13, marginTop: 6 }}>
+                      Доступных складов: {Array.isArray(cluster.warehouses) ? cluster.warehouses.length : 0}
+                    </div>
+                    {Array.isArray(cluster.warehouses) && cluster.warehouses.slice(0, 10).map((warehouse: any) => (
+                      <div key={warehouse.storage_warehouse?.warehouse_id || warehouse.bundle_id} style={{ marginTop: 7, paddingTop: 7, borderTop: "1px solid #f1f5f9", fontSize: 13 }}>
+                        <b>{warehouse.storage_warehouse?.name || warehouse.storage_warehouse?.warehouse_id || "Склад"}</b>
+                        {warehouse.storage_warehouse?.address ? <span style={{ color: "#64748b" }}> · {warehouse.storage_warehouse.address}</span> : null}
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 14, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 12, padding: 12, fontSize: 13 }}>
+              Финальную заявку и таймслот пока не создаём. Сначала проверяем, что Ozon принял состав и предложил корректные склады.
+            </div>
+          </section>
+        )}
+      </>
+    );
+  }
+
   function TransferTest() {
     const rows = comparisons.filter((row) => row.erp > 0 || row.ozonTotal > 0).slice(0, 80);
     return (
@@ -654,6 +881,7 @@ export default function OzonPage() {
       {activeTab === "analytics" && <Analytics />}
       {activeTab === "stocks" && <Stocks />}
       {activeTab === "matching" && <Matching />}
+      {activeTab === "fbo" && <FboSupply />}
       {activeTab === "transfer" && <TransferTest />}
     </div>
   );
