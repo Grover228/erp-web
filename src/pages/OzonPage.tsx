@@ -1553,28 +1553,33 @@ export default function OzonPage() {
           {fboStep === 6 && (
             <div style={{ display: "grid", gap: 16 }}>
               <div>
-                <div style={{ fontWeight: 900, fontSize: 22 }}>Коробки и наклейки</div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Разложите товар по коробкам</div>
                 <div style={{ color: "#64748b", marginTop: 5 }}>
-                  Заявка <b>№{fboOrderId || "—"}</b>. Один SKU в одной коробке. Всего нужно распределить <b>42 шт.</b>
+                  Заявка <b>№2000070131119</b>. Один SKU в одной коробке. Всего: <b>42 шт.</b>
                 </div>
               </div>
 
               {!fboSupplyId && (
-                <button
-                  type="button"
-                  onClick={() => fboOrderId && void loadCreatedFboOrder(fboOrderId)}
-                  disabled={!fboOrderId || fboLoading}
-                  style={{ justifySelf: "start", border: 0, background: "#005bff", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
-                >
-                  {fboLoading ? "Загружаю…" : "Загрузить данные поставки"}
-                </button>
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 12, padding: 12 }}>
+                    Сначала ERP должна получить внутренние данные уже созданной поставки Ozon.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadCreatedFboOrder(fboOrderId || 2000070131119)}
+                    disabled={fboLoading}
+                    style={{ justifySelf: "start", border: 0, background: fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 10, padding: "11px 15px", fontWeight: 900 }}
+                  >
+                    {fboLoading ? "Загружаю…" : "Загрузить данные поставки"}
+                  </button>
+                </div>
               )}
 
               {fboSupplyId && (
                 <>
-                  <div style={{ display: "grid", gap: 10 }}>
+                  <div style={{ display: "grid", gap: 10, maxHeight: 360, overflowY: "auto", paddingRight: 4 }}>
                     {fboBoxes.map((quantity, index) => (
-                      <div key={index} style={{ display: "grid", gridTemplateColumns: "auto minmax(120px,1fr) auto", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+                      <div key={index} style={{ display: "grid", gridTemplateColumns: "120px minmax(120px,1fr) auto", gap: 10, alignItems: "center", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
                         <div style={{ fontWeight: 900 }}>Коробка {index + 1}</div>
                         <input
                           type="number"
@@ -1585,21 +1590,13 @@ export default function OzonPage() {
                             const next = [...fboBoxes];
                             next[index] = Math.max(0, Number(event.target.value || 0));
                             setFboBoxes(next);
-                            setFboCargoResult(null);
-                            setFboCargoOperationId("");
-                            setFboCargoes([]);
-                            setFboLabelOperationId("");
-                            setFboLabelUrl("");
                           }}
                           style={inputStyle}
                         />
                         <button
                           type="button"
-                          onClick={() => {
-                            if (fboBoxes.length <= 1) return;
-                            setFboBoxes(fboBoxes.filter((_, rowIndex) => rowIndex !== index));
-                          }}
                           disabled={fboBoxes.length <= 1}
+                          onClick={() => setFboBoxes(fboBoxes.filter((_, rowIndex) => rowIndex !== index))}
                           style={{ border: "1px solid #fecaca", background: "#fff", color: "#b91c1c", borderRadius: 9, padding: "8px 10px", fontWeight: 800 }}
                         >
                           Удалить
@@ -1612,17 +1609,18 @@ export default function OzonPage() {
                     <button
                       type="button"
                       onClick={() => setFboBoxes([...fboBoxes, 0])}
-                      disabled={fboBoxes.length >= 30 || Boolean(fboCargoOperationId)}
+                      disabled={fboBoxes.length >= 30}
                       style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "9px 12px", fontWeight: 800 }}
                     >
                       + Добавить коробку
                     </button>
-                    <div style={{ fontWeight: 900 }}>
+                    <div style={{ fontWeight: 900, fontSize: 18 }}>
                       Итого: {fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0)} / 42 шт.
                     </div>
                   </div>
 
-                  {!fboCargoOperationId && (
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                    <button type="button" onClick={() => setFboStep(5)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Назад</button>
                     <button
                       type="button"
                       onClick={() => void submitFboCargoes()}
@@ -1631,69 +1629,114 @@ export default function OzonPage() {
                         fboBoxes.some((value) => Number(value || 0) <= 0) ||
                         fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) !== 42
                       }
-                      style={{
-                        justifySelf: "start",
-                        border: 0,
-                        background:
-                          !fboLoading &&
-                          !fboBoxes.some((value) => Number(value || 0) <= 0) &&
-                          fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === 42
-                            ? "#005bff"
-                            : "#94a3b8",
-                        color: "#fff",
-                        borderRadius: 11,
-                        padding: "11px 17px",
-                        fontWeight: 900,
-                      }}
+                      style={{ border: 0, background: fboBoxes.reduce((sum, value) => sum + Number(value || 0), 0) === 42 ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 11, padding: "11px 18px", fontWeight: 900 }}
                     >
-                      Передать коробки в Ozon
+                      Передать коробки в Ozon →
                     </button>
-                  )}
-
-                  {fboCargoOperationId && fboCargoes.length === 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void checkFboCargoes()}
-                      disabled={fboLoading}
-                      style={{ justifySelf: "start", border: 0, background: "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
-                    >
-                      {fboLoading ? "Проверяю…" : "Проверить регистрацию коробок"}
-                    </button>
-                  )}
-
-                  {fboCargoes.length > 0 && !fboLabelOperationId && (
-                    <button
-                      type="button"
-                      onClick={() => void createFboCargoLabels()}
-                      disabled={fboLoading}
-                      style={{ justifySelf: "start", border: 0, background: "#005bff", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
-                    >
-                      Сформировать наклейки PDF
-                    </button>
-                  )}
-
-                  {fboLabelOperationId && !fboLabelUrl && (
-                    <button
-                      type="button"
-                      onClick={() => void checkFboCargoLabels()}
-                      disabled={fboLoading}
-                      style={{ justifySelf: "start", border: 0, background: "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 850 }}
-                    >
-                      {fboLoading ? "Проверяю…" : "Проверить PDF"}
-                    </button>
-                  )}
-
-                  {fboLabelUrl && (
-                    <a
-                      href={fboLabelUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ justifySelf: "start", display: "inline-block", background: "#16a34a", color: "#fff", textDecoration: "none", borderRadius: 11, padding: "12px 17px", fontWeight: 900 }}
-                    >
-                      Открыть PDF с наклейками
-                    </a>
-                  )}
+                  </div>
                 </>
+              )}
+            </div>
+          )}
+
+          {fboStep === 7 && (
+            <div style={{ display: "grid", gap: 18 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Регистрация грузомест</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>Ozon регистрирует каждую переданную коробку и присваивает ей cargo_id.</div>
+              </div>
+
+              <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 14, padding: 16 }}>
+                <div style={{ color: "#64748b", fontSize: 12 }}>Коробок передано</div>
+                <div style={{ fontWeight: 900, fontSize: 28, marginTop: 3 }}>{fboBoxes.length}</div>
+                <div style={{ color: "#64748b", marginTop: 6 }}>Операция: {fboCargoOperationId || "ожидаем ID операции"}</div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void checkFboCargoes()}
+                disabled={fboLoading || !fboCargoOperationId}
+                style={{ justifySelf: "start", border: 0, background: !fboCargoOperationId || fboLoading ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 10, padding: "11px 15px", fontWeight: 900 }}
+              >
+                {fboLoading ? "Проверяю…" : "Проверить регистрацию коробок"}
+              </button>
+
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <button type="button" onClick={() => setFboStep(6)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Коробки</button>
+                <button type="button" onClick={() => setFboStep(8)} disabled={!fboCargoes.length} style={{ border: 0, background: fboCargoes.length ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 10, padding: "10px 15px", fontWeight: 900 }}>Далее →</button>
+              </div>
+            </div>
+          )}
+
+          {fboStep === 8 && (
+            <div style={{ display: "grid", gap: 18 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Наклейки на коробки</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>
+                  Зарегистрировано коробок: <b>{fboCargoes.length}</b>. Теперь Ozon должен сформировать этикетки для каждой коробки.
+                </div>
+              </div>
+
+              {!fboLabelOperationId && (
+                <button
+                  type="button"
+                  onClick={() => void createFboCargoLabels()}
+                  disabled={fboLoading || !fboCargoes.length}
+                  style={{ justifySelf: "start", border: 0, background: fboCargoes.length ? "#005bff" : "#94a3b8", color: "#fff", borderRadius: 10, padding: "11px 15px", fontWeight: 900 }}
+                >
+                  {fboLoading ? "Запускаю…" : "Сформировать наклейки PDF"}
+                </button>
+              )}
+
+              {fboLabelOperationId && !fboLabelUrl && (
+                <div style={{ display: "grid", gap: 12 }}>
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 12, padding: 12 }}>
+                    Ozon формирует PDF. Операция: {fboLabelOperationId}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void checkFboCargoLabels()}
+                    disabled={fboLoading}
+                    style={{ justifySelf: "start", border: 0, background: "#0f172a", color: "#fff", borderRadius: 10, padding: "11px 15px", fontWeight: 900 }}
+                  >
+                    {fboLoading ? "Проверяю…" : "Проверить готовность PDF"}
+                  </button>
+                </div>
+              )}
+
+              <div>
+                <button type="button" onClick={() => setFboStep(7)} style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>← Грузоместа</button>
+              </div>
+            </div>
+          )}
+
+          {fboStep === 9 && (
+            <div style={{ display: "grid", gap: 18 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 22 }}>Поставка подготовлена</div>
+                <div style={{ color: "#64748b", marginTop: 5 }}>Коробки зарегистрированы, этикетки сформированы. Осталось распечатать PDF и наклеить этикетки на коробки.</div>
+              </div>
+
+              <div style={{ display: "grid", gap: 8, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 14, padding: 16 }}>
+                <div><b>Заявка:</b> №2000070131119</div>
+                <div><b>Товар:</b> bini-black-56 · 42 шт.</div>
+                <div><b>Коробок:</b> {fboBoxes.length}</div>
+                <div><b>Точка сдачи:</b> {selectedDropoff?.name || DEFAULT_FBO_DROPOFF.name}</div>
+              </div>
+
+              {fboLabelUrl ? (
+                <a
+                  href={fboLabelUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ justifySelf: "start", display: "inline-block", background: "#16a34a", color: "#fff", textDecoration: "none", borderRadius: 11, padding: "13px 18px", fontWeight: 900, fontSize: 17 }}
+                >
+                  Открыть PDF с наклейками
+                </a>
+              ) : (
+                <button type="button" onClick={() => setFboStep(8)} style={{ justifySelf: "start", border: 0, background: "#005bff", color: "#fff", borderRadius: 10, padding: "11px 15px", fontWeight: 900 }}>
+                  Вернуться к формированию PDF
+                </button>
               )}
             </div>
           )}
