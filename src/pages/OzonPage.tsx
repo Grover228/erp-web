@@ -828,8 +828,111 @@ export default function OzonPage() {
 
       setFboSupplyResult(data?.data || data);
       setFboMessage("Команда на создание реальной поставки отправлена в Ozon. Проверяем результат.");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await refreshCreatedFboSupply();
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось создать поставку Ozon");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+
+  async function loadCreatedFboOrder(orderId: number) {
+    const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+      body: { action: "order_info", orderId },
+    });
+    if (data?.error) throw new Error(data.error);
+    if (invokeError) throw invokeError;
+
+    const supplyId = Number(data?.data?.supply_id || 0);
+    const items = Array.isArray(data?.data?.items) ? data.data.items : [];
+    const item =
+      items.find((row: any) => String(row?.contractor_item_code || row?.offer_id || "").toLowerCase() === "bini-black-56") ||
+      items[0] ||
+      null;
+
+    if (!supplyId) throw new Error("Ozon не вернул supply_id для созданной поставки.");
+    if (!item) throw new Error("Ozon не вернул товарный состав поставки.");
+
+    setFboOrderId(orderId);
+    setFboSupplyId(supplyId);
+    setFboSupplyItem(item);
+    setFboBoxes([42]);
+    setFboStep(6);
+    setFboMessage(`Заявка №${orderId} загружена. Теперь распределите 42 шт. по коробкам.`);
+  }
+
+  async function refreshCreatedFboSupply() {
+    if (!fboDraftId) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "create_supply_status", draftId: fboDraftId },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const status = String(data?.data?.status || "");
+      const orderId = Number(data?.data?.order_id || 0);
+
+      if (status === "SUCCESS" && orderId > 0) {
+        await loadCreatedFboOrder(orderId);
+        return;
+      }
+
+      if (status === "FAILED") {
+        const reasons = Array.isArray(data?.data?.error_reasons) ? data.data.error_reasons.join(", ") : "";
+        throw new Error(reasons || "Ozon не создал заявку.");
+      }
+
+      setFboMessage("Ozon ещё создаёт заявку. Нажмите «Проверить созданную заявку» через несколько секунд.");
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось проверить созданную заявку");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function submitFboCargoes() {
+    if (!fboSupplyId || !fboSupplyItem) return;
+
+    try {
+      setFboLoading(true);
+      setFboError("");
+      setFboCargoResult(null);
+
+      const total = fboBoxes.reduce((sum, quantity) => sum + Number(quantity || 0), 0);
+      if (total !== 42) throw new Error(`По коробкам распределено ${total} шт., а в поставке должно быть ровно 42 шт.`);
+      if (fboBoxes.some((quantity) => Number(quantity || 0) <= 0)) {
+        throw new Error("В каждой коробке должно быть больше 0 штук.");
+      }
+      if (fboBoxes.length > 30) throw new Error("Ozon разрешает не больше 30 коробок в одном запросе.");
+
+      const item = {
+        barcode: String(fboSupplyItem?.barcode || ""),
+        offer_id: String(fboSupplyItem?.contractor_item_code || fboSupplyItem?.offer_id || "bini-black-56"),
+        quant: Number(fboSupplyItem?.quant || 1),
+      };
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: {
+          action: "cargoes_create",
+          supplyId: fboSupplyId,
+          boxes: fboBoxes.map((quantity) => ({ quantity })),
+          item,
+        },
+      });
+
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      setFboCargoResult(data?.data || data);
+      setFboMessage(`Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, 42 шт.`);
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось передать коробки в Ozon");
     } finally {
       setFboLoading(false);
     }
