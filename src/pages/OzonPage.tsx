@@ -80,6 +80,11 @@ type SavedFboDraft = {
   status: string;
   ozon_response: any;
   diagnostics: string[] | null;
+  supply_type?: string | null;
+  drop_off_warehouse_id?: number | null;
+  drop_off_warehouse_name?: string | null;
+  drop_off_warehouse_type?: string | null;
+  seller_warehouse_id?: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -181,6 +186,11 @@ export default function OzonPage() {
   const [fboTimeslots, setFboTimeslots] = useState<any[]>([]);
   const [fboTimeslotIndex, setFboTimeslotIndex] = useState("");
   const [fboSupplyResult, setFboSupplyResult] = useState<any>(null);
+  const [fboSellerWarehouses, setFboSellerWarehouses] = useState<any[]>([]);
+  const [fboSellerWarehouseId, setFboSellerWarehouseId] = useState("");
+  const [fboDropoffSearch, setFboDropoffSearch] = useState("");
+  const [fboDropoffPoints, setFboDropoffPoints] = useState<any[]>([]);
+  const [fboDropoffWarehouseId, setFboDropoffWarehouseId] = useState("");
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -260,6 +270,7 @@ export default function OzonPage() {
   useEffect(() => {
     if (activeTab === "fbo") {
       if (fboClusters.length === 0) void loadFboClusters();
+      if (fboSellerWarehouses.length === 0) void loadFboSellerWarehouses();
       void loadSavedFboDraft();
     }
   }, [activeTab]);
@@ -391,7 +402,7 @@ export default function OzonPage() {
     try {
       const { data, error: loadError } = await supabase
         .from("ozon_fbo_drafts")
-        .select("draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,created_at,updated_at")
+        .select("draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,supply_type,drop_off_warehouse_id,drop_off_warehouse_name,drop_off_warehouse_type,seller_warehouse_id,created_at,updated_at")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -403,6 +414,8 @@ export default function OzonPage() {
       setFboDraftId(Number(row.draft_id));
       setFboResolvedSku(Number(row.sku || 0) || null);
       setFboClusterId(String(row.macrolocal_cluster_id));
+      if (row.seller_warehouse_id) setFboSellerWarehouseId(String(row.seller_warehouse_id));
+      if (row.drop_off_warehouse_id) setFboDropoffWarehouseId(String(row.drop_off_warehouse_id));
       setFboDraftInfo(
         row.ozon_response && typeof row.ozon_response === "object"
           ? { ...row.ozon_response, status: row.status || row.ozon_response?.status }
@@ -414,6 +427,53 @@ export default function OzonPage() {
       );
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось восстановить сохранённый черновик");
+    }
+  }
+
+  async function loadFboSellerWarehouses() {
+    try {
+      setFboError("");
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "seller_warehouses" },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const rows = Array.isArray(data?.data?.warehouses) ? data.data.warehouses : [];
+      const active = rows.filter((row: any) => row?.is_active !== false);
+      setFboSellerWarehouses(active);
+
+      if (!fboSellerWarehouseId && active.length === 1) {
+        setFboSellerWarehouseId(String(active[0].seller_warehouse_id || ""));
+      }
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось загрузить склады продавца Ozon");
+    }
+  }
+
+  async function searchFboDropoffPoints() {
+    try {
+      setFboLoading(true);
+      setFboError("");
+      setFboDropoffPoints([]);
+      setFboDropoffWarehouseId("");
+
+      const search = fboDropoffSearch.trim();
+      if (search.length < 4) throw new Error("Введите минимум 4 символа для поиска точки отгрузки.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+        body: { action: "dropoff_search", search },
+      });
+      if (data?.error) throw new Error(data.error);
+      if (invokeError) throw invokeError;
+
+      const rows = Array.isArray(data?.data?.search) ? data.data.search : [];
+      setFboDropoffPoints(rows);
+      if (!rows.length) setFboMessage("По этому запросу Ozon не нашёл точек отгрузки.");
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось найти точки отгрузки Ozon");
+    } finally {
+      setFboLoading(false);
     }
   }
 
@@ -501,14 +561,26 @@ export default function OzonPage() {
       setFboDiagnostics([]);
 
       const clusterId = Number(fboClusterId);
-      if (!clusterId) throw new Error("Выберите кластер Ozon.");
+      if (!clusterId) throw new Error("Выберите кластер размещения Ozon.");
+
+      const sellerWarehouseId = Number(fboSellerWarehouseId);
+      if (!sellerWarehouseId) throw new Error("Выберите склад продавца Ozon.");
+
+      const dropoff = fboDropoffPoints.find(
+        (row: any) => String(row?.warehouse_id || "") === fboDropoffWarehouseId,
+      );
+      if (!dropoff) throw new Error("Найдите и выберите точку отгрузки Ozon.");
 
       const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
         body: {
-          action: "create_direct_draft",
+          action: "create_crossdock_draft",
           macrolocalClusterId: clusterId,
           quantity: 42,
           offerId: "bini-black-56",
+          sellerWarehouseId,
+          dropOffWarehouseId: Number(dropoff.warehouse_id),
+          dropOffWarehouseName: String(dropoff.name || ""),
+          dropOffWarehouseType: String(dropoff.warehouse_type || ""),
         },
       });
 
@@ -531,7 +603,7 @@ export default function OzonPage() {
       setFboDraftInfo({ status: "CREATED" });
       setFboDiagnostics([]);
       setFboMessage(
-        `Черновик №${draftId} создан: bini-black-56, 42 шт. Подождите 5–10 секунд и нажмите «Обновить статус» — сразу после создания Ozon ограничивает частоту запросов.`,
+        `Черновик CROSSDOCK №${draftId} создан: bini-black-56, 42 шт. Подождите 5–10 секунд и нажмите «Обновить статус».`,
       );
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось создать тестовый черновик FBO");
@@ -595,8 +667,8 @@ export default function OzonPage() {
           draftId: fboDraftId,
           macrolocalClusterId: clusterId,
           storageWarehouseId: warehouseId,
-          dateFrom: `${fboTimeslotFrom}T00:00:00Z`,
-          dateTo: `${fboTimeslotTo}T23:59:59Z`,
+          dateFrom: fboTimeslotFrom,
+          dateTo: fboTimeslotTo,
         },
       });
 
@@ -604,11 +676,19 @@ export default function OzonPage() {
       if (invokeError) throw invokeError;
 
       const payload = data?.data || {};
-      const slots =
-        (Array.isArray(payload?.timeslots) && payload.timeslots) ||
-        (Array.isArray(payload?.result?.timeslots) && payload.result.timeslots) ||
-        (Array.isArray(payload?.result) && payload.result) ||
-        [];
+      const dropoffTimeslots =
+        payload?.result?.drop_off_warehouse_timeslots ||
+        payload?.drop_off_warehouse_timeslots ||
+        null;
+      const days = Array.isArray(dropoffTimeslots?.days) ? dropoffTimeslots.days : [];
+      const slots = days.flatMap((day: any) =>
+        Array.isArray(day?.timeslots)
+          ? day.timeslots.map((slot: any) => ({
+              ...slot,
+              date_in_timezone: day?.date_in_timezone || "",
+            }))
+          : [],
+      );
 
       setFboTimeslots(slots);
 
@@ -647,7 +727,7 @@ export default function OzonPage() {
       if (!clusterId) throw new Error("Не удалось определить кластер черновика.");
 
       const confirmed = window.confirm(
-        `Создать реальную заявку Ozon FBO по черновику №${fboDraftId}?\n\nТовар: bini-black-56\nКоличество: 42 шт.\nСклад: ${fboWarehouseId}\nПосле подтверждения заявка будет создана в Ozon.`,
+        `Создать реальную CROSSDOCK-заявку Ozon по черновику №${fboDraftId}?\n\nТовар: bini-black-56\nКоличество: 42 шт.\nПосле подтверждения заявка будет создана в Ozon.`,
       );
       if (!confirmed) return;
 
