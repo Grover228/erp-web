@@ -419,24 +419,59 @@ export default function OzonPage() {
       if (data?.error) throw new Error(data.error);
       if (invokeError) throw invokeError;
 
-      const rows = Array.isArray(data?.data?.clusters) ? data.data.clusters : [];
+      const payload = data?.data || {};
+      const rows = Array.isArray(payload?.clusters)
+        ? payload.clusters
+        : Array.isArray(payload?.result)
+          ? payload.result
+          : [];
+
       const next: FboCluster[] = rows.map((row: any) => {
-        const warehouses = Array.isArray(row.logistic_clusters)
+        const legacyData = row?.data || {};
+        const logisticWarehouses = Array.isArray(row?.logistic_clusters)
           ? row.logistic_clusters.flatMap((cluster: any) =>
               Array.isArray(cluster?.warehouses) ? cluster.warehouses : [],
             )
           : [];
+        const legacyWarehouses = Array.isArray(legacyData?.fulfillments)
+          ? legacyData.fulfillments
+          : [];
+        const warehouses = logisticWarehouses.length
+          ? logisticWarehouses
+          : legacyWarehouses;
+
+        const clusterId = Number(
+          row?.macrolocal_cluster_id ||
+          legacyData?.macrolocal_cluster_id ||
+          row?.id ||
+          0,
+        );
+
+        const clusterName = String(
+          row?.name ||
+          legacyData?.macrolocal_cluster?.name ||
+          `Кластер ${clusterId}`,
+        );
+
+        const country = String(
+          legacyData?.macrolocal_cluster?.country?.name ||
+          (row?.type === "CLUSTER_TYPE_OZON" ? "Россия" : ""),
+        );
 
         return {
-          id: Number(row.macrolocal_cluster_id || row.id || 0),
-          name: String(row.name || `Кластер ${row.macrolocal_cluster_id || row.id}`),
-          country: "Россия",
+          id: clusterId,
+          name: clusterName,
+          country,
           fulfillments: warehouses.map((warehouse: any) => ({
-            warehouse_id: Number(warehouse.warehouse_id || 0),
-            name: String(warehouse.name || warehouse.warehouse_id || ""),
+            warehouse_id: Number(warehouse?.warehouse_id || 0),
+            name: String(warehouse?.name || warehouse?.warehouse_id || ""),
           })),
         };
       }).filter((row: FboCluster) => row.id > 0);
+
+      if (!next.length) {
+        throw new Error("Ozon не вернул список FBO-кластеров.");
+      }
 
       setFboClusters(next);
       if (!fboClusterId && next.length) setFboClusterId(String(next[0].id));
