@@ -322,8 +322,19 @@ export default function OzonPage() {
       setError("");
       setMessage("");
       const { data, error: invokeError } = await supabase.functions.invoke("ozon-erp-report", { body: { from, to } });
-      if (invokeError) throw invokeError;
       if (data?.error) throw new Error(data.error);
+      if (invokeError) {
+        const context = (invokeError as any)?.context;
+        if (context && typeof context.json === "function") {
+          try {
+            const payload = await context.json();
+            if (payload?.error) throw new Error(payload.error);
+          } catch (contextError) {
+            if (contextError instanceof Error && contextError.message !== "Unexpected end of JSON input") throw contextError;
+          }
+        }
+        throw invokeError;
+      }
       setMessage(
         `Отчёт ERP сформирован: ${data.orderNumber} → ${data.shipmentNumber}, ${number(Number(data.totalQuantity || 0))} шт., ${money(Number(data.totalAmount || 0))}.`
       );
