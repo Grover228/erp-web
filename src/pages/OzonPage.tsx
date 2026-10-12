@@ -334,7 +334,8 @@ export default function OzonPage() {
   const [fboSupplyItem, setFboSupplyItem] = useState<any>(null);
   const [fboSupplyItems, setFboSupplyItems] = useState<any[]>([]);
   const [fboBoxes, setFboBoxes] = useState<number[]>([42]);
-  const [fboBoxSkuKeys, setFboBoxSkuKeys] = useState<string[]>([]);
+  const [fboBoxAllocations, setFboBoxAllocations] = useState<Array<Record<string, number>>>([]);
+  const [fboBoxLabels, setFboBoxLabels] = useState<Record<string, { operationId: string; fileUrl: string; status: string; error?: string }>>({});
   const [fboCargoResult, setFboCargoResult] = useState<any>(null);
   const [fboCargoOperationId, setFboCargoOperationId] = useState("");
   const [fboCargoes, setFboCargoes] = useState<any[]>([]);
@@ -660,7 +661,16 @@ export default function OzonPage() {
     setFboSupplyId(row.supply_id ? Number(row.supply_id) : null);
     setFboSupplyItem(null);
     setFboSupplyItems(Array.isArray(workflow.supplyItems) ? workflow.supplyItems : []);
-    setFboBoxes(Array.isArray(workflow.boxes) && workflow.boxes.length ? workflow.boxes.map((value: any) => Number(value || 0)) : [Number(row.quantity || 42)]);
+    const restoredBoxes = Array.isArray(workflow.boxes) && workflow.boxes.length ? workflow.boxes.map((value: any) => Number(value || 0)) : [Number(row.quantity || 42)];
+    setFboBoxes(restoredBoxes);
+    if (Array.isArray(workflow.boxAllocations) && workflow.boxAllocations.length) {
+      setFboBoxAllocations(workflow.boxAllocations.map((allocation: any) => allocation && typeof allocation === "object" ? allocation : {}));
+    } else if (Array.isArray(workflow.boxSkuKeys) && workflow.boxSkuKeys.length) {
+      setFboBoxAllocations(restoredBoxes.map((quantity: number, index: number) => ({ [String(workflow.boxSkuKeys[index] || "")]: quantity })));
+    } else {
+      setFboBoxAllocations([]);
+    }
+    setFboBoxLabels(workflow.boxLabels && typeof workflow.boxLabels === "object" ? workflow.boxLabels : {});
     setFboCargoOperationId(String(workflow.cargoOperationId || ""));
     setFboCargoes(Array.isArray(workflow.cargoes) ? workflow.cargoes : []);
     setFboLabelOperationId(String(workflow.labelOperationId || ""));
@@ -713,6 +723,8 @@ export default function OzonPage() {
     setFboSupplyItem(null);
     setFboSupplyItems([]);
     setFboBoxes([42]);
+    setFboBoxAllocations([]);
+    setFboBoxLabels({});
     setFboCargoResult(null);
     setFboCargoOperationId("");
     setFboCargoes([]);
@@ -1273,22 +1285,27 @@ export default function OzonPage() {
       setFboSupplyItem(items[0] || null);
 
       const supplyItemKey = (item: any) => String(item?.contractor_item_code || item?.offer_id || item?.sku || item?.barcode || "");
-      const initialBoxes = items.map((item: any) => Math.max(0, Number(item?.quantity || 0))).filter((quantity: number) => quantity > 0);
-      const initialBoxSkuKeys = items
+      const initialAllocations = items
         .filter((item: any) => Number(item?.quantity || 0) > 0)
-        .map((item: any) => supplyItemKey(item));
+        .map((item: any) => ({ [supplyItemKey(item)]: Math.max(0, Number(item?.quantity || 0)) }));
+      const initialBoxes = initialAllocations.map((allocation) =>
+        Object.values(allocation).reduce((sum, quantity) => sum + Number(quantity || 0), 0),
+      );
 
       const savedItems = stocks
         .filter((row) => Number(fboSupplyDraft[row.article] || 0) > 0)
         .map((row) => ({ offerId: row.article, quantity: Number(fboSupplyDraft[row.article] || 0) }));
       const totalQuantity = savedItems.reduce((sum, row) => sum + row.quantity, 0) || fboQuantity;
       setFboQuantity(totalQuantity);
-      setFboBoxes(initialBoxes.length ? initialBoxes : [totalQuantity]);
-      setFboBoxSkuKeys(initialBoxSkuKeys.length ? initialBoxSkuKeys : [supplyItemKey(items[0])]);
+      const resolvedAllocations = initialAllocations.length ? initialAllocations : [{ [supplyItemKey(items[0])]: totalQuantity }];
+      const resolvedBoxes = initialBoxes.length ? initialBoxes : [totalQuantity];
+      setFboBoxes(resolvedBoxes);
+      setFboBoxAllocations(resolvedAllocations);
+      setFboBoxLabels({});
 
       advanceFboStep(6, {
-        boxes: initialBoxes.length ? initialBoxes : [totalQuantity],
-        boxSkuKeys: initialBoxSkuKeys.length ? initialBoxSkuKeys : [supplyItemKey(items[0])],
+        boxes: resolvedBoxes,
+        boxAllocations: resolvedAllocations,
         supplyItems: items,
         orderNumber: visibleOrderNumber,
         internalOrderLookup: true,
@@ -1351,19 +1368,19 @@ export default function OzonPage() {
         fboSupplyItems.map((item: any) => [supplyItemKey(item), Math.max(0, Number(item?.quantity || 0))]),
       );
 
-      const total = fboBoxes.reduce((sum, quantity) => sum + Number(quantity || 0), 0);
+      if (!fboBoxAllocations.length) throw new Error("Добавьте хотя бы одну коробку.");
+      if (fboBoxAllocations.length > 30) throw new Error("Ozon разрешает не больше 30 коробок в одном запросе.");
+
+      const boxTotals = fboBoxAllocations.map((allocation) =>
+        Object.values(allocation || {}).reduce((sum, quantity) => sum + Math.max(0, Number(quantity || 0)), 0),
+      );
+      const total = boxTotals.reduce((sum, quantity) => sum + quantity, 0);
       if (total !== fboQuantity) throw new Error(`По коробкам распределено ${total} шт., а в поставке должно быть ровно ${fboQuantity} шт.`);
-      if (fboBoxes.some((quantity) => Number(quantity || 0) <= 0)) {
-        throw new Error("В каждой коробке должно быть больше 0 штук.");
-      }
-      if (fboBoxes.length > 30) throw new Error("Ozon разрешает не больше 30 коробок в одном запросе.");
-      if (fboBoxSkuKeys.length !== fboBoxes.length || fboBoxSkuKeys.some((key) => !itemByKey.has(key))) {
-        throw new Error("Для каждой коробки выберите товар.");
-      }
+      if (boxTotals.some((quantity) => quantity <= 0)) throw new Error("В каждой коробке должно быть больше 0 штук.");
 
       for (const [key, expected] of expectedByKey.entries()) {
-        const actual = fboBoxes.reduce(
-          (sum, quantity, index) => sum + (fboBoxSkuKeys[index] === key ? Number(quantity || 0) : 0),
+        const actual = fboBoxAllocations.reduce(
+          (sum, allocation) => sum + Math.max(0, Number(allocation?.[key] || 0)),
           0,
         );
         if (actual !== expected) {
@@ -1373,17 +1390,23 @@ export default function OzonPage() {
         }
       }
 
-      const boxes = fboBoxes.map((quantity, index) => {
-        const item = itemByKey.get(fboBoxSkuKeys[index]) as any;
-        return {
-          quantity: Number(quantity),
-          item: {
-            barcode: String(item?.barcode || ""),
-            offer_id: String(item?.contractor_item_code || item?.offer_id || ""),
-            quant: Number(item?.quant || 1),
-          },
-        };
+      const boxes = fboBoxAllocations.map((allocation, index) => {
+        const items = Object.entries(allocation || {})
+          .filter(([key, quantity]) => itemByKey.has(key) && Number(quantity || 0) > 0)
+          .map(([key, quantity]) => {
+            const item = itemByKey.get(key) as any;
+            return {
+              barcode: String(item?.barcode || ""),
+              offer_id: String(item?.contractor_item_code || item?.offer_id || ""),
+              quant: Number(item?.quant || 1),
+              quantity: Number(quantity),
+            };
+          });
+        if (!items.length) throw new Error(`Коробка ${index + 1} пустая.`);
+        return { quantity: boxTotals[index], items };
       });
+
+      setFboBoxes(boxTotals);
 
       const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-cargoes", {
         body: {
@@ -1399,19 +1422,19 @@ export default function OzonPage() {
       setFboCargoResult(result);
       const operationId = String(result?.operation_id || "");
       setFboCargoOperationId(operationId);
+      setFboBoxLabels({});
       setFboMessage(
         operationId
           ? `Коробки отправлены в Ozon. Операция ${operationId} формируется.`
-          : `Грузоместа отправлены в Ozon: ${fboBoxes.length} коробок, ${fboQuantity} шт.`,
+          : `Грузоместа отправлены в Ozon: ${boxes.length} коробок, ${fboQuantity} шт.`,
       );
-      advanceFboStep(7, { boxes: fboBoxes, boxSkuKeys: fboBoxSkuKeys, cargoOperationId: operationId });
+      advanceFboStep(7, { boxes: boxTotals, boxAllocations: fboBoxAllocations, cargoOperationId: operationId });
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось передать коробки в Ozon");
     } finally {
       setFboLoading(false);
     }
   }
-
 
   async function checkFboCargoes() {
     if (!fboCargoOperationId) return;
@@ -1510,6 +1533,114 @@ export default function OzonPage() {
       }
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось получить PDF с этикетками");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+
+  async function createFboBoxLabels() {
+    if (!fboSupplyId || !fboCargoes.length) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+
+      const nextLabels: Record<string, { operationId: string; fileUrl: string; status: string; error?: string }> = { ...fboBoxLabels };
+      for (const cargo of fboCargoes) {
+        const cargoId = Number(cargo?.value?.cargo_id || cargo?.cargo_id || 0);
+        if (!cargoId) continue;
+        const key = String(cargoId);
+        if (nextLabels[key]?.operationId || nextLabels[key]?.fileUrl) continue;
+
+        try {
+          const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+            body: {
+              action: "cargo_labels_create",
+              supplyId: fboSupplyId,
+              cargoIds: [cargoId],
+            },
+          });
+          if (data?.error) throw new Error(data.error);
+          if (invokeError) throw invokeError;
+          const operationId = String(data?.data?.operation_id || "");
+          if (!operationId) throw new Error("Ozon не вернул operation_id.");
+          nextLabels[key] = { operationId, fileUrl: "", status: "IN_PROGRESS" };
+        } catch (cause) {
+          nextLabels[key] = {
+            operationId: "",
+            fileUrl: "",
+            status: "FAILED",
+            error: cause instanceof Error ? cause.message : "Не удалось запросить этикетку",
+          };
+        }
+      }
+
+      setFboBoxLabels(nextLabels);
+      void updateFboWorkflow(8, { boxLabels: nextLabels });
+      setFboMessage("Запросы на этикетки отправлены отдельно для каждой коробки. Теперь проверьте готовность.");
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось запустить генерацию этикеток по коробкам");
+    } finally {
+      setFboLoading(false);
+    }
+  }
+
+  async function checkFboBoxLabels() {
+    if (!Object.keys(fboBoxLabels).length) return;
+    try {
+      setFboLoading(true);
+      setFboError("");
+
+      const nextLabels = { ...fboBoxLabels };
+      for (const [cargoId, label] of Object.entries(nextLabels)) {
+        if (!label.operationId || label.fileUrl) continue;
+        try {
+          const { data, error: invokeError } = await supabase.functions.invoke("ozon-fbo-supply", {
+            body: { action: "cargo_labels_get", operationId: label.operationId },
+          });
+          if (data?.error) throw new Error(data.error);
+          if (invokeError) throw invokeError;
+
+          const payload = data?.data || {};
+          const status = String(payload?.status || "IN_PROGRESS");
+          const fileUrl = String(payload?.result?.file_url || "");
+          if (status === "SUCCESS" && fileUrl) {
+            nextLabels[cargoId] = { ...label, status: "SUCCESS", fileUrl };
+          } else if (status === "FAILED") {
+            const reasons = payload?.errors?.error_reasons;
+            nextLabels[cargoId] = {
+              ...label,
+              status: "FAILED",
+              error: Array.isArray(reasons) && reasons.length ? reasons.join(", ") : "Ozon не сформировал этикетку",
+            };
+          } else {
+            nextLabels[cargoId] = { ...label, status: status || "IN_PROGRESS" };
+          }
+        } catch (cause) {
+          nextLabels[cargoId] = {
+            ...label,
+            status: "FAILED",
+            error: cause instanceof Error ? cause.message : "Не удалось проверить этикетку",
+          };
+        }
+      }
+
+      setFboBoxLabels(nextLabels);
+      void updateFboWorkflow(8, { boxLabels: nextLabels });
+      const cargoIds = fboCargoes
+        .map((cargo: any) => String(Number(cargo?.value?.cargo_id || cargo?.cargo_id || 0)))
+        .filter((value: string) => value !== "0");
+      const readyCount = cargoIds.filter((cargoId: string) => Boolean(nextLabels[cargoId]?.fileUrl)).length;
+      const failedCount = cargoIds.filter((cargoId: string) => nextLabels[cargoId]?.status === "FAILED").length;
+
+      if (cargoIds.length && readyCount === cargoIds.length) {
+        setFboMessage(`Готовы этикетки для всех коробок: ${readyCount}.`);
+        advanceFboStep(9, { boxLabels: nextLabels });
+      } else {
+        setFboMessage(`Готово этикеток: ${readyCount} из ${cargoIds.length}${failedCount ? `. Ошибок: ${failedCount}` : ""}.`);
+      }
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось проверить этикетки коробок");
     } finally {
       setFboLoading(false);
     }
