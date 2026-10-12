@@ -482,6 +482,7 @@ export default function OzonPage() {
           : { status: row.status || "CREATED" },
       );
       setFboDiagnostics(Array.isArray(row.diagnostics) ? row.diagnostics : []);
+      setFboError("");
       setFboMessage(
         `Восстановлен сохранённый черновик №${row.draft_id}: ${row.offer_id || "SKU " + row.sku}, ${number(Number(row.quantity || 0))} шт.`,
       );
