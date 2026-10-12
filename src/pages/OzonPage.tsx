@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 
+type Tab = "overview" | "analytics" | "stocks" | "matching" | "transfer";
+
 type Operation = {
   id: string;
   operation_date: string;
@@ -69,7 +71,18 @@ type OzonStockSummary = {
   fbsReserved: number;
 };
 
+type ComparisonRow = {
+  article: string;
+  name: string;
+  erp: number;
+  fbo: number;
+  fbs: number;
+  ozonTotal: number;
+  difference: number;
+};
+
 const inputStyle = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 12px" };
+const panelStyle = { background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18 };
 
 function dateInput(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -83,34 +96,55 @@ function money(value: number | string) {
   }).format(Number(value || 0));
 }
 
-function SummaryCard({ title, value, color = "#0f172a" }: { title: string; value: string; color?: string }) {
+function number(value: number) {
+  return new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 3 }).format(value || 0);
+}
+
+function SummaryCard({ title, value, color = "#0f172a", hint }: { title: string; value: string; color?: string; hint?: string }) {
   return (
-    <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 16, padding: 18 }}>
+    <div style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 16, padding: 18, minWidth: 0 }}>
       <div style={{ color: "#64748b", fontSize: 13, marginBottom: 8 }}>{title}</div>
-      <div style={{ color, fontSize: 24, fontWeight: 800, overflowWrap: "anywhere" }}>{value}</div>
+      <div style={{ color, fontSize: 24, fontWeight: 850, overflowWrap: "anywhere" }}>{value}</div>
+      {hint && <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 6 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function EmptyState({ title, text }: { title: string; text: string }) {
+  return (
+    <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
+      <div style={{ fontWeight: 800, color: "#334155", marginBottom: 6 }}>{title}</div>
+      <div>{text}</div>
     </div>
   );
 }
 
 export default function OzonPage() {
   const today = new Date();
+  const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [from, setFrom] = useState(dateInput(new Date(today.getFullYear(), today.getMonth(), 1)));
   const [to, setTo] = useState(dateInput(today));
+
   const [operations, setOperations] = useState<Operation[]>([]);
   const [runs, setRuns] = useState<SyncRun[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-  const [instructionOpen, setInstructionOpen] = useState(false);
   const [articleAnalytics, setArticleAnalytics] = useState<ArticleAnalytics[]>([]);
   const [analyticsSummary, setAnalyticsSummary] = useState<PeriodSummary | null>(null);
   const [operationCount, setOperationCount] = useState(0);
+
   const [stocks, setStocks] = useState<OzonStock[]>([]);
   const [stockSummary, setStockSummary] = useState<OzonStockSummary | null>(null);
-  const [stocksLoading, setStocksLoading] = useState(false);
-  const [stocksError, setStocksError] = useState("");
   const [stocksFetchedAt, setStocksFetchedAt] = useState("");
+  const [erpStockByArticle, setErpStockByArticle] = useState<Record<string, number>>({});
+
+  const [loading, setLoading] = useState(true);
+  const [stocksLoading, setStocksLoading] = useState(false);
+  const [erpLoading, setErpLoading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState("");
+  const [stocksError, setStocksError] = useState("");
+  const [message, setMessage] = useState("");
+  const [instructionOpen, setInstructionOpen] = useState(false);
+  const [transferDraft, setTransferDraft] = useState<Record<string, number>>({});
 
   const localSummary = useMemo(() => operations.reduce(
     (sum, row) => ({
@@ -126,8 +160,67 @@ export default function OzonPage() {
 
   const summary = analyticsSummary || localSummary;
 
+  const visibleStocks = useMemo(
+    () => stocks.filter((row) => row.totalPresent > 0 || row.totalReserved > 0),
+    [stocks]
+  );
+
+  const comparisons = useMemo<ComparisonRow[]>(() => {
+    const byArticle = new Map<string, ComparisonRow>();
+
+    for (const stock of visibleStocks) {
+      const key = stock.article.toLowerCase();
+      byArticle.set(key, {
+        article: stock.article,
+        name: stock.name,
+        erp: Number(erpStockByArticle[key] || 0),
+        fbo: stock.fboPresent,
+        fbs: stock.fbsPresent,
+        ozonTotal: stock.totalPresent,
+        difference: stock.totalPresent - Number(erpStockByArticle[key] || 0),
+      });
+    }
+
+    for (const [key, erp] of Object.entries(erpStockByArticle)) {
+      if (!byArticle.has(key) && Math.abs(erp) > 0.000001) {
+        byArticle.set(key, {
+          article: key,
+          name: key,
+          erp,
+          fbo: 0,
+          fbs: 0,
+          ozonTotal: 0,
+          difference: -erp,
+        });
+      }
+    }
+
+    return Array.from(byArticle.values()).sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference));
+  }, [visibleStocks, erpStockByArticle]);
+
+  const comparisonSummary = useMemo(() => {
+    let same = 0;
+    let different = 0;
+    let erpExtra = 0;
+    let ozonExtra = 0;
+    for (const row of comparisons) {
+      if (Math.abs(row.difference) < 0.000001) same += 1;
+      else {
+        different += 1;
+        if (row.difference > 0) ozonExtra += row.difference;
+        else erpExtra += Math.abs(row.difference);
+      }
+    }
+    return { same, different, erpExtra, ozonExtra };
+  }, [comparisons]);
+
+  const transferTotal = useMemo(
+    () => Object.values(transferDraft).reduce((sum, qty) => sum + Math.max(0, Number(qty || 0)), 0),
+    [transferDraft]
+  );
+
   useEffect(() => { void loadData(); }, [from, to]);
-  useEffect(() => { void loadStocks(); }, []);
+  useEffect(() => { void Promise.all([loadStocks(), loadErpStock()]); }, []);
 
   async function loadData() {
     try {
@@ -177,6 +270,51 @@ export default function OzonPage() {
     }
   }
 
+  async function loadErpStock() {
+    try {
+      setErpLoading(true);
+      const { data: stockRows, error: stockError } = await supabase
+        .from("stock_available")
+        .select("item_type,product_id,item_id,quantity_on_hand")
+        .in("item_type", ["product", "resale_product"]);
+      if (stockError) throw stockError;
+
+      const productIds = [...new Set((stockRows || []).map((row) => row.product_id).filter(Boolean))] as string[];
+      const itemIds = [...new Set((stockRows || []).map((row) => row.item_id).filter(Boolean))] as string[];
+
+      const [productsResult, itemsResult] = await Promise.all([
+        productIds.length
+          ? supabase.from("products").select("id,article").in("id", productIds)
+          : Promise.resolve({ data: [], error: null }),
+        itemIds.length
+          ? supabase.from("items").select("id,article").in("id", itemIds)
+          : Promise.resolve({ data: [], error: null }),
+      ]);
+
+      if (productsResult.error) throw productsResult.error;
+      if (itemsResult.error) throw itemsResult.error;
+
+      const articleByProduct = new Map((productsResult.data || []).map((row) => [row.id, String(row.article || "").toLowerCase()]));
+      const articleByItem = new Map((itemsResult.data || []).map((row) => [row.id, String(row.article || "").toLowerCase()]));
+
+      const next: Record<string, number> = {};
+      for (const row of stockRows || []) {
+        const article = row.item_id
+          ? articleByItem.get(row.item_id)
+          : row.product_id
+            ? articleByProduct.get(row.product_id)
+            : undefined;
+        if (!article) continue;
+        next[article] = (next[article] || 0) + Number(row.quantity_on_hand || 0);
+      }
+      setErpStockByArticle(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось загрузить остатки ERP");
+    } finally {
+      setErpLoading(false);
+    }
+  }
+
   async function syncOzon() {
     try {
       setSyncing(true);
@@ -186,7 +324,7 @@ export default function OzonPage() {
       if (invokeError) throw invokeError;
       if (data?.error) throw new Error(data.error);
       setMessage(`Готово: получено ${data?.loaded || 0}, обновлено ${data?.updated || 0} операций.`);
-      await Promise.all([loadData(), loadStocks()]);
+      await Promise.all([loadData(), loadStocks(), loadErpStock()]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Ошибка синхронизации с Ozon");
     } finally {
@@ -194,71 +332,151 @@ export default function OzonPage() {
     }
   }
 
-  return (
-    <div style={{ padding: 24, display: "grid", gap: 18 }}>
-      <header style={{ background: "linear-gradient(135deg,#005bff,#0046c7)", color: "#fff", borderRadius: 20, padding: 22 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "end", justifyContent: "space-between" }}>
-          <div><div style={{ fontSize: 24, fontWeight: 900 }}>Финансы Ozon</div><div style={{ marginTop: 7, opacity: 0.86 }}>Начисления — по дате операции, выплата — отдельное движение денег.</div></div>
-          <button onClick={() => setInstructionOpen((value) => !value)} style={{ border: "1px solid rgba(255,255,255,.55)", background: "rgba(255,255,255,.12)", color: "#fff", borderRadius: 12, padding: "11px 15px", fontWeight: 800, cursor: "pointer" }}>
-            {instructionOpen ? "Скрыть инструкцию" : "Как подключить Ozon"}
+  const tabs: Array<{ id: Tab; label: string; icon: string }> = [
+    { id: "overview", label: "Обзор", icon: "⌂" },
+    { id: "analytics", label: "Аналитика", icon: "▥" },
+    { id: "stocks", label: "Остатки", icon: "◫" },
+    { id: "matching", label: "Сопоставление", icon: "↔" },
+    { id: "transfer", label: "Перенос (тест)", icon: "⇄" },
+  ];
+
+  function PeriodControls() {
+    return (
+      <section style={{ ...panelStyle, padding: 18 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "end", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "end" }}>
+            <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+              С даты
+              <input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} style={inputStyle} />
+            </label>
+            <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>
+              По дату
+              <input type="date" value={to} min={from} max={dateInput(today)} onChange={(event) => setTo(event.target.value)} style={inputStyle} />
+            </label>
+          </div>
+          <button disabled={syncing || !from || !to} onClick={syncOzon}
+            style={{ border: 0, background: syncing ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 800, cursor: syncing ? "wait" : "pointer" }}>
+            {syncing ? "Обновляю…" : "Обновить данные"}
           </button>
-        </div>
-      </header>
-
-      {instructionOpen && (
-        <section style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 18, padding: 20, color: "#172554" }}>
-          <h3 style={{ margin: "0 0 12px" }}>Подключение Seller API</h3>
-          <ol style={{ margin: 0, paddingLeft: 22, display: "grid", gap: 10, lineHeight: 1.5 }}>
-            <li>В Ozon Seller открой «Настройки» → «API ключи» и создай отдельный ключ Seller API для ERP.</li>
-            <li>Дай доступ к финансам и товарам. Изменение цен и управление заказами модулю не нужны.</li>
-            <li>Скопируй Client ID и API Key. API Key не отправляй в чат и не вставляй в код сайта.</li>
-            <li>В Supabase проекта <b>erp-web</b> открой Edge Functions → Secrets и добавь <code>OZON_CLIENT_ID</code> и <code>OZON_API_KEY</code>.</li>
-            <li>Вернись сюда, выбери период и нажми «Забрать данные из Ozon».</li>
-          </ol>
-          <div style={{ marginTop: 14, padding: 12, borderRadius: 12, background: "#fff", fontSize: 13 }}>Повторный запуск безопасен: операции обновляются по идентификаторам Ozon и не задваиваются.</div>
-        </section>
-      )}
-
-      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "end" }}>
-          <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>С даты<input type="date" value={from} max={to} onChange={(event) => setFrom(event.target.value)} style={inputStyle} /></label>
-          <label style={{ display: "grid", gap: 6, fontSize: 13, color: "#475569" }}>По дату<input type="date" value={to} min={from} max={dateInput(today)} onChange={(event) => setTo(event.target.value)} style={inputStyle} /></label>
-          <button disabled={syncing || !from || !to} onClick={syncOzon} style={{ border: 0, background: syncing ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 800, cursor: syncing ? "wait" : "pointer" }}>{syncing ? "Забираю данные…" : "Забрать данные из Ozon"}</button>
         </div>
         {error && <div style={{ marginTop: 14, color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{error}</div>}
         {message && <div style={{ marginTop: 14, color: "#166534", background: "#f0fdf4", padding: 12, borderRadius: 10 }}>{message}</div>}
       </section>
+    );
+  }
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
-        <SummaryCard title="Продажи до удержаний" value={money(summary.gross)} />
-        <SummaryCard title="Комиссии и услуги Ozon" value={money(summary.ozon)} color={summary.ozon < 0 ? "#b91c1c" : "#0f172a"} />
-        <SummaryCard title="Начислено к выплате" value={money(summary.net)} color="#005bff" />
-        <SummaryCard title="Себестоимость" value={money(summary.cost)} />
-        <SummaryCard title="Прибыль до налога" value={money(summary.profit)} color={summary.profit >= 0 ? "#15803d" : "#b91c1c"} />
-        <SummaryCard title="Не сопоставлено" value={String(summary.unmatched)} color={summary.unmatched ? "#c2410c" : "#15803d"} />
-      </div>
-
-      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
-        <div style={{ padding: 18, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
-          <div>
-            <div style={{ fontWeight: 850, fontSize: 18 }}>Остатки Ozon</div>
-            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-              Только чтение из Ozon API. Остатки ERP пока не изменяются.
-              {stocksFetchedAt ? ` Обновлено: ${new Date(stocksFetchedAt).toLocaleString("ru-RU")}.` : ""}
-            </div>
-          </div>
-          <button
-            disabled={stocksLoading}
-            onClick={() => void loadStocks()}
-            style={{ border: 0, background: stocksLoading ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 11, padding: "10px 14px", fontWeight: 800, cursor: stocksLoading ? "wait" : "pointer" }}
-          >
-            {stocksLoading ? "Обновляю…" : "Обновить остатки"}
-          </button>
+  function Overview() {
+    const topAnalytics = articleAnalytics.slice(0, 5);
+    const topStocks = visibleStocks.slice(0, 5);
+    return (
+      <>
+        <PeriodControls />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12 }}>
+          <SummaryCard title="Продажи" value={money(summary.gross)} />
+          <SummaryCard title="Комиссии Ozon" value={money(summary.ozon)} color={summary.ozon < 0 ? "#b91c1c" : "#0f172a"} />
+          <SummaryCard title="К выплате" value={money(summary.net)} color="#005bff" />
+          <SummaryCard title="Себестоимость" value={money(summary.cost)} />
+          <SummaryCard title="Прибыль" value={money(summary.profit)} color={summary.profit >= 0 ? "#15803d" : "#b91c1c"} />
+          <SummaryCard title="Неподключенные товары" value={String(summary.unmatched)} color={summary.unmatched ? "#c2410c" : "#15803d"} />
         </div>
 
-        {stocksError && <div style={{ margin: "0 18px 14px", color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{stocksError}</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(420px,1fr))", gap: 14 }}>
+          <section style={{ ...panelStyle, overflow: "hidden" }}>
+            <div style={{ padding: 18, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+              <div><div style={{ fontWeight: 850, fontSize: 18 }}>Аналитика товаров</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Бестселлеры, комиссии и прибыль.</div></div>
+              <button onClick={() => setActiveTab("analytics")} style={{ border: 0, background: "#eff6ff", color: "#005bff", borderRadius: 10, padding: "9px 12px", fontWeight: 800, cursor: "pointer" }}>Открыть аналитику →</button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+                <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "Продажи", "Выручка", "Прибыль"].map((title) => <th key={title} style={{ padding: 11, fontSize: 12 }}>{title}</th>)}</tr></thead>
+                <tbody>{topAnalytics.map((row) => <tr key={row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                  <td style={{ padding: 11, fontWeight: 800 }}>{row.article}</td><td style={{ padding: 11 }}>{row.name}</td><td style={{ padding: 11 }}>{row.soldQty}</td><td style={{ padding: 11 }}>{money(row.gross)}</td><td style={{ padding: 11, fontWeight: 800, color: row.profit >= 0 ? "#15803d" : "#b91c1c" }}>{money(row.profit)}</td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+          </section>
 
-        <div style={{ padding: "0 18px 18px", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 10 }}>
+          <section style={{ ...panelStyle, overflow: "hidden" }}>
+            <div style={{ padding: 18, display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+              <div><div style={{ fontWeight: 850, fontSize: 18 }}>Остатки на Ozon</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Актуальные остатки FBO и FBS.</div></div>
+              <button onClick={() => setActiveTab("stocks")} style={{ border: 0, background: "#eff6ff", color: "#005bff", borderRadius: 10, padding: "9px 12px", fontWeight: 800, cursor: "pointer" }}>Открыть остатки →</button>
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+                <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "FBO", "Резерв", "FBS", "Всего"].map((title) => <th key={title} style={{ padding: 11, fontSize: 12 }}>{title}</th>)}</tr></thead>
+                <tbody>{topStocks.map((row) => <tr key={row.productId || row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                  <td style={{ padding: 11, fontWeight: 800 }}>{row.article}</td><td style={{ padding: 11 }}>{row.name}</td><td style={{ padding: 11, fontWeight: 800, color: "#005bff" }}>{row.fboPresent}</td><td style={{ padding: 11 }}>{row.fboReserved}</td><td style={{ padding: 11 }}>{row.fbsPresent}</td><td style={{ padding: 11, fontWeight: 800 }}>{row.totalPresent}</td>
+                </tr>)}</tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <section style={{ border: "1px solid #ddd6fe", background: "linear-gradient(90deg,#f5f3ff,#faf5ff)", borderRadius: 16, padding: 16, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <div><div style={{ color: "#5b21b6", fontWeight: 850 }}>⇄ Тестовый экран переноса товаров</div><div style={{ color: "#7c3aed", fontSize: 13, marginTop: 4 }}>Без записи в склад и без изменений в Ozon.</div></div>
+          <button onClick={() => setActiveTab("transfer")} style={{ border: 0, background: "#6d28d9", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer" }}>Открыть «Перенос (тест)» →</button>
+        </section>
+      </>
+    );
+  }
+
+  function Analytics() {
+    return (
+      <>
+        <PeriodControls />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
+          <SummaryCard title="Продажи" value={money(summary.gross)} />
+          <SummaryCard title="Ozon" value={money(summary.ozon)} />
+          <SummaryCard title="Себестоимость" value={money(summary.cost)} />
+          <SummaryCard title="Прибыль" value={money(summary.profit)} color={summary.profit >= 0 ? "#15803d" : "#b91c1c"} />
+        </div>
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18, display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+            <div><div style={{ fontWeight: 850, fontSize: 18 }}>Аналитика по артикулам</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div></div>
+            <div style={{ color: "#64748b", fontSize: 13 }}>Сортировка: по прибыли</div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}>
+              <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "Продажи", "Возвраты", "Выручка", "Ozon", "Себестоимость", "Прибыль", "Маржа", "Без себест."].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
+              <tbody>
+                {!loading && articleAnalytics.map((row) => <tr key={row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                  <td style={{ padding: 12, fontWeight: 800 }}>{row.article}</td><td style={{ padding: 12 }}>{row.name}</td><td style={{ padding: 12 }}>{row.soldQty}</td><td style={{ padding: 12 }}>{row.returnQty || "—"}</td><td style={{ padding: 12 }}>{money(row.gross)}</td><td style={{ padding: 12 }}>{money(row.ozon)}</td><td style={{ padding: 12 }}>{money(row.cost)}</td><td style={{ padding: 12, fontWeight: 800, color: row.profit >= 0 ? "#15803d" : "#b91c1c" }}>{money(row.profit)}</td><td style={{ padding: 12, color: row.margin >= 0 ? "#15803d" : "#b91c1c" }}>{row.margin.toFixed(1)}%</td><td style={{ padding: 12, color: row.missingCostQty ? "#c2410c" : "#15803d" }}>{row.missingCostQty || 0}</td>
+                </tr>)}
+                {!loading && articleAnalytics.length === 0 && <tr><td colSpan={10}><EmptyState title="Нет аналитики" text="За выбранный период данных пока нет." /></td></tr>}
+                {loading && <tr><td colSpan={10}><EmptyState title="Считаю аналитику" text="Загрузка данных Ozon…" /></td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18 }}><div style={{ fontWeight: 850, fontSize: 18 }}>Операции</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Показаны последние {Math.min(operationCount, 1000)} из {operationCount} операций.</div></div>
+          <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+            <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Дата", "Операция", "Отправление", "Продажа", "Ozon", "Начислено", "Себестоимость", "Прибыль", "Связь"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
+            <tbody>{operations.map((row) => <tr key={row.id} style={{ borderTop: "1px solid #eef2f7" }}><td style={{ padding: 12 }}>{new Date(row.operation_date).toLocaleDateString("ru-RU")}</td><td style={{ padding: 12 }}>{row.operation_type_name || "Операция Ozon"}</td><td style={{ padding: 12 }}>{row.posting_number || "—"}</td><td style={{ padding: 12 }}>{money(row.accruals_for_sale)}</td><td style={{ padding: 12 }}>{money(Number(row.sale_commission) + Number(row.services_total))}</td><td style={{ padding: 12 }}>{money(row.amount)}</td><td style={{ padding: 12 }}>{money(row.cost_of_goods)}</td><td style={{ padding: 12, color: Number(row.profit) >= 0 ? "#15803d" : "#b91c1c", fontWeight: 800 }}>{money(row.profit)}</td><td style={{ padding: 12 }}>{row.matched ? "✓" : "Проверить"}</td></tr>)}</tbody>
+          </table></div>
+        </section>
+
+        <section style={{ ...panelStyle, padding: 18 }}>
+          <div style={{ fontWeight: 850, fontSize: 18, marginBottom: 12 }}>Последние синхронизации</div>
+          {runs.length === 0 ? <div style={{ color: "#64748b" }}>Синхронизаций ещё не было.</div> : runs.map((run) => <div key={run.id} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, padding: "10px 0", borderTop: "1px solid #eef2f7" }}><span>{new Date(run.started_at).toLocaleString("ru-RU")}</span><span>{run.status === "completed" ? "Готово" : run.status === "failed" ? "Ошибка" : "Выполняется"} · {run.operations_loaded || 0} операций</span>{run.error_message && <span style={{ color: "#b91c1c", width: "100%" }}>{run.error_message}</span>}</div>)}
+        </section>
+      </>
+    );
+  }
+
+  function Stocks() {
+    return (
+      <>
+        <section style={{ ...panelStyle, padding: 18 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+            <div><div style={{ fontWeight: 850, fontSize: 20 }}>Остатки Ozon</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Только чтение из Ozon API. ERP не изменяется.{stocksFetchedAt ? ` Обновлено: ${new Date(stocksFetchedAt).toLocaleString("ru-RU")}.` : ""}</div></div>
+            <button disabled={stocksLoading} onClick={() => void loadStocks()} style={{ border: 0, background: stocksLoading ? "#94a3b8" : "#0f172a", color: "#fff", borderRadius: 11, padding: "10px 14px", fontWeight: 800, cursor: stocksLoading ? "wait" : "pointer" }}>{stocksLoading ? "Обновляю…" : "Обновить остатки"}</button>
+          </div>
+          {stocksError && <div style={{ marginTop: 14, color: "#b91c1c", background: "#fef2f2", padding: 12, borderRadius: 10 }}>{stocksError}</div>}
+        </section>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(170px,1fr))", gap: 12 }}>
           <SummaryCard title="FBO в наличии" value={String(stockSummary?.fboPresent || 0)} color="#005bff" />
           <SummaryCard title="FBO в резерве" value={String(stockSummary?.fboReserved || 0)} />
           <SummaryCard title="FBS в наличии" value={String(stockSummary?.fbsPresent || 0)} />
@@ -266,102 +484,137 @@ export default function OzonPage() {
           <SummaryCard title="Позиций с остатком" value={String(stockSummary?.products || 0)} />
         </div>
 
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
-                {["Артикул", "Товар", "FBO в наличии", "FBO резерв", "FBS в наличии", "FBS резерв", "Всего в наличии"].map((title) => (
-                  <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {!stocksLoading && stocks.filter((row) => row.totalPresent > 0 || row.totalReserved > 0).map((row) => (
-                <tr key={row.productId || row.article} style={{ borderTop: "1px solid #eef2f7" }}>
-                  <td style={{ padding: 12, fontWeight: 800, whiteSpace: "nowrap" }}>{row.article || "—"}</td>
-                  <td style={{ padding: 12 }}>{row.name || "—"}</td>
-                  <td style={{ padding: 12, fontWeight: 800, color: row.fboPresent > 0 ? "#005bff" : "#64748b" }}>{row.fboPresent}</td>
-                  <td style={{ padding: 12 }}>{row.fboReserved}</td>
-                  <td style={{ padding: 12 }}>{row.fbsPresent}</td>
-                  <td style={{ padding: 12 }}>{row.fbsReserved}</td>
-                  <td style={{ padding: 12, fontWeight: 800 }}>{row.totalPresent}</td>
-                </tr>
-              ))}
-              {!stocksLoading && !stocksError && stocks.filter((row) => row.totalPresent > 0 || row.totalReserved > 0).length === 0 && (
-                <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Ozon не вернул товаров с остатком.</td></tr>
-              )}
-              {stocksLoading && (
-                <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Загружаю актуальные остатки Ozon…</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
-        <div style={{ padding: 18, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
-          <div>
-            <div style={{ fontWeight: 850, fontSize: 18 }}>Аналитика по артикулам</div>
-            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div>
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18, fontWeight: 850, fontSize: 18 }}>Остатки товаров на Ozon</div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+              <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "FBO в наличии", "FBO резерв", "FBS в наличии", "FBS резерв", "Всего"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
+              <tbody>
+                {!stocksLoading && visibleStocks.map((row) => <tr key={row.productId || row.article} style={{ borderTop: "1px solid #eef2f7" }}><td style={{ padding: 12, fontWeight: 800 }}>{row.article}</td><td style={{ padding: 12 }}>{row.name}</td><td style={{ padding: 12, color: "#005bff", fontWeight: 800 }}>{row.fboPresent}</td><td style={{ padding: 12 }}>{row.fboReserved}</td><td style={{ padding: 12 }}>{row.fbsPresent}</td><td style={{ padding: 12 }}>{row.fbsReserved}</td><td style={{ padding: 12, fontWeight: 800 }}>{row.totalPresent}</td></tr>)}
+                {!stocksLoading && visibleStocks.length === 0 && <tr><td colSpan={7}><EmptyState title="Нет остатков" text="Ozon не вернул товаров с остатком." /></td></tr>}
+                {stocksLoading && <tr><td colSpan={7}><EmptyState title="Обновляю остатки" text="Загружаю актуальные данные Ozon…" /></td></tr>}
+              </tbody>
+            </table>
           </div>
-          <div style={{ color: "#64748b", fontSize: 13 }}>Сортировка: по прибыли</div>
-        </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}>
-            <thead>
-              <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
-                {["Артикул", "Товар", "Продажи", "Возвраты", "Выручка", "Ozon", "Себестоимость", "Прибыль", "Маржа", "Без себест."].map((title) => (
-                  <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {!loading && articleAnalytics.map((row) => (
-                <tr key={row.article} style={{ borderTop: "1px solid #eef2f7" }}>
-                  <td style={{ padding: 12, fontWeight: 800, whiteSpace: "nowrap" }}>{row.article}</td>
-                  <td style={{ padding: 12 }}>{row.name}</td>
-                  <td style={{ padding: 12 }}>{row.soldQty}</td>
-                  <td style={{ padding: 12 }}>{row.returnQty || "—"}</td>
-                  <td style={{ padding: 12 }}>{money(row.gross)}</td>
-                  <td style={{ padding: 12, color: row.ozon < 0 ? "#b91c1c" : "#0f172a" }}>{money(row.ozon)}</td>
-                  <td style={{ padding: 12 }}>{money(row.cost)}</td>
-                  <td style={{ padding: 12, fontWeight: 800, color: row.profit >= 0 ? "#15803d" : "#b91c1c" }}>{money(row.profit)}</td>
-                  <td style={{ padding: 12, fontWeight: 700, color: row.margin >= 0 ? "#15803d" : "#b91c1c" }}>{row.margin.toFixed(1)}%</td>
-                  <td style={{ padding: 12, color: row.missingCostQty ? "#c2410c" : "#15803d", fontWeight: 700 }}>{row.missingCostQty || "0"}</td>
-                </tr>
-              ))}
-              {!loading && articleAnalytics.length === 0 && (
-                <tr><td colSpan={10} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>За выбранный период аналитики пока нет.</td></tr>
-              )}
-              {loading && (
-                <tr><td colSpan={10} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Считаю аналитику…</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+        </section>
+      </>
+    );
+  }
 
-      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, overflow: "hidden" }}>
-        <div style={{ padding: 18 }}>
-          <div style={{ fontWeight: 850, fontSize: 18 }}>Операции</div>
-          <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Показаны последние {Math.min(operationCount, 1000)} из {operationCount} операций периода.</div>
+  function Matching() {
+    return (
+      <>
+        <section style={{ border: "1px solid #fde68a", background: "#fffbeb", borderRadius: 16, padding: 16 }}>
+          <div style={{ fontWeight: 850, color: "#92400e" }}>⚠ Режим сравнения только для проверки данных</div>
+          <div style={{ color: "#a16207", fontSize: 13, marginTop: 5 }}>Никаких автоматических корректировок ERP или Ozon на этой вкладке не выполняется.</div>
+        </section>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
+          <SummaryCard title="Совпало" value={String(comparisonSummary.same)} color="#15803d" />
+          <SummaryCard title="Расхождения" value={String(comparisonSummary.different)} color="#b91c1c" />
+          <SummaryCard title="Излишек в ERP" value={number(comparisonSummary.erpExtra)} />
+          <SummaryCard title="Излишек на Ozon" value={number(comparisonSummary.ozonExtra)} color="#6d28d9" />
         </div>
-        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
-          <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Дата", "Операция", "Отправление", "Продажа", "Ozon", "Начислено", "Себестоимость", "Прибыль", "Связь"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
-          <tbody>
-            {!loading && operations.map((row) => <tr key={row.id} style={{ borderTop: "1px solid #eef2f7" }}>
-              <td style={{ padding: 12, whiteSpace: "nowrap" }}>{new Date(row.operation_date).toLocaleDateString("ru-RU")}</td><td style={{ padding: 12 }}>{row.operation_type_name || "Операция Ozon"}</td><td style={{ padding: 12 }}>{row.posting_number || "—"}</td><td style={{ padding: 12 }}>{money(row.accruals_for_sale)}</td><td style={{ padding: 12 }}>{money(Number(row.sale_commission) + Number(row.services_total))}</td><td style={{ padding: 12, fontWeight: 700 }}>{money(row.amount)}</td><td style={{ padding: 12 }}>{money(row.cost_of_goods)}</td><td style={{ padding: 12, fontWeight: 800, color: Number(row.profit) >= 0 ? "#15803d" : "#b91c1c" }}>{money(row.profit)}</td><td style={{ padding: 12 }}>{row.matched ? "✓" : "Проверить"}</td>
-            </tr>)}
-            {!loading && operations.length === 0 && <tr><td colSpan={9} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>За выбранный период данных пока нет.</td></tr>}
-            {loading && <tr><td colSpan={9} style={{ padding: 28, textAlign: "center", color: "#64748b" }}>Загрузка…</td></tr>}
-          </tbody>
-        </table></div>
-      </section>
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <div><div style={{ fontWeight: 850, fontSize: 18 }}>Сопоставление ERP ↔ Ozon</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Это диагностическая таблица. Весеннюю партию пока не переносим.</div></div>
+            <button disabled={erpLoading || stocksLoading} onClick={() => void Promise.all([loadStocks(), loadErpStock()])} style={{ border: 0, background: "#0f172a", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800, cursor: "pointer" }}>Обновить сравнение</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 850 }}>
+              <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "ERP сейчас", "Ozon FBO", "Ozon FBS", "Разница", "Статус"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
+              <tbody>{comparisons.map((row) => {
+                const same = Math.abs(row.difference) < 0.000001;
+                const status = same ? "Совпадает" : row.difference > 0 ? "Больше на Ozon" : "Больше в ERP";
+                return <tr key={row.article} style={{ borderTop: "1px solid #eef2f7" }}><td style={{ padding: 12, fontWeight: 800 }}>{row.article}</td><td style={{ padding: 12 }}>{row.name}</td><td style={{ padding: 12 }}>{number(row.erp)}</td><td style={{ padding: 12 }}>{row.fbo}</td><td style={{ padding: 12 }}>{row.fbs}</td><td style={{ padding: 12, fontWeight: 800, color: same ? "#64748b" : "#b91c1c" }}>{row.difference > 0 ? "+" : ""}{number(row.difference)}</td><td style={{ padding: 12 }}><span style={{ display: "inline-block", borderRadius: 999, padding: "5px 9px", fontSize: 12, fontWeight: 800, background: same ? "#dcfce7" : row.difference > 0 ? "#f3e8ff" : "#dbeafe", color: same ? "#166534" : row.difference > 0 ? "#6b21a8" : "#1d4ed8" }}>{status}</span></td></tr>;
+              })}</tbody>
+            </table>
+          </div>
+        </section>
+      </>
+    );
+  }
 
-      <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18 }}>
-        <div style={{ fontWeight: 850, fontSize: 18, marginBottom: 12 }}>Последние синхронизации</div>
-        {runs.length === 0 ? <div style={{ color: "#64748b" }}>Синхронизаций ещё не было.</div> : runs.map((run) => <div key={run.id} style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 8, padding: "10px 0", borderTop: "1px solid #eef2f7" }}><span>{new Date(run.started_at).toLocaleString("ru-RU")}</span><span>{run.status === "completed" ? "Готово" : run.status === "failed" ? "Ошибка" : "Выполняется"} · {run.operations_loaded || 0} операций</span>{run.error_message && <span style={{ color: "#b91c1c", width: "100%" }}>{run.error_message}</span>}</div>)}
-      </section>
+  function TransferTest() {
+    const rows = comparisons.filter((row) => row.erp > 0 || row.ozonTotal > 0).slice(0, 80);
+    return (
+      <>
+        <section style={{ border: "1px solid #fed7aa", background: "#fff7ed", borderRadius: 16, padding: 17, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+          <div><div style={{ fontWeight: 900, color: "#9a3412" }}>⚠ Тестовый режим — никаких складских движений не создаётся</div><div style={{ color: "#c2410c", fontSize: 13, marginTop: 4 }}>Экран нужен только для подготовки будущей схемы переноса Основной склад → Ozon FBO.</div></div>
+          <span style={{ border: "1px solid #fb923c", color: "#c2410c", borderRadius: 999, padding: "7px 11px", fontWeight: 850, fontSize: 12 }}>ТЕСТОВЫЙ РЕЖИМ</span>
+        </section>
+
+        <section style={{ ...panelStyle, padding: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12 }}>
+            {[
+              ["1", "Загрузить Ozon", "Фактические FBO/FBS"],
+              ["2", "Сравнить с ERP", "Без изменений"],
+              ["3", "Проверить весеннюю партию", "Отделить новый товар"],
+              ["4", "Подготовить перенос", "Черновые количества"],
+              ["5", "Подтвердить позже", "После проверки"],
+            ].map(([n, title, sub]) => <div key={n} style={{ display: "flex", gap: 10 }}><div style={{ width: 32, height: 32, borderRadius: "50%", background: n === "5" ? "#e2e8f0" : "#005bff", color: n === "5" ? "#64748b" : "#fff", display: "grid", placeItems: "center", fontWeight: 900, flex: "0 0 auto" }}>{n}</div><div><div style={{ fontWeight: 800 }}>{title}</div><div style={{ color: "#64748b", fontSize: 12, marginTop: 3 }}>{sub}</div></div></div>)}
+          </div>
+        </section>
+
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18 }}>
+            <div style={{ fontWeight: 850, fontSize: 18 }}>Подготовить перенос (тест)</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Укажите предполагаемое количество. Значения остаются только на экране и никуда не записываются.</div>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+              <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "ERP сейчас", "Ozon сейчас", "К переносу (тест)", "Комментарий"].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
+              <tbody>{rows.map((row) => {
+                const draft = transferDraft[row.article] ?? 0;
+                return <tr key={row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                  <td style={{ padding: 12, fontWeight: 800 }}>{row.article}</td><td style={{ padding: 12 }}>{row.name}</td><td style={{ padding: 12, color: "#005bff", fontWeight: 800 }}>{number(row.erp)}</td><td style={{ padding: 12 }}>{row.ozonTotal}</td>
+                  <td style={{ padding: 12 }}><input type="number" min={0} value={draft} onChange={(event) => setTransferDraft((prev) => ({ ...prev, [row.article]: Math.max(0, Number(event.target.value || 0)) }))} style={{ ...inputStyle, width: 110 }} /></td>
+                  <td style={{ padding: 12, color: "#64748b" }}>{row.erp > 0 && row.ozonTotal > 0 ? "Проверить вручную" : row.erp > 0 ? "Есть только в ERP" : "Есть только на Ozon"}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>
+          <div style={{ padding: 18, borderTop: "1px solid #eef2f7", display: "flex", justifyContent: "flex-end", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <div>Итого к переносу (тест): <b style={{ color: "#005bff", fontSize: 22 }}>{number(transferTotal)}</b> шт.</div>
+            <button disabled style={{ border: 0, background: "#cbd5e1", color: "#fff", borderRadius: 10, padding: "10px 14px", fontWeight: 800 }}>Сохранение будет позже</button>
+          </div>
+        </section>
+      </>
+    );
+  }
+
+  return (
+    <div style={{ padding: 24, display: "grid", gap: 18, background: "#f6f9ff", minHeight: "100%" }}>
+      <header style={{ ...panelStyle, padding: 20 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 12, alignItems: "center" }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 30, fontWeight: 950, color: "#0f172a" }}>Ozon</div>
+              <span style={{ background: "#ecfdf5", color: "#059669", borderRadius: 999, padding: "6px 10px", fontSize: 12, fontWeight: 800 }}>● Подключен</span>
+            </div>
+            <div style={{ color: "#64748b", marginTop: 4 }}>Управление продажами, остатками и товарами на маркетплейсе Ozon.</div>
+          </div>
+          <button onClick={() => setInstructionOpen((value) => !value)} style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#334155", borderRadius: 10, padding: "9px 12px", fontWeight: 800, cursor: "pointer" }}>{instructionOpen ? "Скрыть подключение" : "Подключение API"}</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 0, marginTop: 18, overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: 14, background: "#f8fafc" }}>
+          {tabs.map((tab) => {
+            const active = activeTab === tab.id;
+            return <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: "1 0 150px", border: 0, borderBottom: active ? "3px solid #005bff" : "3px solid transparent", background: active ? "#fff" : "transparent", color: active ? "#005bff" : "#475569", padding: "14px 12px", fontWeight: 850, cursor: "pointer" }}><span style={{ marginRight: 7 }}>{tab.icon}</span>{tab.label}{tab.id === "transfer" && <span style={{ marginLeft: 7, background: "#ede9fe", color: "#6d28d9", borderRadius: 999, padding: "3px 7px", fontSize: 10 }}>Тест</span>}</button>;
+          })}
+        </div>
+      </header>
+
+      {instructionOpen && (
+        <section style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 18, padding: 18, color: "#172554" }}>
+          <b>Seller API подключён.</b> Client ID и API Key хранятся в секретах Supabase. Повторная синхронизация финансовых операций безопасна и обновляет существующие записи по идентификаторам Ozon.
+        </section>
+      )}
+
+      {activeTab === "overview" && <Overview />}
+      {activeTab === "analytics" && <Analytics />}
+      {activeTab === "stocks" && <Stocks />}
+      {activeTab === "matching" && <Matching />}
+      {activeTab === "transfer" && <TransferTest />}
     </div>
   );
 }
