@@ -1786,13 +1786,19 @@ export default function OzonPage() {
 
           {fboError && <div style={{ background: "#fef2f2", color: "#b91c1c", borderRadius: 12, padding: 13 }}>{fboError}</div>}
 
-          <div style={{ overflowX: "auto", paddingBottom: 8 }}>
-            <div style={{ display: "flex", gap: 12, alignItems: "flex-start", minWidth: "max-content" }}>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit,minmax(250px,1fr))",
+            gap: 12,
+            alignItems: "start",
+            width: "100%",
+          }}>
               {kanbanColumns.map((column) => {
                 const cards = cardsByKanbanStage(column.id);
                 return (
                   <div key={column.id} style={{
-                    width: 285,
+                    width: "100%",
+                    minWidth: 0,
                     background: column.id === "PROBLEM" ? "#fff7ed" : "#f8fafc",
                     border: column.id === "PROBLEM" ? "1px solid #fed7aa" : "1px solid #e2e8f0",
                     borderRadius: 16,
@@ -1867,7 +1873,6 @@ export default function OzonPage() {
                   </div>
                 );
               })}
-            </div>
           </div>
         </section>
       );
