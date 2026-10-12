@@ -291,16 +291,9 @@ export default function OzonPage() {
   useEffect(() => {
     if (activeTab === "fbo") {
       if (fboClusters.length === 0) void loadFboClusters();
-      if (fboSellerWarehouses.length === 0) void loadFboSellerWarehouses();
       void loadSavedFboDraft();
     }
   }, [activeTab]);
-
-  useEffect(() => {
-    if (activeTab === "fbo" && fboStep === 6 && fboOrderId && !fboSupplyItem) {
-      void loadCreatedFboOrder(fboOrderId);
-    }
-  }, [activeTab, fboStep, fboOrderId]);
 
   async function loadData() {
     try {
