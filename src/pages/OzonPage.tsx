@@ -189,6 +189,7 @@ export default function OzonPage() {
   const [fboMessage, setFboMessage] = useState("");
   const [fboWarehouseId, setFboWarehouseId] = useState("");
   const [fboManualStorage, setFboManualStorage] = useState(false);
+  const [fboStep, setFboStep] = useState(1);
   const [fboTimeslotFrom, setFboTimeslotFrom] = useState(dateInput(new Date()));
   const [fboTimeslotTo, setFboTimeslotTo] = useState(dateInput(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)));
   const [fboTimeslots, setFboTimeslots] = useState<any[]>([]);
@@ -457,6 +458,8 @@ export default function OzonPage() {
       setFboMessage(
         `Восстановлен сохранённый черновик №${row.draft_id}: ${row.offer_id || "SKU " + row.sku}, ${number(Number(row.quantity || 0))} шт.`,
       );
+      if (String(row.status || "") === "SUCCESS") setFboStep(4);
+      else setFboStep(3);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось восстановить сохранённый черновик");
     }
@@ -646,8 +649,9 @@ export default function OzonPage() {
       setFboDraftInfo({ status: "CREATED" });
       setFboDiagnostics([]);
       setFboMessage(
-        `Черновик CROSSDOCK №${draftId} создан: bini-black-56, 42 шт. Подождите 5–10 секунд и нажмите «Обновить статус».`,
+        `Черновик CROSSDOCK №${draftId} создан: bini-black-56, 42 шт. Подождите несколько секунд и обновите статус.`,
       );
+      setFboStep(3);
     } catch (cause) {
       setFboError(cause instanceof Error ? cause.message : "Не удалось создать тестовый черновик FBO");
     } finally {
@@ -665,8 +669,10 @@ export default function OzonPage() {
       });
       if (data?.error) throw new Error(data.error);
       if (invokeError) throw invokeError;
-      setFboDraftInfo(data?.data || null);
+      const nextDraftInfo = data?.data || null;
+      setFboDraftInfo(nextDraftInfo);
       setFboDiagnostics(Array.isArray(data?.diagnostics) ? data.diagnostics : []);
+      if (String(nextDraftInfo?.status || "") === "SUCCESS") setFboStep(4);
     } catch (cause) {
       const currentStatus = String(fboDraftInfo?.status || "");
       if (currentStatus === "IN_PROGRESS") {
