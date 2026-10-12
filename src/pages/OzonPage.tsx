@@ -581,8 +581,7 @@ export default function OzonPage() {
       const clusterId = Number(fboClusterId);
       if (!clusterId) throw new Error("Выберите кластер размещения Ozon.");
 
-      const sellerWarehouseId = Number(fboSellerWarehouseId);
-      if (!sellerWarehouseId) throw new Error("Выберите склад продавца Ozon.");
+      const sellerWarehouseId = Number(fboSellerWarehouseId || 0);
 
       const dropoff = fboDropoffPoints.find(
         (row: any) => String(row?.warehouse_id || "") === fboDropoffWarehouseId,
@@ -1102,9 +1101,9 @@ export default function OzonPage() {
                 ))}
                 </select>
               </label>
-              {fboGeneralWarehouses.length > 0 && fboSellerWarehouses.length === 0 && (
-                <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 10, padding: 10, fontSize: 12 }}>
-                  Общий список Ozon видит {fboGeneralWarehouses.length} склад(а), но FBO API не возвращает ни одного seller warehouse. Это разные сущности — общий склад нельзя подставлять автоматически вместо FBO seller warehouse.
+              {fboSellerWarehouses.length === 0 && (
+                <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", borderRadius: 10, padding: 10, fontSize: 12 }}>
+                  FBO seller warehouse у этого кабинета не зарегистрирован. Для схемы DROPOFF попробуем создать только черновик с seller_warehouse_id = 0. Это безопасный тест: реальная поставка не создаётся.
                 </div>
               )}
               <div>
@@ -1166,7 +1165,7 @@ export default function OzonPage() {
             <button
               type="button"
               onClick={() => void createTestFboDraft()}
-              disabled={fboLoading || !fboClusterId || !fboSellerWarehouseId || !fboDropoffWarehouseId}
+              disabled={fboLoading || !fboClusterId || !fboDropoffWarehouseId}
               style={{ border: 0, background: fboLoading ? "#94a3b8" : "#005bff", color: "#fff", borderRadius: 11, padding: "11px 17px", fontWeight: 900, cursor: fboLoading ? "wait" : "pointer" }}
             >
               {fboLoading ? "Работаю…" : "Создать CROSSDOCK-черновик на 42 шт."}
