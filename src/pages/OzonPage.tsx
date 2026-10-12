@@ -71,6 +71,19 @@ type OzonStockSummary = {
   fbsReserved: number;
 };
 
+type SavedFboDraft = {
+  draft_id: number;
+  macrolocal_cluster_id: number;
+  sku: number;
+  offer_id: string | null;
+  quantity: number;
+  status: string;
+  ozon_response: any;
+  diagnostics: string[] | null;
+  created_at: string;
+  updated_at: string;
+};
+
 type FboCluster = {
   id: number;
   name: string;
@@ -238,7 +251,10 @@ export default function OzonPage() {
   useEffect(() => { void loadData(); }, [from, to]);
   useEffect(() => { void Promise.all([loadStocks(), loadErpStock()]); }, []);
   useEffect(() => {
-    if (activeTab === "fbo" && fboClusters.length === 0) void loadFboClusters();
+    if (activeTab === "fbo") {
+      if (fboClusters.length === 0) void loadFboClusters();
+      void loadSavedFboDraft();
+    }
   }, [activeTab]);
 
   async function loadData() {
@@ -364,6 +380,35 @@ export default function OzonPage() {
     }
   }
 
+  async function loadSavedFboDraft() {
+    try {
+      const { data, error: loadError } = await supabase
+        .from("ozon_fbo_drafts")
+        .select("draft_id,macrolocal_cluster_id,sku,offer_id,quantity,status,ozon_response,diagnostics,created_at,updated_at")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (loadError) throw loadError;
+      const row = data as SavedFboDraft | null;
+      if (!row) return;
+
+      setFboDraftId(Number(row.draft_id));
+      setFboClusterId(String(row.macrolocal_cluster_id));
+      setFboDraftInfo(
+        row.ozon_response && typeof row.ozon_response === "object"
+          ? { ...row.ozon_response, status: row.status || row.ozon_response?.status }
+          : { status: row.status || "CREATED" },
+      );
+      setFboDiagnostics(Array.isArray(row.diagnostics) ? row.diagnostics : []);
+      setFboMessage(
+        `Восстановлен сохранённый черновик №${row.draft_id}: ${row.offer_id || "SKU " + row.sku}, ${number(Number(row.quantity || 0))} шт.`,
+      );
+    } catch (cause) {
+      setFboError(cause instanceof Error ? cause.message : "Не удалось восстановить сохранённый черновик");
+    }
+  }
+
   async function loadFboClusters() {
     try {
       setFboLoading(true);
@@ -414,6 +459,7 @@ export default function OzonPage() {
           macrolocalClusterId: clusterId,
           sku: 2492278688,
           quantity: 42,
+          offerId: "bini-black-56",
         },
       });
 
