@@ -23,7 +23,7 @@ import AssetsDirectory from "./directories/AssetsDirectory";
 import { supabase } from "./supabase";
 import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
 import ValeraPage from "./valera/ValeraPage";
-import { shouldOpenValera } from "./valera/bridge";
+import { readValeraLaunchContext } from "./valera/bridge";
 
 type Screen =
   | "dashboard"
@@ -103,11 +103,22 @@ function App() {
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
   const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
-    if (shouldOpenValera()) return "valera";
+    const launch = readValeraLaunchContext();
 
     if (typeof window !== "undefined") {
       const saved = window.localStorage.getItem(SCREEN_STORAGE_KEY);
-      if (isScreen(saved)) return saved;
+
+      if (launch.requested && launch.source === "android") {
+        return "valera";
+      }
+
+      if (isScreen(saved)) {
+        return saved;
+      }
+
+      if (launch.requested) {
+        return "valera";
+      }
     }
 
     return "dashboard";
