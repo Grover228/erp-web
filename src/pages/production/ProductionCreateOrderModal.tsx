@@ -8,11 +8,19 @@ type ProductionCreateOrderModalProps = {
   quantity: string;
   comment: string;
   creating: boolean;
+  chzOrderEnabled: boolean;
+  chzMappingLoading: boolean;
+  chzMapping: {
+    gtin: string;
+    good_name?: string | null;
+    good_status?: string | null;
+  } | null;
   onClose: () => void;
   onSubmit: (event: React.FormEvent) => void;
   onProductChange: (productId: string) => void;
   onQuantityChange: (value: string) => void;
   onCommentChange: (value: string) => void;
+  onChzOrderEnabledChange: (value: boolean) => void;
 };
 
 export default function ProductionCreateOrderModal({
@@ -22,11 +30,15 @@ export default function ProductionCreateOrderModal({
   quantity,
   comment,
   creating,
+  chzOrderEnabled,
+  chzMappingLoading,
+  chzMapping,
   onClose,
   onSubmit,
   onProductChange,
   onQuantityChange,
   onCommentChange,
+  onChzOrderEnabledChange,
 }: ProductionCreateOrderModalProps) {
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
@@ -209,6 +221,73 @@ export default function ProductionCreateOrderModal({
                     ? selectedTechCard.name
                     : "Активная техкарта"}
               </div>
+            </div>
+          )}
+
+          {selectedProduct && (
+            <div
+              style={{
+                border: chzMapping ? "1px solid #bbf7d0" : "1px solid #fed7aa",
+                background: chzMapping ? "#f0fdf4" : "#fff7ed",
+                borderRadius: 14,
+                padding: isMobile ? 11 : 13,
+                display: "grid",
+                gap: 9,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: "#0f172a" }}>
+                    Честный ЗНАК
+                  </div>
+                  <div style={{ marginTop: 3, fontSize: 12, color: "#64748b" }}>
+                    Производственное задание будет связано с заказом кодов маркировки.
+                  </div>
+                </div>
+                {chzMapping && (
+                  <div style={{ borderRadius: 999, padding: "5px 9px", background: "#dcfce7", color: "#166534", fontSize: 12, fontWeight: 850 }}>
+                    GTIN найден
+                  </div>
+                )}
+              </div>
+
+              {chzMappingLoading ? (
+                <div style={{ color: "#64748b", fontSize: 13 }}>Проверяю связь изделия с Национальным каталогом…</div>
+              ) : chzMapping ? (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(140px,0.55fr) minmax(220px,1.45fr)", gap: 8 }}>
+                    <div>
+                      <div style={{ color: "#64748b", fontSize: 11, fontWeight: 750 }}>GTIN</div>
+                      <div style={{ marginTop: 2, fontFamily: "monospace", fontWeight: 850, color: "#0f172a" }}>{chzMapping.gtin}</div>
+                    </div>
+                    <div>
+                      <div style={{ color: "#64748b", fontSize: 11, fontWeight: 750 }}>Карточка ЧЗ</div>
+                      <div style={{ marginTop: 2, fontWeight: 800, color: "#0f172a" }}>{chzMapping.good_name || "Связанная карточка"}</div>
+                    </div>
+                  </div>
+
+                  <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={chzOrderEnabled}
+                      onChange={(event) => onChzOrderEnabledChange(event.target.checked)}
+                      style={{ width: 18, height: 18, marginTop: 1 }}
+                    />
+                    <span style={{ display: "grid", gap: 2 }}>
+                      <strong style={{ color: "#0f172a", fontSize: 13 }}>
+                        Подготовить заказ ЧЗ вместе с производственным заданием
+                      </strong>
+                      <span style={{ color: "#64748b", fontSize: 12 }}>
+                        Кодов: <b>{Math.max(0, Number(quantity || 0))}</b> шт. Сейчас создаётся связанный черновик заказа ЧЗ; отправку в СУЗ подтвердим отдельно.
+                      </span>
+                    </span>
+                  </label>
+                </>
+              ) : (
+                <div style={{ color: "#9a3412", fontSize: 13, lineHeight: 1.45 }}>
+                  Для этого изделия GTIN пока не связан. Производственное задание создать можно, но заказ ЧЗ автоматически подготовлен не будет.
+                </div>
+              )}
             </div>
           )}
 
