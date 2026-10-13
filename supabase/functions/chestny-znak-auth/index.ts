@@ -863,6 +863,98 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
       });
     }
 
+    if (action === "fetch_suz_codes") {
+      const productionOrderId = String(body?.productionOrderId || "").trim();
+      if (!productionOrderId) throw new Error("Не указан производственный заказ.");
+
+      const state = await readState();
+      if (!state?.client_token || !state?.oms_id) {
+        throw new Error("Нет активной серверной сессии СУЗ.");
+      }
+      const expiresAt = state?.expires_at ? new Date(state.expires_at).getTime() : 0;
+      if (!expiresAt || expiresAt <= Date.now()) {
+        throw new Error("Сессия СУЗ истекла. Авторизуйтесь заново.");
+      }
+
+      const { codeOrder, codeItem } = await getProductionCodeOrder(productionOrderId);
+      if (!codeOrder?.external_order_id || !codeItem?.gtin) {
+        throw new Error("Заказ ещё не отправлен в СУЗ.");
+      }
+
+      const requested = Math.max(0, Math.trunc(Number(codeItem.requested_quantity || 0)));
+      const alreadyReceived = Math.max(0, Math.trunc(Number(codeItem.received_quantity || 0)));
+      const remaining = Math.max(0, requested - alreadyReceived);
+      if (remaining <= 0) {
+        throw new Error("Все заказанные коды уже получены.");
+      }
+
+      const normalizedGtin = String(codeItem.gtin || "").trim().padStart(14, "0");
+      if (!/^\d{14}$/.test(normalizedGtin)) {
+        throw new Error("GTIN для получения кодов СУЗ должен содержать 14 цифр.");
+      }
+
+      const params = new URLSearchParams({
+        orderId: String(codeOrder.external_order_id),
+        gtin: normalizedGtin,
+        quantity: String(remaining),
+        omsId: String(state.oms_id),
+      });
+
+      const response = await fetch(`${SUZ_API_BASE}/codes?${params.toString()}`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          clientToken: String(state.client_token),
+        },
+      });
+
+      const payload = await parseJsonResponse(response);
+      const codes = Array.isArray(payload?.codes)
+        ? payload.codes.map((code: unknown) => String(code || "")).filter(Boolean)
+        : [];
+      const blockId = payload?.blockId ? String(payload.blockId) : null;
+
+      if (!codes.length) {
+        return json({
+          received: 0,
+          codes: [],
+          blockId,
+          message: "СУЗ пока не вернул готовые коды.",
+        });
+      }
+
+      const totalReceived = Math.min(requested, alreadyReceived + codes.length);
+      const nextStatus = totalReceived >= requested ? "codes_received" : "partially_received";
+
+      await patchServiceRow(
+        `chz_code_orders?id=eq.${encodeURIComponent(String(codeOrder.id))}`,
+        {
+          status: nextStatus,
+          total_received: totalReceived,
+          updated_at: new Date().toISOString(),
+          completed_at: totalReceived >= requested ? new Date().toISOString() : null,
+          error_message: null,
+        },
+      );
+      await patchServiceRow(
+        `chz_code_order_items?id=eq.${encodeURIComponent(String(codeItem.id))}`,
+        {
+          status: nextStatus,
+          received_quantity: totalReceived,
+          updated_at: new Date().toISOString(),
+        },
+      );
+
+      return json({
+        received: codes.length,
+        totalReceived,
+        requested,
+        codes,
+        blockId,
+        status: nextStatus,
+      });
+    }
+
     if (action === "refresh_suz_order_status") {
       const productionOrderId = String(body?.productionOrderId || "").trim();
       if (!productionOrderId) throw new Error("Не указан производственный заказ.");
