@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "../../supabase";
 import type {
   Job,
   ProductionBatch,
@@ -92,6 +93,132 @@ export default function ProductionOrderModal({
     totalFactQuantity > 0 ? totalFactDurationSeconds / totalFactQuantity : 0;
 
   const [activeTab, setActiveTab] = useState<OrderModalTab>("overview");
+  const [chzLoading, setChzLoading] = useState(false);
+  const [chzError, setChzError] = useState("");
+  const [chzMessage, setChzMessage] = useState("");
+  const [chzOrder, setChzOrder] = useState<any>(null);
+  const [chzItem, setChzItem] = useState<any>(null);
+  const [suzPayloadString, setSuzPayloadString] = useState("");
+  const [suzSignature, setSuzSignature] = useState("");
+
+  async function loadChzOrderStatus() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "production_code_order_status",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(String(data.error));
+
+      setChzOrder(data?.codeOrder || null);
+      setChzItem(data?.codeItem || null);
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось загрузить статус ЧЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadChzOrderStatus();
+  }, [sourceOrder?.id]);
+
+  async function prepareSuzSubmission() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+      setSuzSignature("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "prepare_suz_order_submission",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(String(data.error));
+
+      setSuzPayloadString(String(data?.payloadString || ""));
+      setChzMessage("Тело заказа СУЗ подготовлено. Подпишите эту строку откреплённой CAdES-BES подписью и вставьте Base64.");
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось подготовить заказ СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  async function submitSuzOrder() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "submit_suz_order",
+          productionOrderId: sourceOrder.id,
+          payloadString: suzPayloadString,
+          signature: suzSignature.trim(),
+        },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(String(data.error));
+
+      setChzMessage(
+        `Заказ реально отправлен в СУЗ. orderId: ${String(data?.orderId || "—")}, статус: ${String(data?.orderStatus || data?.status || "submitted")}.`,
+      );
+      setSuzSignature("");
+      await loadChzOrderStatus();
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось отправить заказ в СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  async function refreshSuzStatus() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "refresh_suz_order_status",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(String(data.error));
+
+      setChzMessage(
+        `Статус СУЗ обновлён: ${String(data?.status || "—")}. Получено кодов: ${Number(data?.received || 0)}.`,
+      );
+      await loadChzOrderStatus();
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось обновить статус СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
 
   const completedQuantity = Math.max(
     0,
@@ -405,6 +532,111 @@ export default function ProductionOrderModal({
                 </div>
               )}
               </div>
+            </div>
+
+            <div style={sectionCardStyle}>
+              <div style={sectionHeaderStyle}>
+                <div>
+                  <div style={sectionTitleStyle}>Честный ЗНАК</div>
+                  <div style={sectionHintStyle}>
+                    Заказ кодов связан именно с этим производственным заданием.
+                  </div>
+                </div>
+                {chzOrder?.status && (
+                  <span style={statusBadgeStyle(chzOrder.status)}>
+                    {String(chzOrder.status)}
+                  </span>
+                )}
+              </div>
+
+              {chzLoading && !chzOrder ? (
+                <div style={emptySmallStyle}>Проверяю связанный заказ ЧЗ…</div>
+              ) : chzOrder && chzItem ? (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={overviewRowsStyle}>
+                    <OverviewRow label="GTIN" value={String(chzItem.gtin || "—")} />
+                    <OverviewRow label="Запрошено кодов" value={`${Number(chzItem.requested_quantity || 0)} шт`} />
+                    <OverviewRow label="Получено кодов" value={`${Number(chzItem.received_quantity || 0)} шт`} />
+                    <OverviewRow label="orderId СУЗ" value={String(chzOrder.external_order_id || "ещё не отправлен")} />
+                  </div>
+
+                  {!chzOrder.external_order_id && !suzPayloadString && (
+                    <button
+                      type="button"
+                      onClick={() => void prepareSuzSubmission()}
+                      disabled={chzLoading}
+                      style={primaryBlueButtonStyle}
+                    >
+                      {chzLoading ? "Подготовка…" : "Подготовить реальную отправку в СУЗ"}
+                    </button>
+                  )}
+
+                  {!chzOrder.external_order_id && suzPayloadString && (
+                    <div style={{ display: "grid", gap: 9 }}>
+                      <div style={{ color: "#475569", fontSize: 12, fontWeight: 800 }}>
+                        Строка JSON для подписи — подписать без изменений
+                      </div>
+                      <textarea
+                        readOnly
+                        value={suzPayloadString}
+                        rows={6}
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid #cbd5e1", borderRadius: 10, padding: 10, fontFamily: "monospace", fontSize: 12, resize: "vertical" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(suzPayloadString)}
+                        style={secondaryBlueButtonStyle()}
+                      >
+                        Копировать JSON для подписи
+                      </button>
+                      <textarea
+                        value={suzSignature}
+                        onChange={(event) => setSuzSignature(event.target.value)}
+                        rows={5}
+                        placeholder="Вставьте откреплённую подпись Base64"
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid #cbd5e1", borderRadius: 10, padding: 10, fontFamily: "monospace", fontSize: 12, resize: "vertical" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void submitSuzOrder()}
+                        disabled={chzLoading || !suzSignature.trim()}
+                        style={{
+                          ...primaryBlueButtonStyle,
+                          opacity: chzLoading || !suzSignature.trim() ? 0.55 : 1,
+                        }}
+                      >
+                        {chzLoading ? "Отправка…" : `Отправить ${Number(chzItem.requested_quantity || 0)} кодов в СУЗ`}
+                      </button>
+                    </div>
+                  )}
+
+                  {chzOrder.external_order_id && (
+                    <button
+                      type="button"
+                      onClick={() => void refreshSuzStatus()}
+                      disabled={chzLoading}
+                      style={secondaryBlueButtonStyle()}
+                    >
+                      {chzLoading ? "Проверяю…" : "Обновить статус заказа СУЗ"}
+                    </button>
+                  )}
+
+                  {chzMessage && (
+                    <div style={{ padding: 10, borderRadius: 10, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", fontSize: 13 }}>
+                      {chzMessage}
+                    </div>
+                  )}
+                  {chzError && (
+                    <div style={{ padding: 10, borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 13 }}>
+                      {chzError}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={emptySmallStyle}>
+                  Связанный черновик ЧЗ для этого задания не найден.
+                </div>
+              )}
             </div>
 
             <div style={quickActionsStyle}>
