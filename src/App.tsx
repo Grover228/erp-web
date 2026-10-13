@@ -72,7 +72,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
-const APP_BUILD = "2026.10.13-36";
+const APP_BUILD = "2026.10.13-37";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
@@ -190,7 +190,6 @@ function App() {
       key: "directories" as Screen,
       label: "Справочники 📚",
     },
-    canUseScanner && { key: "scanner" as Screen, label: "Сканер QR 🔍" },
   ].filter(Boolean) as { key: Screen; label: string }[];
 
   const pageTitle =
