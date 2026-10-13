@@ -160,6 +160,13 @@ export default function Production({
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
+  const [chzOrderEnabled, setChzOrderEnabled] = useState(true);
+  const [chzMappingLoading, setChzMappingLoading] = useState(false);
+  const [chzMapping, setChzMapping] = useState<{
+    gtin: string;
+    good_name?: string | null;
+    good_status?: string | null;
+  } | null>(null);
 
   const [finishOperation, setFinishOperation] =
     useState<ProductionOrderOperation | null>(null);
@@ -554,6 +561,61 @@ export default function Production({
     }
   }
 
+  useEffect(() => {
+    if (!isCreateOpen || !selectedProductId) {
+      setChzMapping(null);
+      setChzMappingLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadChzMapping() {
+      try {
+        setChzMappingLoading(true);
+        const { data, error: invokeError } = await supabase.functions.invoke(
+          "chestny-znak-auth",
+          {
+            body: {
+              action: "production_chz_info",
+              productId: selectedProductId,
+            },
+          },
+        );
+
+        if (invokeError) throw invokeError;
+        if (data?.error) throw new Error(String(data.error));
+        if (cancelled) return;
+
+        const mapping = data?.mapping;
+        if (data?.mapped && mapping?.gtin) {
+          setChzMapping({
+            gtin: String(mapping.gtin),
+            good_name: mapping.good_name ? String(mapping.good_name) : null,
+            good_status: mapping.good_status ? String(mapping.good_status) : null,
+          });
+          setChzOrderEnabled(true);
+        } else {
+          setChzMapping(null);
+          setChzOrderEnabled(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setChzMapping(null);
+          setChzOrderEnabled(false);
+        }
+      } finally {
+        if (!cancelled) setChzMappingLoading(false);
+      }
+    }
+
+    void loadChzMapping();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateOpen, selectedProductId]);
+
   async function handleCreateProductionOrder(e: React.FormEvent) {
     e.preventDefault();
 
@@ -582,15 +644,40 @@ export default function Production({
       setError("");
       setMessage("");
 
-      const { orderNumber } = await createProductionOrder({
+      const { orderId, orderNumber } = await createProductionOrder({
         product,
         techCard,
         quantity: Number(quantity),
         comment,
       });
 
+      let chzSuffix = "";
+      if (chzOrderEnabled && chzMapping?.gtin) {
+        try {
+          const { data, error: invokeError } = await supabase.functions.invoke(
+            "chestny-znak-auth",
+            {
+              body: {
+                action: "prepare_production_code_order",
+                productionOrderId: orderId,
+              },
+            },
+          );
+          if (invokeError) throw invokeError;
+          if (data?.error) throw new Error(String(data.error));
+
+          chzSuffix = ` Заказ ЧЗ подготовлен: GTIN ${chzMapping.gtin}, ${Number(quantity)} кодов.`;
+        } catch (chzError) {
+          setError(
+            `Производственный заказ ${orderNumber} создан, но заказ ЧЗ не подготовлен: ${
+              chzError instanceof Error ? chzError.message : "неизвестная ошибка"
+            }`,
+          );
+        }
+      }
+
       setMessage(
-        `Производственный заказ ${orderNumber} создан. Материалы зарезервированы.`,
+        `Производственный заказ ${orderNumber} создан. Материалы зарезервированы.${chzSuffix}`,
       );
       setIsCreateOpen(false);
       setQuantity("");
@@ -2490,11 +2577,15 @@ export default function Production({
           quantity={quantity}
           comment={comment}
           creating={creating}
+          chzOrderEnabled={chzOrderEnabled}
+          chzMappingLoading={chzMappingLoading}
+          chzMapping={chzMapping}
           onClose={() => setIsCreateOpen(false)}
           onSubmit={handleCreateProductionOrder}
           onProductChange={setSelectedProductId}
           onQuantityChange={setQuantity}
           onCommentChange={setComment}
+          onChzOrderEnabledChange={setChzOrderEnabled}
         />
       )}
 
