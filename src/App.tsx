@@ -72,7 +72,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
-const APP_BUILD = "2026.10.13-27";
+const APP_BUILD = "2026.10.13-28";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
