@@ -299,11 +299,7 @@ export default function ChestnyZnakPage() {
       setProductMappings(mappings);
       setCatalogLoaded(true);
 
-      const selected: Record<string, string> = {};
-      for (const mapping of mappings) {
-        if (mapping?.gtin && mapping?.product_id) selected[String(mapping.gtin)] = String(mapping.product_id);
-      }
-      setSelectedProductByGtin(selected);
+      setSelectedProductByGtin({});
       setMessage(`Национальный каталог загружен: ${goods.length} карточек. Существующих связей ERP ↔ GTIN: ${mappings.length}.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить Национальный каталог.");
@@ -330,9 +326,10 @@ export default function ChestnyZnakPage() {
       const nextMapping = data?.mapping as ProductMapping;
       setProductMappings((current) => [
         nextMapping,
-        ...current.filter((row) => row.product_id !== nextMapping.product_id && row.gtin !== nextMapping.gtin),
+        ...current.filter((row) => row.product_id !== nextMapping.product_id),
       ]);
-      setMessage(`GTIN ${gtin} связан с товаром ERP. Карточка дополнительно проверена через Национальный каталог.`);
+      setSelectedProductByGtin((current) => ({ ...current, [gtin]: "" }));
+      setMessage(`GTIN ${gtin} связан с товаром ERP. Можно добавить к этому же GTIN ещё один товар ERP.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось сохранить соответствие GTIN.");
     } finally {
@@ -800,10 +797,10 @@ export default function ChestnyZnakPage() {
                     <tbody>
                       {catalogGoods.map((good) => {
                         const gtin = String(good?.gtin || "");
-                        const mapping = productMappings.find((row) => row.gtin === gtin);
-                        const selectedProductId = selectedProductByGtin[gtin] || mapping?.product_id || "";
-                        const selectedProduct = erpProducts.find((product) => product.id === selectedProductId);
-                        const isSaved = Boolean(mapping && mapping.product_id === selectedProductId);
+                        const linkedMappings = productMappings.filter((row) => row.gtin === gtin);
+                        const linkedProductIds = new Set(linkedMappings.map((row) => row.product_id));
+                        const selectedProductId = selectedProductByGtin[gtin] || "";
+                        const selectedAlreadyLinked = Boolean(selectedProductId && linkedProductIds.has(selectedProductId));
 
                         return (
                           <tr key={`${good?.good_id || "good"}-${gtin}`}>
@@ -820,32 +817,41 @@ export default function ChestnyZnakPage() {
                                 onChange={(event) => setSelectedProductByGtin((current) => ({ ...current, [gtin]: event.target.value }))}
                                 style={{ ...inputStyle, minWidth: 260 }}
                               >
-                                <option value="">— выбрать товар ERP —</option>
+                                <option value="">— добавить товар ERP —</option>
                                 {erpProducts.map((product) => (
-                                  <option key={product.id} value={product.id}>
-                                    {product.article ? `${product.article} · ` : ""}{product.name}
+                                  <option key={product.id} value={product.id} disabled={linkedProductIds.has(product.id)}>
+                                    {product.article ? `${product.article} · ` : ""}{product.name}{linkedProductIds.has(product.id) ? " ✓" : ""}
                                   </option>
                                 ))}
                               </select>
-                              {isSaved && selectedProduct && (
-                                <div style={{ color: "#15803d", fontSize: 11, marginTop: 4 }}>Связано: {selectedProduct.name}</div>
+                              {linkedMappings.length > 0 && (
+                                <div style={{ display: "grid", gap: 3, marginTop: 6 }}>
+                                  {linkedMappings.map((mapping) => {
+                                    const product = erpProducts.find((row) => row.id === mapping.product_id);
+                                    return (
+                                      <div key={mapping.product_id} style={{ color: "#15803d", fontSize: 11 }}>
+                                        Связано: {product?.article ? `${product.article} · ` : ""}{product?.name || mapping.product_id}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               )}
                             </td>
                             <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>
                               <button
                                 type="button"
                                 onClick={() => void saveProductMapping(gtin)}
-                                disabled={loading || !gtin || !selectedProductId || isSaved}
+                                disabled={loading || !gtin || !selectedProductId || selectedAlreadyLinked}
                                 style={{
                                   border: 0,
                                   borderRadius: 9,
                                   padding: "8px 11px",
-                                  background: !loading && gtin && selectedProductId && !isSaved ? "#0f172a" : "#cbd5e1",
+                                  background: !loading && gtin && selectedProductId && !selectedAlreadyLinked ? "#0f172a" : "#cbd5e1",
                                   color: "#fff",
                                   fontWeight: 850,
                                 }}
                               >
-                                {isSaved ? "Связано" : "Связать"}
+                                {selectedAlreadyLinked ? "Уже связано" : "Добавить связь"}
                               </button>
                             </td>
                           </tr>
