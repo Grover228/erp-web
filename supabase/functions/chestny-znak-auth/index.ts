@@ -268,6 +268,125 @@ async function saveProductMapping(productId: string, card: any) {
   return rows?.[0] || body[0];
 }
 
+
+async function buildCodeOrderPreview() {
+  const [mappings, products, orders, batches, codeOrders, codeItems, sources] = await Promise.all([
+    serviceSelect("chz_product_mappings?select=product_id,gtin,good_name,good_status&order=gtin.asc"),
+    serviceSelect("products?select=id,name,article,is_active&is_active=eq.true"),
+    serviceSelect("production_orders?select=id,order_number,product_id,status,quantity,created_at"),
+    serviceSelect("production_batches?select=id,production_order_id,batch_number,quantity,completed_quantity,status,completed_at&completed_quantity=gt.0"),
+    serviceSelect("chz_code_orders?select=id,status"),
+    serviceSelect("chz_code_order_items?select=id,order_id,gtin,requested_quantity,received_quantity,status"),
+    serviceSelect("chz_code_order_sources?select=id,order_item_id,product_id,production_order_id,production_batch_id,completed_quantity_snapshot,allocated_quantity"),
+  ]);
+
+  const mappingByProduct = new Map<string, any>();
+  for (const row of mappings) mappingByProduct.set(String(row.product_id), row);
+
+  const productById = new Map<string, any>();
+  for (const row of products) productById.set(String(row.id), row);
+
+  const orderById = new Map<string, any>();
+  for (const row of orders) orderById.set(String(row.id), row);
+
+  const codeOrderStatusById = new Map<string, string>();
+  for (const row of codeOrders) codeOrderStatusById.set(String(row.id), String(row.status || ""));
+
+  const codeItemById = new Map<string, any>();
+  for (const row of codeItems) codeItemById.set(String(row.id), row);
+
+  const allocatedByBatch = new Map<string, number>();
+  for (const source of sources) {
+    const item = codeItemById.get(String(source.order_item_id));
+    if (!item) continue;
+    const parentStatus = codeOrderStatusById.get(String(item.order_id)) || "";
+    if (["cancelled", "canceled", "failed", "error"].includes(parentStatus.toLowerCase())) continue;
+
+    const batchId = String(source.production_batch_id);
+    allocatedByBatch.set(
+      batchId,
+      (allocatedByBatch.get(batchId) || 0) + Math.max(0, Number(source.allocated_quantity || 0)),
+    );
+  }
+
+  const byGtin = new Map<string, any>();
+
+  for (const batch of batches) {
+    const productionOrder = orderById.get(String(batch.production_order_id));
+    if (!productionOrder) continue;
+
+    const productId = String(productionOrder.product_id || "");
+    const mapping = mappingByProduct.get(productId);
+    if (!mapping?.gtin) continue;
+
+    const completed = Math.max(0, Number(batch.completed_quantity || 0));
+    const allocated = Math.max(0, allocatedByBatch.get(String(batch.id)) || 0);
+    const available = Math.max(0, completed - allocated);
+    if (available <= 0) continue;
+
+    const gtin = String(mapping.gtin);
+    const product = productById.get(productId);
+    let group = byGtin.get(gtin);
+
+    if (!group) {
+      group = {
+        gtin,
+        goodName: mapping.good_name || null,
+        goodStatus: mapping.good_status || null,
+        completedQuantity: 0,
+        alreadyAllocated: 0,
+        toOrder: 0,
+        products: [],
+        sources: [],
+      };
+      byGtin.set(gtin, group);
+    }
+
+    group.completedQuantity += completed;
+    group.alreadyAllocated += allocated;
+    group.toOrder += available;
+    group.products.push({
+      productId,
+      article: product?.article || null,
+      name: product?.name || productId,
+      available,
+    });
+    group.sources.push({
+      productionBatchId: String(batch.id),
+      productionOrderId: String(productionOrder.id),
+      orderNumber: productionOrder.order_number || null,
+      batchNumber: batch.batch_number || null,
+      productId,
+      completedQuantity: completed,
+      allocatedQuantity: allocated,
+      availableQuantity: available,
+    });
+  }
+
+  const rows = Array.from(byGtin.values())
+    .map((group) => {
+      const productMap = new Map<string, any>();
+      for (const product of group.products) {
+        const existing = productMap.get(product.productId);
+        if (existing) existing.available += product.available;
+        else productMap.set(product.productId, { ...product });
+      }
+      return {
+        ...group,
+        products: Array.from(productMap.values()).sort((a, b) =>
+          String(a.article || a.name).localeCompare(String(b.article || b.name), "ru"),
+        ),
+      };
+    })
+    .sort((a, b) => String(a.gtin).localeCompare(String(b.gtin)));
+
+  return {
+    rows,
+    totalToOrder: rows.reduce((sum, row) => sum + Number(row.toOrder || 0), 0),
+    totalGtins: rows.length,
+  };
+}
+
 function publicState(state: any) {
   if (!state) {
     return {
@@ -508,6 +627,11 @@ Deno.serve(async (req: Request) => {
 
       const mapping = await saveProductMapping(productId, card);
       return json({ mapping });
+    }
+
+    if (action === "code_order_preview") {
+      const preview = await buildCodeOrderPreview();
+      return json(preview);
     }
 
     if (action === "ping") {
