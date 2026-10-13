@@ -961,26 +961,87 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
         throw new Error("GTIN для получения кодов СУЗ должен содержать 14 цифр.");
       }
 
-      const params = new URLSearchParams({
-        orderId: String(codeOrder.external_order_id),
-        gtin: normalizedGtin,
-        quantity: String(remaining),
-        omsId: String(state.oms_id),
-      });
+      let codes: string[] = [];
+      let blockId: string | null = null;
 
-      const response = await fetch(`${SUZ_API_BASE}/codes?${params.toString()}`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-          clientToken: String(state.client_token),
-        },
-      });
+      const recoverAlreadyIssued =
+        alreadyReceived >= requested &&
+        storedCount < requested &&
+        requested > 0;
 
-      const payload = await parseJsonResponse(response);
-      const codes = Array.isArray(payload?.codes)
-        ? payload.codes.map((code: unknown) => String(code || "")).filter(Boolean)
-        : [];
-      const blockId = payload?.blockId ? String(payload.blockId) : null;
+      if (recoverAlreadyIssued) {
+        const blocksParams = new URLSearchParams({
+          omsId: String(state.oms_id),
+          orderId: String(codeOrder.external_order_id),
+          gtin: normalizedGtin,
+        });
+
+        const blocksResponse = await fetch(
+          `${SUZ_API_BASE}/order/codes/blocks?${blocksParams.toString()}`,
+          {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+              clientToken: String(state.client_token),
+            },
+          },
+        );
+        const blocksPayload = await parseJsonResponse(blocksResponse);
+        const blocks = Array.isArray(blocksPayload?.blocks) ? blocksPayload.blocks : [];
+
+        for (const block of blocks) {
+          const currentBlockId = String(block?.blockId || "").trim();
+          if (!currentBlockId) continue;
+
+          const retryParams = new URLSearchParams({
+            omsId: String(state.oms_id),
+            blockId: currentBlockId,
+          });
+          const retryResponse = await fetch(
+            `${SUZ_API_BASE}/order/codes/retry?${retryParams.toString()}`,
+            {
+              method: "GET",
+              headers: {
+                Accept: "application/json",
+                clientToken: String(state.client_token),
+              },
+            },
+          );
+          const retryPayload = await parseJsonResponse(retryResponse);
+          const retryCodes = Array.isArray(retryPayload?.codes)
+            ? retryPayload.codes.map((code: unknown) => String(code || "")).filter(Boolean)
+            : [];
+
+          if (retryCodes.length) {
+            blockId = currentBlockId;
+            codes.push(...retryCodes);
+          }
+          if (codes.length >= remaining) break;
+        }
+
+        codes = codes.slice(0, remaining);
+      } else {
+        const params = new URLSearchParams({
+          orderId: String(codeOrder.external_order_id),
+          gtin: normalizedGtin,
+          quantity: String(remaining),
+          omsId: String(state.oms_id),
+        });
+
+        const response = await fetch(`${SUZ_API_BASE}/codes?${params.toString()}`, {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            clientToken: String(state.client_token),
+          },
+        });
+
+        const payload = await parseJsonResponse(response);
+        codes = Array.isArray(payload?.codes)
+          ? payload.codes.map((code: unknown) => String(code || "")).filter(Boolean)
+          : [];
+        blockId = payload?.blockId ? String(payload.blockId) : null;
+      }
 
       if (!codes.length) {
         return json({
