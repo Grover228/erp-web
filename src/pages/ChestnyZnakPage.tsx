@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { supabase } from "../supabase";
+import { getCryptoProCertificates, signChallengeWithCryptoPro, type CryptoProCertificateInfo } from "../integrations/cryptopro";
 
 type Challenge = {
   uuid: string;
@@ -24,6 +25,20 @@ const inputStyle = {
   fontSize: 14,
   background: "#fff",
 };
+
+function extractDnValue(subject: string, key: string) {
+  const match = subject.match(new RegExp(`(?:^|,)\\s*${key}=([^,]+)`, "i"));
+  return match?.[1]?.replace(/^"|"$/g, "").trim() || "";
+}
+
+function formatCertificateName(certificate: CryptoProCertificateInfo) {
+  return (
+    extractDnValue(certificate.subjectName, "CN") ||
+    extractDnValue(certificate.subjectName, "SN") ||
+    certificate.subjectName ||
+    certificate.thumbprint
+  );
+}
 
 function masked(value: string) {
   if (!value) return "—";
@@ -56,6 +71,9 @@ export default function ChestnyZnakPage() {
   const [inn, setInn] = useState("");
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signature, setSignature] = useState("");
+  const [certificates, setCertificates] = useState<CryptoProCertificateInfo[]>([]);
+  const [selectedCertificateThumbprint, setSelectedCertificateThumbprint] = useState("");
+  const [cryptoProChecked, setCryptoProChecked] = useState(false);
   const [auth, setAuth] = useState<AuthResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -118,7 +136,68 @@ export default function ChestnyZnakPage() {
     }
   }
 
-  async function signIn() {
+  async function loadCryptoProCertificates() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      const rows = await getCryptoProCertificates();
+      const now = Date.now();
+      const usable = rows.filter((certificate) => new Date(certificate.validTo).getTime() > now);
+
+      setCertificates(usable);
+      setCryptoProChecked(true);
+
+      if (!usable.length) {
+        setSelectedCertificateThumbprint("");
+        setError("КриптоПро доступен, но действующих сертификатов с закрытым ключом не найдено. Проверьте Рутокен и хранилище сертификатов Windows.");
+        return;
+      }
+
+      setSelectedCertificateThumbprint((current) =>
+        usable.some((certificate) => certificate.thumbprint === current)
+          ? current
+          : usable[0].thumbprint,
+      );
+      setMessage(`КриптоПро подключён. Найдено сертификатов с закрытым ключом: ${usable.length}.`);
+    } catch (cause) {
+      setCryptoProChecked(true);
+      setCertificates([]);
+      setSelectedCertificateThumbprint("");
+      setError(cause instanceof Error ? cause.message : "Не удалось подключиться к КриптоПро.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function signWithCryptoPro() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+      setAuth(null);
+
+      if (!challenge) throw new Error("Сначала получите данные для подписи.");
+      if (!selectedCertificateThumbprint) throw new Error("Выберите сертификат УКЭП.");
+
+      const createdSignature = await signChallengeWithCryptoPro(
+        challenge.data,
+        selectedCertificateThumbprint,
+      );
+
+      if (!createdSignature) throw new Error("КриптоПро не вернул подпись.");
+
+      setSignature(createdSignature);
+      setMessage("Строка подписана локально через КриптоПро. Закрытый ключ не покидал Рутокен. Проверяю авторизацию в Честном ЗНАКе…");
+      await signIn(createdSignature);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось подписать данные через КриптоПро.");
+      setLoading(false);
+    }
+  }
+
+  async function signIn(signatureOverride?: string) {
     try {
       setLoading(true);
       setError("");
@@ -127,14 +206,15 @@ export default function ChestnyZnakPage() {
 
       if (!challenge) throw new Error("Сначала получите данные для подписи.");
       if (!configurationReady) throw new Error("Сначала укажите OMS ID и идентификатор соединения.");
-      if (!signature.trim()) throw new Error("Вставьте подпись УКЭП в Base64.");
+      const signatureValue = String(signatureOverride || signature).trim();
+      if (!signatureValue) throw new Error("Не получена подпись УКЭП.");
 
       const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
         body: {
           action: "signin",
           omsConnection: omsConnection.trim(),
           uuid: challenge.uuid,
-          signature: signature.trim().replace(/\s+/g, ""),
+          signature: signatureValue.replace(/\s+/g, ""),
           apiVersion: challenge.apiVersion,
           ...(inn.trim() ? { inn: inn.trim() } : {}),
         },
@@ -241,23 +321,81 @@ export default function ChestnyZnakPage() {
 
       <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18, display: "grid", gap: 14 }}>
         <div>
-          <div style={{ fontWeight: 900, fontSize: 18 }}>3. Подпись УКЭП и проверка подключения</div>
+          <div style={{ fontWeight: 900, fontSize: 18 }}>3. Подпись УКЭП через КриптоПро</div>
           <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-            На первом этапе вставьте CAdES-подпись Base64 вручную. Закрытый ключ и PIN не передаются ERP. Автоматическую подпись через КриптоПро добавим после этого контрольного теста.
+            Подпись выполняется локально на этом компьютере. Закрытый ключ и PIN Рутокена не передаются в ERP или Supabase — в Честный ЗНАК уходит только готовая CAdES-BES подпись.
           </div>
         </div>
 
-        <textarea
-          value={signature}
-          onChange={(event) => setSignature(event.target.value)}
-          rows={6}
-          placeholder="Вставьте подпись Base64"
-          style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace" }}
-        />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            type="button"
+            onClick={() => void loadCryptoProCertificates()}
+            disabled={loading}
+            style={{ border: "1px solid #cbd5e1", borderRadius: 10, padding: "10px 14px", background: "#fff", color: "#0f172a", fontWeight: 900, cursor: loading ? "wait" : "pointer" }}
+          >
+            {loading ? "Проверяю…" : cryptoProChecked ? "Обновить сертификаты" : "Найти сертификаты КриптоПро"}
+          </button>
+          {cryptoProChecked && certificates.length > 0 && (
+            <span style={{ color: "#15803d", fontWeight: 850, fontSize: 13 }}>● КриптоПро доступен</span>
+          )}
+        </div>
 
-        <button type="button" onClick={() => void signIn()} disabled={loading || !challenge || !signature.trim() || !configurationReady} style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading || !challenge || !signature.trim() || !configurationReady ? "#94a3b8" : "#16a34a", color: "#fff", fontWeight: 900, cursor: loading ? "wait" : "pointer" }}>
-          {loading ? "Проверяю…" : "Авторизоваться и проверить СУЗ"}
+        {certificates.length > 0 && (
+          <label style={{ display: "grid", gap: 6 }}>
+            <span style={{ color: "#475569", fontSize: 13, fontWeight: 800 }}>Сертификат для подписи</span>
+            <select
+              value={selectedCertificateThumbprint}
+              onChange={(event) => setSelectedCertificateThumbprint(event.target.value)}
+              style={inputStyle}
+            >
+              {certificates.map((certificate) => (
+                <option key={certificate.thumbprint} value={certificate.thumbprint}>
+                  {formatCertificateName(certificate)} · до {new Date(certificate.validTo).toLocaleDateString("ru-RU")} · {certificate.thumbprint.slice(-8)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        <button
+          type="button"
+          onClick={() => void signWithCryptoPro()}
+          disabled={loading || !challenge || !selectedCertificateThumbprint || !configurationReady}
+          style={{
+            justifySelf: "start",
+            border: 0,
+            borderRadius: 10,
+            padding: "12px 16px",
+            background: loading || !challenge || !selectedCertificateThumbprint || !configurationReady ? "#94a3b8" : "#16a34a",
+            color: "#fff",
+            fontWeight: 950,
+            cursor: loading ? "wait" : "pointer",
+          }}
+        >
+          {loading ? "Подписываю…" : "Подписать Рутокеном и авторизоваться"}
         </button>
+
+        <details>
+          <summary style={{ cursor: "pointer", color: "#64748b", fontWeight: 800 }}>Ручная подпись Base64 — резервный режим</summary>
+          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+            <textarea
+              value={signature}
+              onChange={(event) => setSignature(event.target.value)}
+              rows={5}
+              placeholder="Вставьте подпись Base64"
+              style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace" }}
+            />
+            <button
+              type="button"
+              onClick={() => void signIn()}
+              disabled={loading || !challenge || !signature.trim() || !configurationReady}
+              style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "10px 14px", background: loading || !challenge || !signature.trim() || !configurationReady ? "#94a3b8" : "#0f172a", color: "#fff", fontWeight: 900 }}
+            >
+              Авторизоваться с ручной подписью
+            </button>
+          </div>
+        </details>
       </section>
 
       {auth && (
