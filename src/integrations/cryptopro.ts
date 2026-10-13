@@ -15,6 +15,30 @@ declare global {
 
 let pluginLoadPromise: Promise<any> | null = null;
 
+async function waitForCadesPlugin(timeoutMs = 7000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (window.cadesplugin) {
+      try {
+        await window.cadesplugin;
+      } catch {
+        // Сам объект уже появился; ниже проверим, доступны ли методы плагина.
+      }
+
+      if (window.cadesplugin?.CreateObjectAsync) {
+        return window.cadesplugin;
+      }
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+  }
+
+  throw new Error(
+    "Расширение КриптоПро установлено, но не подключилось к streetstream.ru. Откройте настройки расширения CryptoPro Extension for CAdES Browser Plug-in и разрешите ему доступ к этому сайту (или ко всем сайтам), затем обновите страницу.",
+  );
+}
+
 function bytesToBase64(bytes: Uint8Array) {
   let binary = "";
   const chunkSize = 0x8000;
@@ -29,43 +53,10 @@ function utf8ToBase64(value: string) {
 }
 
 async function loadCryptoProPlugin() {
-  if (window.cadesplugin) {
-    try {
-      await window.cadesplugin;
-    } catch {
-      // Ошибка плагина будет разобрана ниже.
-    }
-    return window.cadesplugin;
-  }
-
   if (!pluginLoadPromise) {
-    pluginLoadPromise = new Promise((resolve, reject) => {
-      const existing = document.querySelector<HTMLScriptElement>('script[data-cryptopro-cades="1"]');
-
-      const finish = async () => {
-        try {
-          if (!window.cadesplugin) {
-            throw new Error("КриптоПро Browser plug-in не обнаружен.");
-          }
-          await window.cadesplugin;
-          resolve(window.cadesplugin);
-        } catch (cause) {
-          reject(cause);
-        }
-      };
-
-      if (existing) {
-        void finish();
-        return;
-      }
-
-      const script = document.createElement("script");
-      script.src = "https://www.cryptopro.ru/sites/default/files/products/cades/cadesplugin_api.js";
-      script.async = true;
-      script.dataset.cryptoproCades = "1";
-      script.onload = () => void finish();
-      script.onerror = () => reject(new Error("Не удалось загрузить официальный cadesplugin_api.js КриптоПро."));
-      document.head.appendChild(script);
+    pluginLoadPromise = waitForCadesPlugin().catch((cause) => {
+      pluginLoadPromise = null;
+      throw cause;
     });
   }
 
@@ -76,7 +67,7 @@ async function getPlugin() {
   const plugin = await loadCryptoProPlugin();
   if (!plugin?.CreateObjectAsync) {
     throw new Error(
-      "КриптоПро Browser plug-in не готов. Проверьте, что установлены КриптоПро CSP, ЭЦП Browser plug-in и расширение CryptoPro Extension for CAdES Browser Plug-in, затем перезапустите браузер.",
+      "КриптоПро установлен, но браузер не дал ERP доступ к расширению. Разрешите расширению CryptoPro Extension for CAdES Browser Plug-in работать на streetstream.ru и обновите страницу.",
     );
   }
   return plugin;
