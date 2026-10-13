@@ -877,10 +877,15 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
         throw new Error("Заказ ещё не отправлен в СУЗ.");
       }
 
+      const normalizedGtin = String(codeItem.gtin || "").trim().padStart(14, "0");
+      if (!/^\d{14}$/.test(normalizedGtin)) {
+        throw new Error("GTIN для проверки статуса СУЗ должен содержать 14 цифр.");
+      }
+
       const params = new URLSearchParams({
         omsId: String(state.oms_id),
         orderId: String(codeOrder.external_order_id),
-        gtin: String(codeItem.gtin),
+        gtin: normalizedGtin,
       });
       const response = await fetch(`${SUZ_API_BASE}/order/status?${params.toString()}`, {
         headers: {
