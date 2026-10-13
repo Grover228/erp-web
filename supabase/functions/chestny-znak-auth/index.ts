@@ -270,6 +270,9 @@ async function saveProductMapping(productId: string, card: any) {
 
 
 async function buildCodeOrderPreview() {
+  const state = await readState();
+  const codeOrderFromAt = state?.code_order_from_at ? new Date(state.code_order_from_at).getTime() : Date.now();
+
   const [mappings, products, orders, batches, codeOrders, codeItems, sources] = await Promise.all([
     serviceSelect("chz_product_mappings?select=product_id,gtin,good_name,good_status&order=gtin.asc"),
     serviceSelect("products?select=id,name,article,is_active&is_active=eq.true"),
@@ -312,6 +315,9 @@ async function buildCodeOrderPreview() {
   const byGtin = new Map<string, any>();
 
   for (const batch of batches) {
+    const completedAt = batch?.completed_at ? new Date(batch.completed_at).getTime() : 0;
+    if (!completedAt || completedAt < codeOrderFromAt) continue;
+
     const productionOrder = orderById.get(String(batch.production_order_id));
     if (!productionOrder) continue;
 
@@ -384,6 +390,7 @@ async function buildCodeOrderPreview() {
     rows,
     totalToOrder: rows.reduce((sum, row) => sum + Number(row.toOrder || 0), 0),
     totalGtins: rows.length,
+    codeOrderFromAt: new Date(codeOrderFromAt).toISOString(),
   };
 }
 
