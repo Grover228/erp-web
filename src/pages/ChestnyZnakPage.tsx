@@ -57,6 +57,21 @@ type ProductMapping = {
   last_checked_at?: string | null;
 };
 
+type CodeOrderPreviewRow = {
+  gtin: string;
+  goodName?: string | null;
+  goodStatus?: string | null;
+  completedQuantity: number;
+  alreadyAllocated: number;
+  toOrder: number;
+  products: Array<{
+    productId: string;
+    article?: string | null;
+    name: string;
+    available: number;
+  }>;
+};
+
 const OMS_STORAGE_KEY = "erp:chz:oms-id";
 const CONNECTION_STORAGE_KEY = "erp:chz:oms-connection";
 
@@ -121,6 +136,9 @@ export default function ChestnyZnakPage() {
   const [productMappings, setProductMappings] = useState<ProductMapping[]>([]);
   const [selectedProductByGtin, setSelectedProductByGtin] = useState<Record<string, string>>({});
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [codeOrderPreview, setCodeOrderPreview] = useState<CodeOrderPreviewRow[]>([]);
+  const [codeOrderPreviewTotal, setCodeOrderPreviewTotal] = useState(0);
+  const [codeOrderPreviewLoaded, setCodeOrderPreviewLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -332,6 +350,30 @@ export default function ChestnyZnakPage() {
       setMessage(`GTIN ${gtin} связан с товаром ERP. Можно добавить к этому же GTIN ещё один товар ERP.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось сохранить соответствие GTIN.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadCodeOrderPreview() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: { action: "code_order_preview" },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+
+      const rows = Array.isArray(data?.rows) ? data.rows : [];
+      setCodeOrderPreview(rows);
+      setCodeOrderPreviewTotal(Number(data?.totalToOrder || 0));
+      setCodeOrderPreviewLoaded(true);
+      setMessage(`Расчёт выполнен. К заказу кодов: ${Number(data?.totalToOrder || 0)} шт. по ${Number(data?.totalGtins || 0)} GTIN. В Честный ЗНАК ничего не отправлено.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось рассчитать количество кодов.");
     } finally {
       setLoading(false);
     }
@@ -861,6 +903,80 @@ export default function ChestnyZnakPage() {
                   </table>
                 </div>
               )}
+            </>
+          )}
+        </section>
+      )}
+
+
+      {auth && (
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18, display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontWeight: 950, fontSize: 20 }}>6. К заказу кодов — предварительный расчёт</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+              Расчёт берёт фактически завершённое количество из производственных партий и вычитает уже распределённое по заказам кодов. На этом этапе ERP ничего не отправляет в Честный ЗНАК.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void loadCodeOrderPreview()}
+            disabled={loading}
+            style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading ? "#94a3b8" : "#0f172a", color: "#fff", fontWeight: 900 }}
+          >
+            {loading ? "Считаю…" : codeOrderPreviewLoaded ? "Пересчитать" : "Рассчитать к заказу"}
+          </button>
+
+          {codeOrderPreviewLoaded && (
+            <>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", color: "#475569", fontSize: 13 }}>
+                <span>GTIN к заказу: <b>{codeOrderPreview.length}</b></span>
+                <span>Всего кодов: <b>{codeOrderPreviewTotal}</b></span>
+              </div>
+
+              {!codeOrderPreview.length ? (
+                <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 12, padding: 12 }}>
+                  Новых фактически произведённых товаров для заказа кодов сейчас нет.
+                </div>
+              ) : (
+                <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>GTIN</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>Товары ERP</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0", textAlign: "right" }}>Фактически готово</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0", textAlign: "right" }}>Уже учтено</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0", textAlign: "right" }}>К заказу</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {codeOrderPreview.map((row) => (
+                        <tr key={row.gtin}>
+                          <td style={{ padding: 10, borderBottom: "1px solid #eef2f7", fontFamily: "monospace", fontWeight: 800 }}>{row.gtin}</td>
+                          <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>
+                            <div style={{ fontWeight: 850 }}>{row.goodName || "Товар ЧЗ"}</div>
+                            <div style={{ display: "grid", gap: 2, marginTop: 5, color: "#475569", fontSize: 12 }}>
+                              {row.products.map((product) => (
+                                <div key={product.productId}>
+                                  {product.article ? `${product.article} · ` : ""}{product.name}: <b>{product.available} шт.</b>
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                          <td style={{ padding: 10, borderBottom: "1px solid #eef2f7", textAlign: "right" }}>{row.completedQuantity}</td>
+                          <td style={{ padding: 10, borderBottom: "1px solid #eef2f7", textAlign: "right" }}>{row.alreadyAllocated}</td>
+                          <td style={{ padding: 10, borderBottom: "1px solid #eef2f7", textAlign: "right", fontSize: 18, fontWeight: 950 }}>{row.toOrder}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 12, padding: 12, fontSize: 13 }}>
+                Это только расчёт. Кнопки реального заказа кодов пока нет — сначала проверяем цифры на фактических данных ERP.
+              </div>
             </>
           )}
         </section>
