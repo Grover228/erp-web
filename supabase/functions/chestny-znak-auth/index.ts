@@ -636,6 +636,116 @@ Deno.serve(async (req: Request) => {
       return json({ mapping });
     }
 
+    if (action === "production_chz_info") {
+      const productId = String(body?.productId || "").trim();
+      if (!productId) throw new Error("Не выбран товар ERP.");
+
+      const mappings = await serviceSelect(
+        `chz_product_mappings?product_id=eq.${encodeURIComponent(productId)}&select=product_id,gtin,good_name,good_status&limit=1`,
+      );
+
+      const mapping = mappings?.[0] || null;
+      return json({
+        mapped: Boolean(mapping?.gtin),
+        mapping,
+      });
+    }
+
+    if (action === "prepare_production_code_order") {
+      const productionOrderId = String(body?.productionOrderId || "").trim();
+      if (!productionOrderId) throw new Error("Не указан производственный заказ.");
+
+      const orders = await serviceSelect(
+        `production_orders?id=eq.${encodeURIComponent(productionOrderId)}&select=id,order_number,product_id,quantity,status&limit=1`,
+      );
+      const productionOrder = orders?.[0];
+      if (!productionOrder) throw new Error("Производственный заказ не найден.");
+
+      const mappings = await serviceSelect(
+        `chz_product_mappings?product_id=eq.${encodeURIComponent(String(productionOrder.product_id))}&select=product_id,gtin,good_name,good_status&limit=1`,
+      );
+      const mapping = mappings?.[0];
+      if (!mapping?.gtin) {
+        throw new Error("У выбранного изделия нет связи с GTIN Честного ЗНАКа.");
+      }
+
+      const requestedQuantity = Math.trunc(Number(productionOrder.quantity || 0));
+      if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 0) {
+        throw new Error("Количество производственного заказа должно быть больше 0.");
+      }
+
+      const { url, serviceRoleKey } = getSupabaseEnv();
+      const internalNumber = String(productionOrder.order_number || productionOrder.id);
+
+      const orderResponse = await fetch(
+        `${url}/rest/v1/chz_code_orders?on_conflict=internal_number`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceRoleKey}`,
+            apikey: serviceRoleKey,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=representation",
+          },
+          body: JSON.stringify([{
+            internal_number: internalNumber,
+            status: "draft",
+            source: "production",
+            total_requested: requestedQuantity,
+            total_received: 0,
+            updated_at: new Date().toISOString(),
+          }]),
+        },
+      );
+      if (!orderResponse.ok) {
+        const text = await orderResponse.text();
+        throw new Error(`Не удалось создать связанный заказ ЧЗ: ${text.slice(0, 300)}`);
+      }
+
+      const orderRows = await orderResponse.json();
+      const codeOrder = orderRows?.[0];
+      if (!codeOrder?.id) throw new Error("Не удалось получить идентификатор заказа ЧЗ.");
+
+      const itemResponse = await fetch(
+        `${url}/rest/v1/chz_code_order_items?on_conflict=order_id,gtin`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${serviceRoleKey}`,
+            apikey: serviceRoleKey,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=representation",
+          },
+          body: JSON.stringify([{
+            order_id: codeOrder.id,
+            gtin: String(mapping.gtin),
+            requested_quantity: requestedQuantity,
+            received_quantity: 0,
+            status: "draft",
+            updated_at: new Date().toISOString(),
+          }]),
+        },
+      );
+      if (!itemResponse.ok) {
+        const text = await itemResponse.text();
+        throw new Error(`Не удалось сохранить позицию заказа ЧЗ: ${text.slice(0, 300)}`);
+      }
+
+      const itemRows = await itemResponse.json();
+
+      return json({
+        prepared: true,
+        codeOrder,
+        item: itemRows?.[0] || null,
+        productionOrder: {
+          id: productionOrder.id,
+          orderNumber: productionOrder.order_number,
+          quantity: requestedQuantity,
+        },
+        mapping,
+      });
+    }
+
     if (action === "code_order_preview") {
       const preview = await buildCodeOrderPreview();
       return json(preview);
