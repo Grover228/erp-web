@@ -147,6 +147,15 @@ export default function ProductionOrderModal({
 
       setChzOrder(data?.codeOrder || null);
       setChzItem(data?.codeItem || null);
+
+      const markingCodes = Array.isArray(data?.markingCodes) ? data.markingCodes : [];
+      const restoredCodes = markingCodes
+        .map((row: any) => String(row?.code || ""))
+        .filter(Boolean);
+      setReceivedSuzCodes(restoredCodes);
+      setReceivedSuzBlockId(
+        String(markingCodes.find((row: any) => row?.block_id)?.block_id || ""),
+      );
     } catch (cause) {
       setChzError(cause instanceof Error ? cause.message : "Не удалось загрузить статус ЧЗ.");
     } finally {
