@@ -19,6 +19,8 @@ type ServerStatus = {
   connected: boolean;
   expiresAt: string | null;
   apiVersion: string | null;
+  gisConnected: boolean;
+  gisExpiresAt: string | null;
   lastPingAt: string | null;
   lastPingOk: boolean | null;
   lastPingMessage: string | null;
@@ -107,6 +109,8 @@ export default function ChestnyZnakPage() {
   const [inn, setInn] = useState("");
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signature, setSignature] = useState("");
+  const [gisChallenge, setGisChallenge] = useState<Challenge | null>(null);
+  const [gisSignature, setGisSignature] = useState("");
   const [certificates, setCertificates] = useState<CryptoProCertificateInfo[]>([]);
   const [selectedCertificateThumbprint, setSelectedCertificateThumbprint] = useState("");
   const [cryptoProChecked, setCryptoProChecked] = useState(false);
@@ -149,6 +153,8 @@ export default function ChestnyZnakPage() {
         connected: Boolean(data?.connected),
         expiresAt: data?.expiresAt ? String(data.expiresAt) : null,
         apiVersion: data?.apiVersion ? String(data.apiVersion) : null,
+        gisConnected: Boolean(data?.gisConnected),
+        gisExpiresAt: data?.gisExpiresAt ? String(data.gisExpiresAt) : null,
         lastPingAt: data?.lastPingAt ? String(data.lastPingAt) : null,
         lastPingOk: typeof data?.lastPingOk === "boolean" ? data.lastPingOk : null,
         lastPingMessage: data?.lastPingMessage ? String(data.lastPingMessage) : null,
@@ -185,6 +191,92 @@ export default function ChestnyZnakPage() {
     }
   }
 
+
+
+  async function requestGisChallenge() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+      setGisChallenge(null);
+      setGisSignature("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: { action: "gis_challenge" },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+
+      const uuid = String(data?.uuid || "");
+      const challengeData = String(data?.data || "");
+      const apiVersion = String(data?.apiVersion || "v3") === "v4" ? "v4" : "v3";
+      if (!uuid || !challengeData) throw new Error("Честный ЗНАК не вернул данные для подписи ГИС МТ.");
+
+      setGisChallenge({ uuid, data: challengeData, apiVersion });
+      setMessage("Получены отдельные данные для авторизации ГИС МТ. Подпишите эту строку УКЭП.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось получить данные для авторизации ГИС МТ.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function signGisWithCryptoPro() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      if (!gisChallenge) throw new Error("Сначала получите данные для авторизации ГИС МТ.");
+      if (!selectedCertificateThumbprint) throw new Error("Выберите сертификат УКЭП.");
+
+      const createdSignature = await signChallengeWithCryptoPro(
+        gisChallenge.data,
+        selectedCertificateThumbprint,
+      );
+      if (!createdSignature) throw new Error("КриптоПро не вернул подпись ГИС МТ.");
+
+      setGisSignature(createdSignature);
+      await signInGis(createdSignature);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось подписать данные ГИС МТ через КриптоПро.");
+      setLoading(false);
+    }
+  }
+
+  async function signInGis(signatureOverride?: string) {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      if (!gisChallenge) throw new Error("Сначала получите данные для авторизации ГИС МТ.");
+      const signatureValue = String(signatureOverride || gisSignature).trim();
+      if (!signatureValue) throw new Error("Не получена подпись УКЭП для ГИС МТ.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "gis_signin",
+          uuid: gisChallenge.uuid,
+          signature: signatureValue.replace(/\s+/g, ""),
+          apiVersion: gisChallenge.apiVersion,
+          ...(inn.trim() ? { inn: inn.trim() } : {}),
+        },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+      if (!data?.gisConnected || !data?.gisExpiresAt) {
+        throw new Error("Честный ЗНАК не подтвердил токен ГИС МТ.");
+      }
+
+      await loadServerStatus();
+      setMessage("Авторизация ГИС МТ успешна. Токен для Национального каталога сохранён только на сервере.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось авторизоваться в ГИС МТ.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function loadNationalCatalog() {
     try {
@@ -585,7 +677,87 @@ export default function ChestnyZnakPage() {
       {auth && (
         <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18, display: "grid", gap: 14 }}>
           <div>
-            <div style={{ fontWeight: 950, fontSize: 20 }}>4. Национальный каталог и GTIN</div>
+            <div style={{ fontWeight: 950, fontSize: 20 }}>4. Авторизация ГИС МТ</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+              Для Национального каталога нужен отдельный токен ГИС МТ. Он получается по отдельной одноразовой строке и хранится только на сервере.
+            </div>
+          </div>
+
+          {serverStatus?.gisConnected ? (
+            <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 12, padding: 12 }}>
+              Токен ГИС МТ активен{serverStatus.gisExpiresAt ? ` до ${new Date(serverStatus.gisExpiresAt).toLocaleString("ru-RU")}` : ""}.
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => void requestGisChallenge()}
+                disabled={loading}
+                style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading ? "#94a3b8" : "#7c3aed", color: "#fff", fontWeight: 900 }}
+              >
+                {loading ? "Подождите…" : "Получить данные для ГИС МТ"}
+              </button>
+
+              {gisChallenge && (
+                <>
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+                    <div style={{ color: "#64748b", fontSize: 12 }}>UUID ГИС МТ</div>
+                    <div style={{ fontFamily: "monospace", marginTop: 4, wordBreak: "break-all" }}>{gisChallenge.uuid}</div>
+                    <div style={{ color: "#64748b", fontSize: 11, marginTop: 4 }}>True API: {gisChallenge.apiVersion}</div>
+                  </div>
+
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <div style={{ color: "#64748b", fontSize: 12 }}>Строка для подписи ГИС МТ</div>
+                      <button type="button" onClick={() => void navigator.clipboard.writeText(gisChallenge.data)} style={{ border: "1px solid #cbd5e1", borderRadius: 8, background: "#fff", padding: "6px 9px", fontWeight: 800 }}>
+                        Копировать
+                      </button>
+                    </div>
+                    <div style={{ fontFamily: "monospace", marginTop: 7, wordBreak: "break-all" }}>{gisChallenge.data}</div>
+                  </div>
+
+                  {selectedCertificateThumbprint && (
+                    <button
+                      type="button"
+                      onClick={() => void signGisWithCryptoPro()}
+                      disabled={loading}
+                      style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading ? "#94a3b8" : "#16a34a", color: "#fff", fontWeight: 900 }}
+                    >
+                      Подписать ГИС МТ через КриптоПро
+                    </button>
+                  )}
+
+                  <details open={!selectedCertificateThumbprint}>
+                    <summary style={{ cursor: "pointer", color: "#64748b", fontWeight: 800 }}>Ручная подпись Base64 для ГИС МТ</summary>
+                    <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+                      <textarea
+                        value={gisSignature}
+                        onChange={(event) => setGisSignature(event.target.value)}
+                        rows={5}
+                        placeholder="Вставьте подпись Base64 для этой строки"
+                        style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void signInGis()}
+                        disabled={loading || !gisSignature.trim()}
+                        style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "10px 14px", background: loading || !gisSignature.trim() ? "#94a3b8" : "#0f172a", color: "#fff", fontWeight: 900 }}
+                      >
+                        Авторизовать ГИС МТ с ручной подписью
+                      </button>
+                    </div>
+                  </details>
+                </>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {auth && (
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18, display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontWeight: 950, fontSize: 20 }}>5. Национальный каталог и GTIN</div>
             <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
               ERP читает только ваши карточки Национального каталога. Ничего в Честном ЗНАКе на этом этапе не создаётся и не изменяется.
             </div>
@@ -594,10 +766,10 @@ export default function ChestnyZnakPage() {
           <button
             type="button"
             onClick={() => void loadNationalCatalog()}
-            disabled={loading}
-            style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading ? "#94a3b8" : "#005bff", color: "#fff", fontWeight: 900 }}
+            disabled={loading || !serverStatus?.gisConnected}
+            style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading || !serverStatus?.gisConnected ? "#94a3b8" : "#005bff", color: "#fff", fontWeight: 900 }}
           >
-            {loading ? "Загружаю…" : catalogLoaded ? "Обновить Национальный каталог" : "Загрузить Национальный каталог"}
+            {loading ? "Загружаю…" : !serverStatus?.gisConnected ? "Сначала авторизуйте ГИС МТ" : catalogLoaded ? "Обновить Национальный каталог" : "Загрузить Национальный каталог"}
           </button>
 
           {catalogLoaded && (
