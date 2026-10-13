@@ -4,6 +4,7 @@ import { supabase } from "../supabase";
 type Challenge = {
   uuid: string;
   data: string;
+  apiVersion: "v3" | "v4";
 };
 
 type AuthResult = {
@@ -105,9 +106,10 @@ export default function ChestnyZnakPage() {
 
       const uuid = String(data?.uuid || "");
       const challengeData = String(data?.data || "");
+      const apiVersion = String(data?.apiVersion || "v3") === "v4" ? "v4" : "v3";
       if (!uuid || !challengeData) throw new Error("Честный ЗНАК не вернул данные для подписи.");
 
-      setChallenge({ uuid, data: challengeData });
+      setChallenge({ uuid, data: challengeData, apiVersion });
       setMessage("Данные для подписи получены. Подпишите строку своей УКЭП и вставьте подпись Base64 ниже.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось получить данные для подписи.");
@@ -133,6 +135,7 @@ export default function ChestnyZnakPage() {
           omsConnection: omsConnection.trim(),
           uuid: challenge.uuid,
           signature: signature.trim().replace(/\s+/g, ""),
+          apiVersion: challenge.apiVersion,
           ...(inn.trim() ? { inn: inn.trim() } : {}),
         },
       });
@@ -223,6 +226,7 @@ export default function ChestnyZnakPage() {
             <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
               <div style={{ color: "#64748b", fontSize: 12 }}>UUID авторизации</div>
               <div style={{ fontFamily: "monospace", marginTop: 4, wordBreak: "break-all" }}>{challenge.uuid}</div>
+              <div style={{ color: "#64748b", fontSize: 11, marginTop: 4 }}>True API: {challenge.apiVersion}</div>
             </div>
             <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: 12 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
