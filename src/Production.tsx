@@ -2248,12 +2248,6 @@ export default function Production({
           История
         </button>
 
-        <button
-          onClick={() => setTab("techcards")}
-          style={tabButtonStyle(tab === "techcards")}
-        >
-          Техкарты
-        </button>
       </div>
 
       {(message || error) && (
