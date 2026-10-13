@@ -10,6 +10,7 @@ import WarehouseStatusesPage from "./pages/WarehouseStatusesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import FinancePage from "./pages/FinancePage";
 import OzonPage from "./pages/OzonPage";
+import ChestnyZnakPage from "./pages/ChestnyZnakPage";
 import WarehousePage from "./pages/WarehousePage";
 import StatusesDirectory from "./directories/StatusesDirectory";
 import VariantsDirectory from "./directories/VariantsDirectory";
@@ -32,6 +33,7 @@ type Screen =
   | "warehouse"
   | "finance"
   | "ozon"
+  | "chestny-znak"
   | "scanner"
   | "valera"
   | "employee-home"
@@ -79,6 +81,7 @@ function isScreen(value: string | null): value is Screen {
     value === "warehouse" ||
     value === "finance" ||
     value === "ozon" ||
+    value === "chestny-znak" ||
     value === "scanner" ||
     value === "valera" ||
     value === "employee-home" ||
@@ -166,6 +169,7 @@ function App() {
   const canViewWarehouse = isAdmin || isManager;
   const canViewFinance = isAdmin;
   const canViewOzon = isAdmin;
+  const canViewChestnyZnak = isAdmin;
 
   const menuItems = [
     canViewDashboard && { key: "dashboard" as Screen, label: "Дашборд 📊" },
@@ -180,6 +184,7 @@ function App() {
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
     canViewOzon && { key: "ozon" as Screen, label: "Ozon 🟦" },
+    canViewChestnyZnak && { key: "chestny-znak" as Screen, label: "Честный ЗНАК 🟨" },
     { key: "valera" as Screen, label: "Валера ✦" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
     canManageDirectories && {
@@ -206,6 +211,8 @@ function App() {
       ? "Финансы"
       : currentScreen === "ozon"
       ? "Ozon"
+      : currentScreen === "chestny-znak"
+      ? "Честный ЗНАК"
       : currentScreen === "directories"
       ? "Справочники"
       : currentScreen === "directory-employees"
@@ -255,6 +262,8 @@ function App() {
       ? "Счета, платежи и движение средств"
       : currentScreen === "ozon"
       ? "Начисления, удержания, себестоимость и прибыль"
+      : currentScreen === "chestny-znak"
+      ? "Маркировка, СУЗ и коды идентификации"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -408,6 +417,11 @@ function App() {
       return;
     }
 
+    if (currentScreen === "chestny-znak" && !canViewChestnyZnak) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
     if (
       (currentScreen === "directories" ||
         currentScreen === "directory-employees" ||
@@ -439,6 +453,7 @@ function App() {
     canViewWarehouse,
     canViewFinance,
     canViewOzon,
+    canViewChestnyZnak,
     canManageDirectories,
   ]);
 
@@ -872,6 +887,12 @@ function App() {
       return <OzonPage />;
     }
 
+    if (currentScreen === "chestny-znak") {
+      if (!canViewChestnyZnak) return renderAccessDenied();
+
+      return <ChestnyZnakPage />;
+    }
+
     if (currentScreen === "directories") {
       if (!canManageDirectories) return renderAccessDenied();
 
@@ -1179,6 +1200,9 @@ function App() {
                           break;
                         case "ozon":
                           setCurrentScreen("ozon");
+                          break;
+                        case "chestny-znak":
+                          setCurrentScreen("chestny-znak");
                           break;
                         case "valera":
                           setCurrentScreen("valera");
