@@ -638,11 +638,17 @@ Deno.serve(async (req: Request) => {
 
 
 function buildSuzOrderPayload(gtin: string, quantity: number) {
+  const normalizedGtin = String(gtin || "").trim().padStart(14, "0");
+
+  if (!/^\d{14}$/.test(normalizedGtin)) {
+    throw new Error("GTIN для СУЗ должен содержать 14 цифр.");
+  }
+
   return JSON.stringify({
     productGroup: "lp",
     products: [
       {
-        gtin,
+        gtin: normalizedGtin,
         quantity,
         serialNumberType: "OPERATOR",
         templateId: 10,
