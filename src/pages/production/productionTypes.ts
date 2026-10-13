@@ -1,4 +1,4 @@
-export type ProductionTab = "jobs" | "active" | "history" | "techcards";
+export type ProductionTab = "jobs" | "active" | "history" | "techcards" | "plan";
 
 export type ProductionOrder = {
   id: string;
