@@ -51,12 +51,6 @@ function formatCertificateName(certificate: CryptoProCertificateInfo) {
   );
 }
 
-function masked(value: string) {
-  if (!value) return "—";
-  if (value.length <= 10) return "••••••";
-  return `${value.slice(0, 5)}••••••${value.slice(-5)}`;
-}
-
 async function getInvokeErrorMessage(invokeError: any) {
   const context = invokeError?.context;
   if (context && typeof context.json === "function") {
