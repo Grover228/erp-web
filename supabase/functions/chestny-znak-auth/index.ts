@@ -275,6 +275,8 @@ function publicState(state: any) {
       connected: false,
       expiresAt: null,
       apiVersion: null,
+      gisConnected: false,
+      gisExpiresAt: null,
       lastPingAt: null,
       lastPingOk: null,
       lastPingMessage: null,
@@ -288,11 +290,20 @@ function publicState(state: any) {
     new Date(expiresAt).getTime() > Date.now(),
   );
 
+  const gisExpiresAt = state?.gis_expires_at ? String(state.gis_expires_at) : null;
+  const gisConnected = Boolean(
+    state?.gis_token &&
+    gisExpiresAt &&
+    new Date(gisExpiresAt).getTime() > Date.now(),
+  );
+
   return {
     configured: Boolean(state?.oms_id && state?.oms_connection),
     connected,
     expiresAt,
     apiVersion: state?.api_version || null,
+    gisConnected,
+    gisExpiresAt,
     lastPingAt: state?.last_ping_at || null,
     lastPingOk: state?.last_ping_ok ?? null,
     lastPingMessage: state?.last_ping_message || null,
@@ -314,7 +325,7 @@ Deno.serve(async (req: Request) => {
       return json(publicState(await readState()));
     }
 
-    if (action === "challenge") {
+    if (action === "challenge" || action === "gis_challenge") {
       const errors: string[] = [];
 
       for (const apiVersion of ["v3", "v4"] as const) {
@@ -395,19 +406,75 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    if (action === "gis_signin") {
+      const uuid = String(body?.uuid || "").trim();
+      const signature = String(body?.signature || "").replace(/\s+/g, "");
+      const inn = String(body?.inn || "").trim();
+      const requestedVersion = String(body?.apiVersion || "v3");
+      const apiVersion: keyof typeof TRUE_API_BASES = requestedVersion === "v4" ? "v4" : "v3";
+      const trueApiBase = TRUE_API_BASES[apiVersion];
+
+      if (!uuid) throw new Error("Не указан UUID авторизации ГИС МТ.");
+      if (!signature) throw new Error("Не передана подпись УКЭП для ГИС МТ.");
+
+      const requestBody: Record<string, string> = { uuid, data: signature };
+      if (inn) requestBody.inn = inn;
+
+      const response = await fetch(
+        `${trueApiBase}/auth/simpleSignIn`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        },
+      );
+
+      const payload = await parseJsonResponse(response);
+      const token = String(payload?.token || "");
+      if (!token) throw new Error("Честный ЗНАК не вернул токен ГИС МТ.");
+
+      const state = await readState();
+      if (!state?.oms_id || !state?.oms_connection) {
+        throw new Error("Сначала сохраните серверную сессию СУЗ.");
+      }
+
+      const gisExpiresAt = new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString();
+
+      await upsertState({
+        oms_id: state.oms_id,
+        oms_connection: state.oms_connection,
+        client_token: state.client_token || null,
+        api_version: state.api_version || apiVersion,
+        expires_at: state.expires_at || null,
+        gis_token: token,
+        gis_expires_at: gisExpiresAt,
+        last_ping_at: state.last_ping_at || null,
+        last_ping_ok: state.last_ping_ok ?? null,
+        last_ping_message: state.last_ping_message || null,
+      });
+
+      return json({
+        gisConnected: true,
+        apiVersion,
+        gisExpiresAt,
+      });
+    }
 
     if (action === "catalog") {
       const state = await readState();
-      if (!state?.client_token) {
-        throw new Error("Сначала авторизуйтесь в Честном ЗНАКе.");
+      if (!state?.gis_token) {
+        throw new Error("Для Национального каталога нужен отдельный токен ГИС МТ. Выполните авторизацию ГИС МТ.");
       }
-      const expiresAt = state?.expires_at ? new Date(state.expires_at).getTime() : 0;
-      if (!expiresAt || expiresAt <= Date.now()) {
-        throw new Error("Серверная сессия Честного ЗНАКа истекла. Авторизуйтесь заново.");
+      const gisExpiresAt = state?.gis_expires_at ? new Date(state.gis_expires_at).getTime() : 0;
+      if (!gisExpiresAt || gisExpiresAt <= Date.now()) {
+        throw new Error("Токен ГИС МТ истёк. Выполните авторизацию ГИС МТ заново.");
       }
 
       const [goods, products, mappings] = await Promise.all([
-        getNationalCatalogGoods(String(state.client_token)),
+        getNationalCatalogGoods(String(state.gis_token)),
         serviceSelect("products?select=id,name,article,is_active,item_id&is_active=eq.true&order=name.asc"),
         serviceSelect("chz_product_mappings?select=id,product_id,gtin,good_id,good_name,good_status,good_mark_flag,good_turn_flag,brand_name,tnved,last_checked_at&order=updated_at.desc"),
       ]);
@@ -422,10 +489,10 @@ Deno.serve(async (req: Request) => {
 
     if (action === "save_mapping") {
       const state = await readState();
-      if (!state?.client_token) throw new Error("Сначала авторизуйтесь в Честном ЗНАКе.");
-      const expiresAt = state?.expires_at ? new Date(state.expires_at).getTime() : 0;
-      if (!expiresAt || expiresAt <= Date.now()) {
-        throw new Error("Серверная сессия Честного ЗНАКа истекла. Авторизуйтесь заново.");
+      if (!state?.gis_token) throw new Error("Для Национального каталога нужен токен ГИС МТ.");
+      const gisExpiresAt = state?.gis_expires_at ? new Date(state.gis_expires_at).getTime() : 0;
+      if (!gisExpiresAt || gisExpiresAt <= Date.now()) {
+        throw new Error("Токен ГИС МТ истёк. Выполните авторизацию ГИС МТ заново.");
       }
 
       const productId = String(body?.productId || "").trim();
@@ -436,7 +503,7 @@ Deno.serve(async (req: Request) => {
       const products = await serviceSelect(`products?id=eq.${encodeURIComponent(productId)}&select=id,name,article&limit=1`);
       if (!products?.[0]) throw new Error("Товар ERP не найден.");
 
-      const card = await getNationalCatalogCard(String(state.client_token), gtin);
+      const card = await getNationalCatalogCard(String(state.gis_token), gtin);
       if (!card) throw new Error("Карточка GTIN не найдена среди собственных карточек Национального каталога.");
 
       const mapping = await saveProductMapping(productId, card);
