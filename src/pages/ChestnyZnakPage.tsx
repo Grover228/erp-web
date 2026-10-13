@@ -138,6 +138,7 @@ export default function ChestnyZnakPage() {
   const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [codeOrderPreview, setCodeOrderPreview] = useState<CodeOrderPreviewRow[]>([]);
   const [codeOrderPreviewTotal, setCodeOrderPreviewTotal] = useState(0);
+  const [codeOrderPreviewFromAt, setCodeOrderPreviewFromAt] = useState<string | null>(null);
   const [codeOrderPreviewLoaded, setCodeOrderPreviewLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -370,6 +371,7 @@ export default function ChestnyZnakPage() {
       const rows = Array.isArray(data?.rows) ? data.rows : [];
       setCodeOrderPreview(rows);
       setCodeOrderPreviewTotal(Number(data?.totalToOrder || 0));
+      setCodeOrderPreviewFromAt(data?.codeOrderFromAt ? String(data.codeOrderFromAt) : null);
       setCodeOrderPreviewLoaded(true);
       setMessage(`Расчёт выполнен. К заказу кодов: ${Number(data?.totalToOrder || 0)} шт. по ${Number(data?.totalGtins || 0)} GTIN. В Честный ЗНАК ничего не отправлено.`);
     } catch (cause) {
@@ -932,6 +934,9 @@ export default function ChestnyZnakPage() {
               <div style={{ display: "flex", gap: 14, flexWrap: "wrap", color: "#475569", fontSize: 13 }}>
                 <span>GTIN к заказу: <b>{codeOrderPreview.length}</b></span>
                 <span>Всего кодов: <b>{codeOrderPreviewTotal}</b></span>
+                {codeOrderPreviewFromAt && (
+                  <span>Автоучёт производства с: <b>{new Date(codeOrderPreviewFromAt).toLocaleString("ru-RU")}</b></span>
+                )}
               </div>
 
               {!codeOrderPreview.length ? (
@@ -975,7 +980,7 @@ export default function ChestnyZnakPage() {
               )}
 
               <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 12, padding: 12, fontSize: 13 }}>
-                Это только расчёт. Кнопки реального заказа кодов пока нет — сначала проверяем цифры на фактических данных ERP.
+                Это только расчёт. Историческое производство до запуска модуля ЧЗ автоматически не включается, чтобы не заказать повторные коды на старые товары. Старые непромаркированные остатки добавим отдельным контролируемым действием.
               </div>
             </>
           )}
