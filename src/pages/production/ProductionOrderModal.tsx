@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../supabase";
 import type {
   Job,
@@ -25,6 +25,12 @@ async function getInvokeErrorMessage(invokeError: any) {
   }
 
   return String(invokeError?.message || "Edge Function returned an error");
+}
+
+declare global {
+  interface Window {
+    bwipjs?: any;
+  }
 }
 
 type ProductionOrderModalProps = {
@@ -731,6 +737,27 @@ export default function ProductionOrderModal({
                       >
                         Копировать полученные коды
                       </button>
+
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a" }}>
+                          Предпросмотр DataMatrix
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                            gap: 10,
+                          }}
+                        >
+                          {receivedSuzCodes.map((code, index) => (
+                            <DataMatrixPreview
+                              key={`${receivedSuzBlockId || "block"}-${index}`}
+                              code={code}
+                              index={index + 1}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
 
@@ -1665,6 +1692,94 @@ const overviewRowsStyle: React.CSSProperties = {
   gap: 0,
   marginTop: 8,
 };
+
+function DataMatrixPreview({
+  code,
+  index,
+}: {
+  code: string;
+  index: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [renderError, setRenderError] = useState("");
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    try {
+      const bwipjs = window.bwipjs;
+      if (!bwipjs?.toCanvas) {
+        throw new Error("Модуль DataMatrix ещё не загрузился.");
+      }
+
+      const gs1Text =
+        "^FNC1" +
+        String(code || "")
+          .replace(/\^/g, "^^")
+          .replace(/\x1d/g, "^FNC1");
+
+      bwipjs.toCanvas(canvas, {
+        bcid: "datamatrix",
+        text: gs1Text,
+        parsefnc: true,
+        scale: 4,
+        padding: 6,
+        backgroundcolor: "FFFFFF",
+      });
+      setRenderError("");
+    } catch (cause) {
+      setRenderError(
+        cause instanceof Error ? cause.message : "Не удалось построить DataMatrix.",
+      );
+    }
+  }, [code]);
+
+  return (
+    <div
+      style={{
+        border: "1px solid #dbeafe",
+        borderRadius: 12,
+        padding: 10,
+        background: "#ffffff",
+        display: "grid",
+        gap: 8,
+        justifyItems: "center",
+      }}
+    >
+      <div style={{ width: "100%", color: "#475569", fontSize: 12, fontWeight: 850 }}>
+        Код {index}
+      </div>
+      {renderError ? (
+        <div style={{ color: "#b91c1c", fontSize: 12 }}>{renderError}</div>
+      ) : (
+        <canvas
+          ref={canvasRef}
+          style={{
+            width: 150,
+            height: 150,
+            imageRendering: "pixelated",
+            maxWidth: "100%",
+          }}
+        />
+      )}
+      <div
+        title={code}
+        style={{
+          width: "100%",
+          color: "#64748b",
+          fontSize: 10,
+          fontFamily: "monospace",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {code}
+      </div>
+    </div>
+  );
+}
 
 function OverviewRow({ label, value }: { label: string; value: string }) {
   return (
