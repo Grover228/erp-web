@@ -8,6 +8,25 @@ import type {
   ProductionOrderOperation,
 } from "../../Production";
 
+async function getInvokeErrorMessage(invokeError: any) {
+  const context = invokeError?.context;
+  if (context && typeof context.json === "function") {
+    try {
+      const payload = await context.json();
+      const message =
+        payload?.error ||
+        payload?.error_message ||
+        payload?.description ||
+        payload?.message;
+      if (message) return String(message);
+    } catch {
+      // Fallback to the Supabase Functions error below.
+    }
+  }
+
+  return String(invokeError?.message || "Edge Function returned an error");
+}
+
 type ProductionOrderModalProps = {
   job: Job;
   variant: "active" | "history";
@@ -115,7 +134,7 @@ export default function ProductionOrderModal({
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error(await getInvokeErrorMessage(error));
       if (data?.error) throw new Error(String(data.error));
 
       setChzOrder(data?.codeOrder || null);
@@ -147,7 +166,7 @@ export default function ProductionOrderModal({
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error(await getInvokeErrorMessage(error));
       if (data?.error) throw new Error(String(data.error));
 
       setSuzPayloadString(String(data?.payloadString || ""));
@@ -176,7 +195,7 @@ export default function ProductionOrderModal({
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error(await getInvokeErrorMessage(error));
       if (data?.error) throw new Error(String(data.error));
 
       setChzMessage(
@@ -206,7 +225,7 @@ export default function ProductionOrderModal({
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error(await getInvokeErrorMessage(error));
       if (data?.error) throw new Error(String(data.error));
 
       setChzMessage(
