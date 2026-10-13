@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Production, { type ProductionTab } from "./Production";
-import ProductionPlanningPage from "./pages/ProductionPlanningPage";
 import QRScanner from "./QRScanner";
 import AuthPage from "./AuthPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -72,7 +71,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
-const APP_BUILD = "2026.10.13-38";
+const APP_BUILD = "2026.10.13-39";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
@@ -176,10 +175,6 @@ function App() {
     canManageProduction && {
       key: "production" as Screen,
       label: "Производство 🏭",
-    },
-    canManageProduction && {
-      key: "production-planning" as Screen,
-      label: "План производства 📅",
     },
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
@@ -864,7 +859,7 @@ function App() {
     if (currentScreen === "production-planning") {
       if (!canManageProduction) return renderAccessDenied();
 
-      return <ProductionPlanningPage />;
+      return <Production initialTab="plan" />;
     }
 
     if (currentScreen === "warehouse") {
