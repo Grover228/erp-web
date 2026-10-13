@@ -7,6 +7,7 @@ import ProductionCreateOrderModal from "./pages/production/ProductionCreateOrder
 import ProductionJobsList from "./pages/production/ProductionJobsList";
 import ProductionActiveBatches from "./pages/production/ProductionActiveBatches";
 import ProductionFinishOperationModal from "./pages/production/ProductionFinishOperationModal";
+import ProductionPlanningPage from "./pages/ProductionPlanningPage";
 import type {
   ActiveBatchItem,
   GeneratedQr,
@@ -2248,6 +2249,22 @@ export default function Production({
           История
         </button>
 
+        <div
+          style={{
+            width: 1,
+            alignSelf: "stretch",
+            background: "#dbeafe",
+            margin: "0 2px",
+          }}
+        />
+
+        <button
+          onClick={() => setTab("plan")}
+          style={tabButtonStyle(tab === "plan")}
+        >
+          Общий план
+        </button>
+
       </div>
 
       {(message || error) && (
@@ -2266,6 +2283,10 @@ export default function Production({
         </div>
       )}
 
+      {tab === "plan" ? (
+        <ProductionPlanningPage />
+      ) : (
+        <>
       {generatedQr && (
         <div
           style={{
@@ -2457,6 +2478,8 @@ export default function Production({
             </div>
           ))}
         </div>
+      )}
+        </>
       )}
 
       {isCreateOpen && (
