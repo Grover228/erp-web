@@ -23,13 +23,15 @@ async function parseJsonResponse(response: Response) {
   }
 
   if (!response.ok) {
-    const message =
+    const upstreamMessage =
       payload?.error_message ||
       payload?.description ||
       payload?.message ||
       payload?.error ||
-      `Честный ЗНАК вернул HTTP ${response.status}`;
-    throw new Error(String(message));
+      payload?.raw ||
+      "";
+    const suffix = upstreamMessage ? `: ${String(upstreamMessage).slice(0, 500)}` : "";
+    throw new Error(`Честный ЗНАК вернул HTTP ${response.status}${suffix}`);
   }
 
   return payload;
@@ -109,14 +111,11 @@ Deno.serve(async (req: Request) => {
 
     return json({ error: "Неизвестное действие." }, 400);
   } catch (cause) {
-    return json(
-      {
-        error:
-          cause instanceof Error
-            ? cause.message
-            : "Не удалось выполнить авторизацию Честного ЗНАКа.",
-      },
-      400,
-    );
+    const message =
+      cause instanceof Error
+        ? cause.message
+        : "Не удалось выполнить авторизацию Честного ЗНАКа.";
+    console.error("chestny-znak-auth:", message);
+    return json({ error: message }, 400);
   }
 });
