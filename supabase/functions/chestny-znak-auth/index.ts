@@ -636,6 +636,273 @@ Deno.serve(async (req: Request) => {
       return json({ mapping });
     }
 
+
+function buildSuzOrderPayload(gtin: string, quantity: number) {
+  return JSON.stringify({
+    productGroup: "lp",
+    products: [
+      {
+        gtin,
+        quantity,
+        serialNumberType: "OPERATOR",
+        templateId: 10,
+        cisType: "UNIT",
+      },
+    ],
+    attributes: {
+      releaseMethodType: "PRODUCTION",
+      createMethodType: "SELF_MADE",
+    },
+  });
+}
+
+async function getProductionCodeOrder(productionOrderId: string) {
+  const orders = await serviceSelect(
+    `production_orders?id=eq.${encodeURIComponent(productionOrderId)}&select=id,order_number,product_id,quantity,status&limit=1`,
+  );
+  const productionOrder = orders?.[0];
+  if (!productionOrder) throw new Error("Производственный заказ не найден.");
+
+  const codeOrders = await serviceSelect(
+    `chz_code_orders?internal_number=eq.${encodeURIComponent(String(productionOrder.order_number || productionOrder.id))}&select=id,internal_number,external_order_id,status,source,total_requested,total_received,created_at,updated_at&limit=1`,
+  );
+  const codeOrder = codeOrders?.[0] || null;
+
+  let codeItem = null;
+  if (codeOrder?.id) {
+    const items = await serviceSelect(
+      `chz_code_order_items?order_id=eq.${encodeURIComponent(String(codeOrder.id))}&select=id,order_id,gtin,requested_quantity,received_quantity,status&limit=1`,
+    );
+    codeItem = items?.[0] || null;
+  }
+
+  return { productionOrder, codeOrder, codeItem };
+}
+
+async function patchServiceRow(path: string, values: Record<string, unknown>) {
+  const { url, serviceRoleKey } = getSupabaseEnv();
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(values),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Не удалось обновить данные ЧЗ: ${text.slice(0, 300)}`);
+  }
+  return response.json();
+}
+
+    if (action === "production_code_order_status") {
+      const productionOrderId = String(body?.productionOrderId || "").trim();
+      if (!productionOrderId) throw new Error("Не указан производственный заказ.");
+
+      const { productionOrder, codeOrder, codeItem } = await getProductionCodeOrder(productionOrderId);
+      return json({
+        productionOrder,
+        codeOrder,
+        codeItem,
+      });
+    }
+
+    if (action === "prepare_suz_order_submission") {
+      const productionOrderId = String(body?.productionOrderId || "").trim();
+      if (!productionOrderId) throw new Error("Не указан производственный заказ.");
+
+      const { productionOrder, codeOrder, codeItem } = await getProductionCodeOrder(productionOrderId);
+      if (!codeOrder || !codeItem) {
+        throw new Error("Для этого производственного задания нет подготовленного заказа ЧЗ.");
+      }
+      if (codeOrder.external_order_id) {
+        throw new Error("Этот заказ уже отправлен в СУЗ.");
+      }
+
+      const gtin = String(codeItem.gtin || "");
+      const quantity = Math.trunc(Number(codeItem.requested_quantity || 0));
+      if (!gtin || quantity <= 0) throw new Error("В черновике ЧЗ нет корректного GTIN/количества.");
+
+      const payloadString = buildSuzOrderPayload(gtin, quantity);
+
+      return json({
+        productionOrder,
+        codeOrder,
+        codeItem,
+        payloadString,
+        payload: JSON.parse(payloadString),
+      });
+    }
+
+    if (action === "submit_suz_order") {
+      const productionOrderId = String(body?.productionOrderId || "").trim();
+      const signature = String(body?.signature || "").replace(/\s+/g, "");
+      const payloadString = String(body?.payloadString || "");
+      if (!productionOrderId) throw new Error("Не указан производственный заказ.");
+      if (!signature) throw new Error("Не передана откреплённая подпись X-Signature.");
+      if (!payloadString) throw new Error("Не передано подписанное тело заказа.");
+
+      const state = await readState();
+      if (!state?.client_token || !state?.oms_id) {
+        throw new Error("Нет активной серверной сессии СУЗ. Авторизуйтесь в Честном ЗНАКе.");
+      }
+      const expiresAt = state?.expires_at ? new Date(state.expires_at).getTime() : 0;
+      if (!expiresAt || expiresAt <= Date.now()) {
+        throw new Error("Сессия СУЗ истекла. Авторизуйтесь заново.");
+      }
+
+      const { productionOrder, codeOrder, codeItem } = await getProductionCodeOrder(productionOrderId);
+      if (!codeOrder || !codeItem) throw new Error("Черновик заказа ЧЗ не найден.");
+      if (codeOrder.external_order_id) {
+        return json({
+          submitted: true,
+          alreadySubmitted: true,
+          orderId: codeOrder.external_order_id,
+          status: codeOrder.status,
+        });
+      }
+
+      const expectedPayload = buildSuzOrderPayload(
+        String(codeItem.gtin || ""),
+        Math.trunc(Number(codeItem.requested_quantity || 0)),
+      );
+      if (payloadString !== expectedPayload) {
+        throw new Error("Подписанное тело заказа изменилось. Подготовьте подпись заново.");
+      }
+
+      const response = await fetch(
+        `${SUZ_API_BASE}/order?omsId=${encodeURIComponent(String(state.oms_id))}`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+            clientToken: String(state.client_token),
+            "X-Signature": signature,
+          },
+          body: payloadString,
+        },
+      );
+
+      const responseText = await response.text();
+      let payload: any = {};
+      try {
+        payload = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        payload = { raw: responseText };
+      }
+
+      if (!response.ok) {
+        const message =
+          payload?.error_message ||
+          payload?.description ||
+          payload?.message ||
+          payload?.error ||
+          payload?.raw ||
+          "";
+        throw new Error(`СУЗ вернул HTTP ${response.status}${message ? `: ${String(message).slice(0, 500)}` : ""}`);
+      }
+
+      const externalOrderId = String(payload?.orderId || "");
+      if (!externalOrderId) {
+        throw new Error("СУЗ ответил успешно, но не вернул orderId.");
+      }
+
+      const upstreamStatus = String(payload?.orderStatus || "submitted");
+      await patchServiceRow(
+        `chz_code_orders?id=eq.${encodeURIComponent(String(codeOrder.id))}`,
+        {
+          external_order_id: externalOrderId,
+          status: upstreamStatus.toLowerCase(),
+          submitted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          error_message: payload?.declineReason ? String(payload.declineReason) : null,
+        },
+      );
+      await patchServiceRow(
+        `chz_code_order_items?id=eq.${encodeURIComponent(String(codeItem.id))}`,
+        {
+          status: upstreamStatus.toLowerCase(),
+          updated_at: new Date().toISOString(),
+        },
+      );
+
+      return json({
+        submitted: true,
+        orderId: externalOrderId,
+        orderStatus: upstreamStatus,
+        response: payload,
+        productionOrder,
+      });
+    }
+
+    if (action === "refresh_suz_order_status") {
+      const productionOrderId = String(body?.productionOrderId || "").trim();
+      if (!productionOrderId) throw new Error("Не указан производственный заказ.");
+
+      const state = await readState();
+      if (!state?.client_token || !state?.oms_id) {
+        throw new Error("Нет активной серверной сессии СУЗ.");
+      }
+
+      const { codeOrder, codeItem } = await getProductionCodeOrder(productionOrderId);
+      if (!codeOrder?.external_order_id || !codeItem?.gtin) {
+        throw new Error("Заказ ещё не отправлен в СУЗ.");
+      }
+
+      const params = new URLSearchParams({
+        omsId: String(state.oms_id),
+        orderId: String(codeOrder.external_order_id),
+        gtin: String(codeItem.gtin),
+      });
+      const response = await fetch(`${SUZ_API_BASE}/order/status?${params.toString()}`, {
+        headers: {
+          Accept: "application/json",
+          clientToken: String(state.client_token),
+        },
+      });
+      const payload = await parseJsonResponse(response);
+      const status = String(payload?.orderStatus || payload?.status || codeOrder.status || "submitted");
+      const received = Math.max(
+        0,
+        Number(
+          payload?.totalObtainedCodesCnt ??
+          payload?.totalCodes ??
+          payload?.buffers?.[0]?.totalPassed ??
+          codeOrder.total_received ??
+          0,
+        ),
+      );
+
+      await patchServiceRow(
+        `chz_code_orders?id=eq.${encodeURIComponent(String(codeOrder.id))}`,
+        {
+          status: status.toLowerCase(),
+          total_received: received,
+          updated_at: new Date().toISOString(),
+          error_message: payload?.declineReason ? String(payload.declineReason) : null,
+        },
+      );
+      await patchServiceRow(
+        `chz_code_order_items?id=eq.${encodeURIComponent(String(codeItem.id))}`,
+        {
+          status: status.toLowerCase(),
+          received_quantity: received,
+          updated_at: new Date().toISOString(),
+        },
+      );
+
+      return json({
+        orderId: codeOrder.external_order_id,
+        status,
+        received,
+        response: payload,
+      });
+    }
+
     if (action === "production_chz_info") {
       const productId = String(body?.productId || "").trim();
       if (!productId) throw new Error("Не выбран товар ERP.");
