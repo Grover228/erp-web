@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import { getCryptoProCertificates, signChallengeWithCryptoPro, type CryptoProCertificateInfo } from "../integrations/cryptopro";
 
@@ -9,8 +9,19 @@ type Challenge = {
 };
 
 type AuthResult = {
-  token: string;
+  connected: boolean;
   expiresAt: string;
+  apiVersion?: string;
+};
+
+type ServerStatus = {
+  configured: boolean;
+  connected: boolean;
+  expiresAt: string | null;
+  apiVersion: string | null;
+  lastPingAt: string | null;
+  lastPingOk: boolean | null;
+  lastPingMessage: string | null;
 };
 
 const OMS_STORAGE_KEY = "erp:chz:oms-id";
@@ -75,11 +86,16 @@ export default function ChestnyZnakPage() {
   const [selectedCertificateThumbprint, setSelectedCertificateThumbprint] = useState("");
   const [cryptoProChecked, setCryptoProChecked] = useState(false);
   const [auth, setAuth] = useState<AuthResult | null>(null);
+  const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
   const configurationReady = Boolean(omsId.trim() && omsConnection.trim());
+
+  useEffect(() => {
+    void loadServerStatus();
+  }, []);
 
   const tokenRemaining = useMemo(() => {
     if (!auth?.expiresAt) return "";
@@ -89,6 +105,55 @@ export default function ChestnyZnakPage() {
     const minutes = Math.floor((diff % 3_600_000) / 60_000);
     return `${hours} ч ${minutes} мин`;
   }, [auth]);
+
+  async function loadServerStatus() {
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: { action: "status" },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+
+      const status: ServerStatus = {
+        configured: Boolean(data?.configured),
+        connected: Boolean(data?.connected),
+        expiresAt: data?.expiresAt ? String(data.expiresAt) : null,
+        apiVersion: data?.apiVersion ? String(data.apiVersion) : null,
+        lastPingAt: data?.lastPingAt ? String(data.lastPingAt) : null,
+        lastPingOk: typeof data?.lastPingOk === "boolean" ? data.lastPingOk : null,
+        lastPingMessage: data?.lastPingMessage ? String(data.lastPingMessage) : null,
+      };
+      setServerStatus(status);
+      setAuth(status.connected && status.expiresAt ? {
+        connected: true,
+        expiresAt: status.expiresAt,
+        apiVersion: status.apiVersion || undefined,
+      } : null);
+    } catch {
+      // Статус при открытии страницы не должен мешать ручной авторизации.
+    }
+  }
+
+  async function testSuzConnection() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: { action: "ping" },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+
+      setMessage(`СУЗ API 3.0 отвечает. Проверка выполнена ${new Date(String(data?.checkedAt || new Date().toISOString())).toLocaleString("ru-RU")}.`);
+      await loadServerStatus();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось проверить СУЗ API 3.0.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   function saveConnectionSettings() {
     setError("");
@@ -212,6 +277,7 @@ export default function ChestnyZnakPage() {
       const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
         body: {
           action: "signin",
+          omsId: omsId.trim(),
           omsConnection: omsConnection.trim(),
           uuid: challenge.uuid,
           signature: signatureValue.replace(/\s+/g, ""),
@@ -223,14 +289,16 @@ export default function ChestnyZnakPage() {
       if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
       if (data?.error) throw new Error(data.error);
 
-      const token = String(data?.token || "");
-      if (!token) throw new Error("Честный ЗНАК не вернул clientToken.");
+      const expiresAt = String(data?.expiresAt || "");
+      if (!data?.connected || !expiresAt) throw new Error("Честный ЗНАК не подтвердил серверную сессию.");
 
       setAuth({
-        token,
-        expiresAt: String(data?.expiresAt || new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString()),
+        connected: true,
+        expiresAt,
+        apiVersion: String(data?.apiVersion || challenge.apiVersion),
       });
-      setMessage("Авторизация успешна. Динамический clientToken получен; реальные заказы кодов не создавались.");
+      await loadServerStatus();
+      setMessage("Авторизация успешна. Динамический clientToken сохранён на сервере; реальные заказы кодов не создавались.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось авторизоваться в Честном ЗНАКе.");
     } finally {
@@ -264,7 +332,7 @@ export default function ChestnyZnakPage() {
         <div>
           <div style={{ fontWeight: 900, fontSize: 18 }}>1. Устройство СУЗ</div>
           <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-            OMS ID и идентификатор соединения не являются закрытым ключом. ERP сохраняет их локально в этом браузере; в базу данных они пока не записываются.
+            OMS ID и идентификатор соединения не являются закрытым ключом. После успешной авторизации они сохраняются в защищённом серверном состоянии интеграции.
           </div>
         </div>
 
@@ -399,11 +467,24 @@ export default function ChestnyZnakPage() {
       </section>
 
       {auth && (
-        <section style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 18, padding: 18, display: "grid", gap: 8 }}>
-          <div style={{ fontWeight: 950, fontSize: 18 }}>Соединение с Честным ЗНАКом подтверждено</div>
-          <div>clientToken: <b>{masked(auth.token)}</b></div>
+        <section style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", borderRadius: 18, padding: 18, display: "grid", gap: 10 }}>
+          <div style={{ fontWeight: 950, fontSize: 18 }}>Серверная сессия Честного ЗНАКа активна</div>
+          <div>True API: <b>{auth.apiVersion || "v3"}</b></div>
           <div>Ориентировочно осталось: <b>{tokenRemaining}</b></div>
-          <div style={{ fontSize: 12 }}>Токен не записывается в Supabase и пропадёт после обновления страницы.</div>
+          <div style={{ fontSize: 12 }}>clientToken хранится только на сервере и не показывается браузеру.</div>
+          <button
+            type="button"
+            onClick={() => void testSuzConnection()}
+            disabled={loading}
+            style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "10px 14px", background: loading ? "#94a3b8" : "#16a34a", color: "#fff", fontWeight: 900 }}
+          >
+            {loading ? "Проверяю СУЗ…" : "Проверить СУЗ API 3.0"}
+          </button>
+          {serverStatus?.lastPingAt && (
+            <div style={{ fontSize: 12 }}>
+              Последняя проверка: <b>{new Date(serverStatus.lastPingAt).toLocaleString("ru-RU")}</b> · {serverStatus.lastPingOk ? "успешно" : "ошибка"}
+            </div>
+          )}
         </section>
       )}
 
