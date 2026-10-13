@@ -695,7 +695,7 @@ export default function ProductionOrderModal({
                         {chzLoading ? "Проверяю…" : "Обновить статус заказа СУЗ"}
                       </button>
 
-                      {Number(chzItem.received_quantity || 0) < Number(chzItem.requested_quantity || 0) && (
+                      {receivedSuzCodes.length < Number(chzItem.requested_quantity || 0) && (
                         <button
                           type="button"
                           onClick={() => void fetchSuzCodes()}
@@ -704,11 +704,18 @@ export default function ProductionOrderModal({
                         >
                           {chzLoading
                             ? "Получение…"
-                            : `Получить ${Math.max(
-                                0,
-                                Number(chzItem.requested_quantity || 0) -
-                                  Number(chzItem.received_quantity || 0),
-                              )} кодов из СУЗ`}
+                            : Number(chzItem.received_quantity || 0) >=
+                                Number(chzItem.requested_quantity || 0)
+                              ? `Восстановить ${Math.max(
+                                  0,
+                                  Number(chzItem.requested_quantity || 0) -
+                                    receivedSuzCodes.length,
+                                )} кодов из СУЗ`
+                              : `Получить ${Math.max(
+                                  0,
+                                  Number(chzItem.requested_quantity || 0) -
+                                    receivedSuzCodes.length,
+                                )} кодов из СУЗ`}
                         </button>
                       )}
                     </div>
