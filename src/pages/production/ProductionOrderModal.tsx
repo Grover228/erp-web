@@ -119,6 +119,8 @@ export default function ProductionOrderModal({
   const [chzItem, setChzItem] = useState<any>(null);
   const [suzPayloadString, setSuzPayloadString] = useState("");
   const [suzSignature, setSuzSignature] = useState("");
+  const [receivedSuzCodes, setReceivedSuzCodes] = useState<string[]>([]);
+  const [receivedSuzBlockId, setReceivedSuzBlockId] = useState("");
 
   async function loadChzOrderStatus() {
     if (!sourceOrder?.id) return;
@@ -205,6 +207,44 @@ export default function ProductionOrderModal({
       await loadChzOrderStatus();
     } catch (cause) {
       setChzError(cause instanceof Error ? cause.message : "Не удалось отправить заказ в СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  async function fetchSuzCodes() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "fetch_suz_codes",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+
+      const codes = Array.isArray(data?.codes)
+        ? data.codes.map((code: unknown) => String(code || "")).filter(Boolean)
+        : [];
+
+      setReceivedSuzCodes(codes);
+      setReceivedSuzBlockId(data?.blockId ? String(data.blockId) : "");
+      setChzMessage(
+        codes.length > 0
+          ? `Получено кодов из СУЗ: ${codes.length}. Всего получено по заказу: ${Number(data?.totalReceived || codes.length)}.`
+          : String(data?.message || "СУЗ пока не вернул готовые коды."),
+      );
+
+      await loadChzOrderStatus();
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось получить коды из СУЗ.");
     } finally {
       setChzLoading(false);
     }
@@ -630,14 +670,68 @@ export default function ProductionOrderModal({
                   )}
 
                   {chzOrder.external_order_id && (
-                    <button
-                      type="button"
-                      onClick={() => void refreshSuzStatus()}
-                      disabled={chzLoading}
-                      style={secondaryBlueButtonStyle()}
-                    >
-                      {chzLoading ? "Проверяю…" : "Обновить статус заказа СУЗ"}
-                    </button>
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void refreshSuzStatus()}
+                        disabled={chzLoading}
+                        style={secondaryBlueButtonStyle()}
+                      >
+                        {chzLoading ? "Проверяю…" : "Обновить статус заказа СУЗ"}
+                      </button>
+
+                      {Number(chzItem.received_quantity || 0) < Number(chzItem.requested_quantity || 0) && (
+                        <button
+                          type="button"
+                          onClick={() => void fetchSuzCodes()}
+                          disabled={chzLoading}
+                          style={primaryBlueButtonStyle}
+                        >
+                          {chzLoading
+                            ? "Получение…"
+                            : `Получить ${Math.max(
+                                0,
+                                Number(chzItem.requested_quantity || 0) -
+                                  Number(chzItem.received_quantity || 0),
+                              )} кодов из СУЗ`}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {receivedSuzCodes.length > 0 && (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a" }}>
+                        Полученные DataMatrix-коды
+                      </div>
+                      {receivedSuzBlockId && (
+                        <div style={{ color: "#64748b", fontSize: 12 }}>
+                          blockId: <span style={{ fontFamily: "monospace" }}>{receivedSuzBlockId}</span>
+                        </div>
+                      )}
+                      <textarea
+                        readOnly
+                        value={receivedSuzCodes.join("\n")}
+                        rows={Math.min(10, Math.max(4, receivedSuzCodes.length))}
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 10,
+                          padding: 10,
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          resize: "vertical",
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(receivedSuzCodes.join("\n"))}
+                        style={secondaryBlueButtonStyle()}
+                      >
+                        Копировать полученные коды
+                      </button>
+                    </div>
                   )}
 
                   {chzMessage && (
