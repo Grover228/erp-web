@@ -685,6 +685,55 @@ async function getProductionCodeOrder(productionOrderId: string) {
   return { productionOrder, codeOrder, codeItem };
 }
 
+async function saveMarkingCodes(
+  orderId: string,
+  orderItemId: string,
+  codes: string[],
+  blockId: string | null,
+) {
+  if (!codes.length) return [];
+
+  const { url, serviceRoleKey } = getSupabaseEnv();
+  const now = new Date().toISOString();
+  const rows = codes.map((code) => ({
+    order_id: orderId,
+    order_item_id: orderItemId,
+    code,
+    block_id: blockId,
+    status: "received",
+    received_at: now,
+    updated_at: now,
+  }));
+
+  const response = await fetch(
+    `${url}/rest/v1/chz_marking_codes?on_conflict=order_item_id,code`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify(rows),
+    },
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Не удалось сохранить коды маркировки: ${text.slice(0, 300)}`);
+  }
+
+  return response.json();
+}
+
+async function getStoredMarkingCodes(orderItemId: string) {
+  if (!orderItemId) return [];
+  return serviceSelect(
+    `chz_marking_codes?order_item_id=eq.${encodeURIComponent(orderItemId)}&select=id,code,block_id,status,received_at,printed_at,applied_at&order=received_at.asc`,
+  );
+}
+
 async function patchServiceRow(path: string, values: Record<string, unknown>) {
   const { url, serviceRoleKey } = getSupabaseEnv();
   const response = await fetch(`${url}/rest/v1/${path}`, {
@@ -709,10 +758,14 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
       if (!productionOrderId) throw new Error("Не указан производственный заказ.");
 
       const { productionOrder, codeOrder, codeItem } = await getProductionCodeOrder(productionOrderId);
+      const markingCodes = codeItem?.id
+        ? await getStoredMarkingCodes(String(codeItem.id))
+        : [];
       return json({
         productionOrder,
         codeOrder,
         codeItem,
+        markingCodes,
       });
     }
 
@@ -882,10 +935,25 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
       }
 
       const requested = Math.max(0, Math.trunc(Number(codeItem.requested_quantity || 0)));
+      const storedCodes = await getStoredMarkingCodes(String(codeItem.id));
+      const storedCount = storedCodes.length;
+
+      if (storedCount >= requested && requested > 0) {
+        return json({
+          received: 0,
+          totalReceived: storedCount,
+          requested,
+          codes: storedCodes.map((row: any) => String(row.code || "")).filter(Boolean),
+          blockId: storedCodes.find((row: any) => row.block_id)?.block_id || null,
+          status: codeOrder.status || "codes_received",
+          restoredFromStorage: true,
+        });
+      }
+
       const alreadyReceived = Math.max(0, Math.trunc(Number(codeItem.received_quantity || 0)));
-      const remaining = Math.max(0, requested - alreadyReceived);
+      const remaining = Math.max(0, requested - storedCount);
       if (remaining <= 0) {
-        throw new Error("Все заказанные коды уже получены.");
+        throw new Error("Все заказанные коды уже сохранены.");
       }
 
       const normalizedGtin = String(codeItem.gtin || "").trim().padStart(14, "0");
@@ -923,7 +991,15 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
         });
       }
 
-      const totalReceived = Math.min(requested, alreadyReceived + codes.length);
+      await saveMarkingCodes(
+        String(codeOrder.id),
+        String(codeItem.id),
+        codes,
+        blockId,
+      );
+
+      const savedCodes = await getStoredMarkingCodes(String(codeItem.id));
+      const totalReceived = Math.min(requested, savedCodes.length);
       const nextStatus = totalReceived >= requested ? "codes_received" : "partially_received";
 
       await patchServiceRow(
@@ -949,8 +1025,10 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
         received: codes.length,
         totalReceived,
         requested,
-        codes,
-        blockId,
+        codes: savedCodes.map((row: any) => String(row.code || "")).filter(Boolean),
+        blockId:
+          savedCodes.find((row: any) => row.block_id)?.block_id ||
+          blockId,
         status: nextStatus,
       });
     }
