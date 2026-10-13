@@ -803,7 +803,25 @@ async function patchServiceRow(path: string, values: Record<string, unknown>) {
           payload?.error ||
           payload?.raw ||
           "";
-        throw new Error(`СУЗ вернул HTTP ${response.status}${message ? `: ${String(message).slice(0, 500)}` : ""}`);
+        const exactError = `СУЗ вернул HTTP ${response.status}${message ? `: ${String(message).slice(0, 500)}` : ""}`;
+
+        try {
+          await patchServiceRow(
+            `chz_code_orders?id=eq.${encodeURIComponent(String(codeOrder.id))}`,
+            {
+              error_message: exactError,
+              updated_at: new Date().toISOString(),
+            },
+          );
+        } catch {
+          // Диагностическая запись не должна скрывать исходную ошибку СУЗ.
+        }
+
+        return json({
+          error: exactError,
+          upstreamStatus: response.status,
+          upstream: payload,
+        });
       }
 
       const externalOrderId = String(payload?.orderId || "");
