@@ -9,6 +9,7 @@ const TRUE_API_BASES = {
 } as const;
 
 const SUZ_API_BASE = "https://suzgrid.crpt.ru/api/v3";
+const NK_API_BASE = "https://xn--80aqu.xn----7sbabas4ajkhfocclk9d3cvfsa.xn--p1ai";
 const STATE_KEY = "default";
 
 function json(body: unknown, status = 200) {
@@ -142,6 +143,131 @@ async function upsertState(values: Record<string, unknown>) {
   return rows?.[0] || null;
 }
 
+
+async function serviceSelect(path: string) {
+  const { url, serviceRoleKey } = getSupabaseEnv();
+  const response = await fetch(`${url}/rest/v1/${path}`, {
+    headers: {
+      Authorization: `Bearer ${serviceRoleKey}`,
+      apikey: serviceRoleKey,
+    },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Ошибка чтения ERP: ${text.slice(0, 300)}`);
+  }
+  return response.json();
+}
+
+async function getNationalCatalogGoods(token: string) {
+  const goods: any[] = [];
+  let offset = 0;
+  const limit = 1000;
+  const fromDate = "2015-01-01 00:00:00";
+  const now = new Date();
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const toDate = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+  while (offset < 10000) {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+      from_date: fromDate,
+      to_date: toDate,
+      format: "json",
+    });
+
+    const response = await fetch(`${NK_API_BASE}/v4/product-list?${params.toString()}`, {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const payload = await parseJsonResponse(response);
+    const page = Array.isArray(payload?.result?.goods) ? payload.result.goods : [];
+    goods.push(...page);
+
+    const total = Math.min(10000, Math.max(0, Number(payload?.result?.total || goods.length)));
+    if (!page.length || goods.length >= total || page.length < limit) break;
+    offset += limit;
+  }
+
+  return goods;
+}
+
+async function getNationalCatalogCard(token: string, gtin: string) {
+  const params = new URLSearchParams({ gtin, format: "json" });
+  const response = await fetch(`${NK_API_BASE}/v3/feed-product?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const payload = await parseJsonResponse(response);
+  const rows = Array.isArray(payload?.result) ? payload.result : [];
+  return rows[0] || null;
+}
+
+function getCardGtin(card: any) {
+  const identifiers = Array.isArray(card?.identified_by) ? card.identified_by : [];
+  const gtin = identifiers.find((item: any) => String(item?.type || "").toLowerCase() === "gtin");
+  return String(gtin?.value || "");
+}
+
+function getCardTnved(card: any) {
+  const attrs = Array.isArray(card?.good_attrs) ? card.good_attrs : [];
+  const exact = attrs.find((item: any) => Number(item?.attr_id) === 13933);
+  if (exact?.attr_value) return String(exact.attr_value);
+  const group = attrs.find((item: any) => Number(item?.attr_id) === 3959);
+  return group?.attr_value ? String(group.attr_value) : "";
+}
+
+async function saveProductMapping(productId: string, card: any) {
+  const gtin = getCardGtin(card);
+  if (!gtin) throw new Error("В карточке Национального каталога не найден GTIN.");
+
+  const { url, serviceRoleKey } = getSupabaseEnv();
+  const body = [{
+    product_id: productId,
+    gtin,
+    good_id: card?.good_id ? Number(card.good_id) : null,
+    good_name: card?.good_name ? String(card.good_name) : null,
+    good_status: card?.good_status ? String(card.good_status) : null,
+    good_mark_flag: typeof card?.good_mark_flag === "boolean" ? card.good_mark_flag : null,
+    good_turn_flag: typeof card?.good_turn_flag === "boolean" ? card.good_turn_flag : null,
+    brand_name: card?.brand_name ? String(card.brand_name) : null,
+    tnved: getCardTnved(card) || null,
+    raw_data: card,
+    last_checked_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }];
+
+  const response = await fetch(
+    `${url}/rest/v1/chz_product_mappings?on_conflict=product_id`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        "Content-Type": "application/json",
+        Prefer: "resolution=merge-duplicates,return=representation",
+      },
+      body: JSON.stringify(body),
+    },
+  );
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Не удалось сохранить соответствие GTIN: ${text.slice(0, 300)}`);
+  }
+
+  const rows = await response.json();
+  return rows?.[0] || body[0];
+}
+
 function publicState(state: any) {
   if (!state) {
     return {
@@ -267,6 +393,54 @@ Deno.serve(async (req: Request) => {
         apiVersion,
         expiresAt,
       });
+    }
+
+
+    if (action === "catalog") {
+      const state = await readState();
+      if (!state?.client_token) {
+        throw new Error("Сначала авторизуйтесь в Честном ЗНАКе.");
+      }
+      const expiresAt = state?.expires_at ? new Date(state.expires_at).getTime() : 0;
+      if (!expiresAt || expiresAt <= Date.now()) {
+        throw new Error("Серверная сессия Честного ЗНАКа истекла. Авторизуйтесь заново.");
+      }
+
+      const [goods, products, mappings] = await Promise.all([
+        getNationalCatalogGoods(String(state.client_token)),
+        serviceSelect("products?select=id,name,article,is_active,item_id&is_active=eq.true&order=name.asc"),
+        serviceSelect("chz_product_mappings?select=id,product_id,gtin,good_id,good_name,good_status,good_mark_flag,good_turn_flag,brand_name,tnved,last_checked_at&order=updated_at.desc"),
+      ]);
+
+      return json({
+        goods,
+        total: goods.length,
+        products,
+        mappings,
+      });
+    }
+
+    if (action === "save_mapping") {
+      const state = await readState();
+      if (!state?.client_token) throw new Error("Сначала авторизуйтесь в Честном ЗНАКе.");
+      const expiresAt = state?.expires_at ? new Date(state.expires_at).getTime() : 0;
+      if (!expiresAt || expiresAt <= Date.now()) {
+        throw new Error("Серверная сессия Честного ЗНАКа истекла. Авторизуйтесь заново.");
+      }
+
+      const productId = String(body?.productId || "").trim();
+      const gtin = String(body?.gtin || "").trim();
+      if (!productId) throw new Error("Не выбран товар ERP.");
+      if (!gtin) throw new Error("Не выбран GTIN.");
+
+      const products = await serviceSelect(`products?id=eq.${encodeURIComponent(productId)}&select=id,name,article&limit=1`);
+      if (!products?.[0]) throw new Error("Товар ERP не найден.");
+
+      const card = await getNationalCatalogCard(String(state.client_token), gtin);
+      if (!card) throw new Error("Карточка GTIN не найдена среди собственных карточек Национального каталога.");
+
+      const mapping = await saveProductMapping(productId, card);
+      return json({ mapping });
     }
 
     if (action === "ping") {
