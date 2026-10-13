@@ -30,6 +30,25 @@ function masked(value: string) {
   return `${value.slice(0, 5)}••••••${value.slice(-5)}`;
 }
 
+async function getInvokeErrorMessage(invokeError: any) {
+  const context = invokeError?.context;
+  if (context && typeof context.json === "function") {
+    try {
+      const payload = await context.json();
+      const message =
+        payload?.error ||
+        payload?.error_message ||
+        payload?.description ||
+        payload?.message;
+      if (message) return String(message);
+    } catch {
+      // Supabase уже вернёт исходное сообщение ниже.
+    }
+  }
+
+  return String(invokeError?.message || "Edge Function returned an error");
+}
+
 export default function ChestnyZnakPage() {
   const [omsId, setOmsId] = useState(() => localStorage.getItem(OMS_STORAGE_KEY) || "");
   const [omsConnection, setOmsConnection] = useState(() => localStorage.getItem(CONNECTION_STORAGE_KEY) || "");
@@ -81,7 +100,7 @@ export default function ChestnyZnakPage() {
         body: { action: "challenge" },
       });
 
-      if (invokeError) throw invokeError;
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
       if (data?.error) throw new Error(data.error);
 
       const uuid = String(data?.uuid || "");
@@ -118,7 +137,7 @@ export default function ChestnyZnakPage() {
         },
       });
 
-      if (invokeError) throw invokeError;
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
       if (data?.error) throw new Error(data.error);
 
       const token = String(data?.token || "");
