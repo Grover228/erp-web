@@ -24,6 +24,37 @@ type ServerStatus = {
   lastPingMessage: string | null;
 };
 
+type CatalogGood = {
+  good_id?: number;
+  gtin?: string;
+  good_name?: string;
+  tnved?: string;
+  brand_name?: string;
+  good_status?: string;
+  good_detailed_status?: string[];
+  to_date?: string;
+};
+
+type ErpProduct = {
+  id: string;
+  name: string;
+  article?: string | null;
+};
+
+type ProductMapping = {
+  id?: string;
+  product_id: string;
+  gtin: string;
+  good_id?: number | null;
+  good_name?: string | null;
+  good_status?: string | null;
+  good_mark_flag?: boolean | null;
+  good_turn_flag?: boolean | null;
+  brand_name?: string | null;
+  tnved?: string | null;
+  last_checked_at?: string | null;
+};
+
 const OMS_STORAGE_KEY = "erp:chz:oms-id";
 const CONNECTION_STORAGE_KEY = "erp:chz:oms-connection";
 
@@ -81,6 +112,11 @@ export default function ChestnyZnakPage() {
   const [cryptoProChecked, setCryptoProChecked] = useState(false);
   const [auth, setAuth] = useState<AuthResult | null>(null);
   const [serverStatus, setServerStatus] = useState<ServerStatus | null>(null);
+  const [catalogGoods, setCatalogGoods] = useState<CatalogGood[]>([]);
+  const [erpProducts, setErpProducts] = useState<ErpProduct[]>([]);
+  const [productMappings, setProductMappings] = useState<ProductMapping[]>([]);
+  const [selectedProductByGtin, setSelectedProductByGtin] = useState<Record<string, string>>({});
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -144,6 +180,69 @@ export default function ChestnyZnakPage() {
       await loadServerStatus();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось проверить СУЗ API 3.0.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+  async function loadNationalCatalog() {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: { action: "catalog" },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+
+      const goods = Array.isArray(data?.goods) ? data.goods : [];
+      const products = Array.isArray(data?.products) ? data.products : [];
+      const mappings = Array.isArray(data?.mappings) ? data.mappings : [];
+
+      setCatalogGoods(goods);
+      setErpProducts(products);
+      setProductMappings(mappings);
+      setCatalogLoaded(true);
+
+      const selected: Record<string, string> = {};
+      for (const mapping of mappings) {
+        if (mapping?.gtin && mapping?.product_id) selected[String(mapping.gtin)] = String(mapping.product_id);
+      }
+      setSelectedProductByGtin(selected);
+      setMessage(`Национальный каталог загружен: ${goods.length} карточек. Существующих связей ERP ↔ GTIN: ${mappings.length}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось загрузить Национальный каталог.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveProductMapping(gtin: string) {
+    try {
+      setLoading(true);
+      setError("");
+      setMessage("");
+
+      const productId = String(selectedProductByGtin[gtin] || "");
+      if (!productId) throw new Error("Сначала выберите товар ERP.");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: { action: "save_mapping", productId, gtin },
+      });
+      if (invokeError) throw new Error(await getInvokeErrorMessage(invokeError));
+      if (data?.error) throw new Error(data.error);
+
+      const nextMapping = data?.mapping as ProductMapping;
+      setProductMappings((current) => [
+        nextMapping,
+        ...current.filter((row) => row.product_id !== nextMapping.product_id && row.gtin !== nextMapping.gtin),
+      ]);
+      setMessage(`GTIN ${gtin} связан с товаром ERP. Карточка дополнительно проверена через Национальный каталог.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось сохранить соответствие GTIN.");
     } finally {
       setLoading(false);
     }
@@ -478,6 +577,113 @@ export default function ChestnyZnakPage() {
             <div style={{ fontSize: 12 }}>
               Последняя проверка: <b>{new Date(serverStatus.lastPingAt).toLocaleString("ru-RU")}</b> · {serverStatus.lastPingOk ? "успешно" : "ошибка"}
             </div>
+          )}
+        </section>
+      )}
+
+
+      {auth && (
+        <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 18, padding: 18, display: "grid", gap: 14 }}>
+          <div>
+            <div style={{ fontWeight: 950, fontSize: 20 }}>4. Национальный каталог и GTIN</div>
+            <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+              ERP читает только ваши карточки Национального каталога. Ничего в Честном ЗНАКе на этом этапе не создаётся и не изменяется.
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void loadNationalCatalog()}
+            disabled={loading}
+            style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "11px 15px", background: loading ? "#94a3b8" : "#005bff", color: "#fff", fontWeight: 900 }}
+          >
+            {loading ? "Загружаю…" : catalogLoaded ? "Обновить Национальный каталог" : "Загрузить Национальный каталог"}
+          </button>
+
+          {catalogLoaded && (
+            <>
+              <div style={{ display: "flex", gap: 14, flexWrap: "wrap", color: "#475569", fontSize: 13 }}>
+                <span>Карточек ЧЗ: <b>{catalogGoods.length}</b></span>
+                <span>Товаров ERP: <b>{erpProducts.length}</b></span>
+                <span>Связано: <b>{productMappings.length}</b></span>
+              </div>
+
+              {!catalogGoods.length ? (
+                <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", borderRadius: 12, padding: 12 }}>
+                  В Национальном каталоге не найдено собственных карточек за выбранный диапазон.
+                </div>
+              ) : (
+                <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 980 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>GTIN</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>Товар ЧЗ</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>Статус</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>ТН ВЭД</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}>Товар ERP</th>
+                        <th style={{ padding: 10, borderBottom: "1px solid #e2e8f0" }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {catalogGoods.map((good) => {
+                        const gtin = String(good?.gtin || "");
+                        const mapping = productMappings.find((row) => row.gtin === gtin);
+                        const selectedProductId = selectedProductByGtin[gtin] || mapping?.product_id || "";
+                        const selectedProduct = erpProducts.find((product) => product.id === selectedProductId);
+                        const isSaved = Boolean(mapping && mapping.product_id === selectedProductId);
+
+                        return (
+                          <tr key={`${good?.good_id || "good"}-${gtin}`}>
+                            <td style={{ padding: 10, borderBottom: "1px solid #eef2f7", fontFamily: "monospace", fontWeight: 800 }}>{gtin || "—"}</td>
+                            <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>
+                              <div style={{ fontWeight: 850 }}>{String(good?.good_name || "Без названия")}</div>
+                              {good?.brand_name && <div style={{ color: "#64748b", fontSize: 11, marginTop: 2 }}>{String(good.brand_name)}</div>}
+                            </td>
+                            <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>{String(good?.good_status || "—")}</td>
+                            <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>{String(good?.tnved || "—")}</td>
+                            <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>
+                              <select
+                                value={selectedProductId}
+                                onChange={(event) => setSelectedProductByGtin((current) => ({ ...current, [gtin]: event.target.value }))}
+                                style={{ ...inputStyle, minWidth: 260 }}
+                              >
+                                <option value="">— выбрать товар ERP —</option>
+                                {erpProducts.map((product) => (
+                                  <option key={product.id} value={product.id}>
+                                    {product.article ? `${product.article} · ` : ""}{product.name}
+                                  </option>
+                                ))}
+                              </select>
+                              {isSaved && selectedProduct && (
+                                <div style={{ color: "#15803d", fontSize: 11, marginTop: 4 }}>Связано: {selectedProduct.name}</div>
+                              )}
+                            </td>
+                            <td style={{ padding: 10, borderBottom: "1px solid #eef2f7" }}>
+                              <button
+                                type="button"
+                                onClick={() => void saveProductMapping(gtin)}
+                                disabled={loading || !gtin || !selectedProductId || isSaved}
+                                style={{
+                                  border: 0,
+                                  borderRadius: 9,
+                                  padding: "8px 11px",
+                                  background: !loading && gtin && selectedProductId && !isSaved ? "#0f172a" : "#cbd5e1",
+                                  color: "#fff",
+                                  fontWeight: 850,
+                                }}
+                              >
+                                {isSaved ? "Связано" : "Связать"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </section>
       )}
