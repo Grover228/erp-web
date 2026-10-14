@@ -472,6 +472,65 @@ export default function ProductionPlanningPage() {
     });
   }, [planItems]);
 
+  const productionSchedule = useMemo(() => {
+    if (!selectedSeason) return null;
+    const today = new Date().toISOString().slice(0, 10);
+    const start = selectedSeason.start_date;
+    const deadline = selectedSeason.end_date;
+    const remaining = Math.max(0, seasonPlan - seasonCompleted);
+    const toDay = (value: string) => new Date(`${value}T12:00:00Z`);
+    const dateKey = (value: Date) => value.toISOString().slice(0, 10);
+    const workdays = (from: string, to: string) => {
+      if (from > to) return 0;
+      let count = 0;
+      const day = toDay(from);
+      const end = toDay(to);
+      while (day <= end) {
+        if (day.getUTCDay() !== 0 && day.getUTCDay() !== 6) count++;
+        day.setUTCDate(day.getUTCDate() + 1);
+      }
+      return count;
+    };
+    const elapsed = workdays(start, today);
+    const pace = elapsed > 0 ? seasonCompleted / elapsed : 0;
+    const forecastDays = pace > 0 ? Math.ceil(remaining / pace) : null;
+    const forecast = forecastDays === null ? null : (() => {
+      const day = toDay(today > start ? today : start);
+      let left = forecastDays;
+      while (left > 0) {
+        day.setUTCDate(day.getUTCDate() + 1);
+        if (day.getUTCDay() !== 0 && day.getUTCDay() !== 6) left--;
+      }
+      return dateKey(day);
+    })();
+    const weeks: Array<{ start: string; end: string; days: number; target: number }> = [];
+    if (deadline && deadline >= today) {
+      const first = today > start ? today : start;
+      const day = toDay(first);
+      const end = toDay(deadline);
+      let safety = 0;
+      while (day <= end && safety++ < 110) {
+        const weekStart = dateKey(day);
+        const endOfWeek = toDay(weekStart);
+        const untilSunday = (7 - endOfWeek.getUTCDay()) % 7;
+        endOfWeek.setUTCDate(endOfWeek.getUTCDate() + untilSunday);
+        const weekEnd = endOfWeek < end ? dateKey(endOfWeek) : deadline;
+        weeks.push({ start: weekStart, end: weekEnd, days: workdays(weekStart, weekEnd), target: 0 });
+        day.setUTCDate(day.getUTCDate() + 7 - day.getUTCDay());
+      }
+      const daysTotal = weeks.reduce((sum, week) => sum + week.days, 0);
+      let assigned = 0;
+      for (const week of weeks) {
+        week.target = daysTotal ? Math.floor(remaining * week.days / daysTotal) : 0;
+        assigned += week.target;
+      }
+      for (let i = 0; i < remaining - assigned && weeks.length; i++) {
+        weeks[i % weeks.length].target++;
+      }
+    }
+    return { remaining, pace, forecast, weeks, deadline };
+  }, [selectedSeason, seasonPlan, seasonCompleted]);
+
   async function saveSeasonPlan() {
     if (!selectedSeason) return;
 
@@ -1166,6 +1225,44 @@ export default function ProductionPlanningPage() {
             >
               Календарь производства
             </div>
+
+            {productionSchedule && (
+              <div style={{ marginBottom: 18, display: "grid", gap: 14 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+                  <KpiCard title="Осталось изготовить" value={productionSchedule.remaining} hint="до общего плана" />
+                  <KpiCard title="Средний темп" value={Math.round(productionSchedule.pace * 10) / 10} hint="шт. за рабочий день" />
+                  <div style={{ ...cardStyle, padding: 14 }}>
+                    <div style={{ fontSize: 12, color: "#64748b", fontWeight: 800 }}>Прогноз завершения</div>
+                    <div style={{ marginTop: 8, fontSize: 20, fontWeight: 900 }}>
+                      {productionSchedule.remaining === 0 ? "План выполнен" : productionSchedule.forecast ? formatDate(productionSchedule.forecast) : "Нет данных о темпе"}
+                    </div>
+                    {productionSchedule.deadline && productionSchedule.forecast && productionSchedule.remaining > 0 && (
+                      <div style={{ marginTop: 6, fontSize: 12, color: productionSchedule.forecast > productionSchedule.deadline ? "#b91c1c" : "#15803d" }}>
+                        {productionSchedule.forecast > productionSchedule.deadline ? "Риск не успеть к сроку" : "По текущему темпу укладываемся"}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div style={{ fontWeight: 850, color: "#0f172a" }}>План по рабочим неделям (автоматически)</div>
+                <div style={{ color: "#64748b", fontSize: 12 }}>
+                  Остаток распределён по будним дням до окончания сезона. Факт и прогноз обновляются по производственным операциям ERP; план на недели не записывается в базу.
+                </div>
+                {productionSchedule.weeks.length ? (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 390 }}>
+                      <thead><tr>{["Неделя", "Рабочих дней", "План, шт."].map((label) => <th key={label} style={{ ...tableCellStyle, textAlign: "left" }}>{label}</th>)}</tr></thead>
+                      <tbody>{productionSchedule.weeks.map((week) => (
+                        <tr key={week.start}>
+                          <td style={tableCellStyle}>{formatDate(week.start)} — {formatDate(week.end)}</td>
+                          <td style={tableCellStyle}>{week.days}</td>
+                          <td style={{ ...tableCellStyle, fontWeight: 800 }}>{formatQty(week.target)}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                ) : <div style={{ color: "#64748b", fontSize: 13 }}>Для графика нужна будущая дата окончания сезона.</div>}
+              </div>
+            )}
 
             <div style={{ overflowX: "auto" }}>
               <table
