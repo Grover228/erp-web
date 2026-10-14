@@ -516,7 +516,8 @@ export default function ProductionPlanningPage() {
         endOfWeek.setUTCDate(endOfWeek.getUTCDate() + untilSunday);
         const weekEnd = endOfWeek < end ? dateKey(endOfWeek) : deadline;
         weeks.push({ start: weekStart, end: weekEnd, days: workdays(weekStart, weekEnd), target: 0 });
-        day.setUTCDate(day.getUTCDate() + 7 - day.getUTCDay());
+        day.setTime(endOfWeek.getTime());
+        day.setUTCDate(day.getUTCDate() + 1);
       }
       const daysTotal = weeks.reduce((sum, week) => sum + week.days, 0);
       let assigned = 0;
