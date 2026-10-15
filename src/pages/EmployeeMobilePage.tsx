@@ -715,7 +715,7 @@ export default function EmployeeMobilePage({
       let nextBatchData: Record<string, unknown>;
 
       if (isCurrentBatchOperationDone && nextOperation) {
-        const takeNextBySelf = nextAction === "self";
+        const takeNextBySelf = false;
 
         nextBatchData = {
           status: takeNextBySelf ? "in_progress" : "waiting",
@@ -745,12 +745,21 @@ export default function EmployeeMobilePage({
         };
       }
 
+      if (isCurrentBatchOperationDone && operation.operation_name === "Стачивание" && nextOperation) {
+        const {error:transferError} = await supabase.rpc("complete_stitching_container_transfer",{p_batch_id:batch.id});
+        // Transfer is finalized after the batch moves to the next operation.
+        if (transferError && !transferError.message.includes("ещё не завершено")) throw transferError;
+      }
       const { error: batchError } = await supabase
         .from("production_batches")
         .update(nextBatchData)
         .eq("id", batch.id);
 
       if (batchError) throw batchError;
+      if (isCurrentBatchOperationDone && operation.operation_name === "Стачивание" && nextOperation) {
+        const {error:transferError} = await supabase.rpc("complete_stitching_container_transfer",{p_batch_id:batch.id});
+        if (transferError) throw transferError;
+      }
 
       const pricePerUnit = Number(operation.price_per_unit || 0);
       const earnedAmount = finishQty * pricePerUnit;
