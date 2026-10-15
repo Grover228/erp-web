@@ -805,7 +805,9 @@ export default function EmployeeMobilePage({
 
       const planPerUnit = Number(operation.planned_time_min_per_unit);
       const plannedSeconds = operation.planned_time_min_per_unit != null && Number.isFinite(planPerUnit) && planPerUnit > 0 ? Math.round(planPerUnit * finishQty * 60) : null;
-      closeModal();
+      setClosingBatch(null);
+      setConfirmNextOperation(false);
+      setLastOperationReady(false);
       setOperationSummary({batchNumber:batch.batch_number,operationName:operation.operation_name,quantity:finishQty,defects:defectQuantity,seconds:durationSeconds,plannedSeconds,earned:earnedAmount});
       setPendingNextAfterSummary(isCurrentBatchOperationDone && nextOperation && defectQuantity === 0 ? {batchId:batch.id,batchNumber:batch.batch_number,nextOperation} : null);
       await loadMyBatches(user.id);
