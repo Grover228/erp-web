@@ -38,6 +38,7 @@ type ProductionOperation = {
   status: string;
   completed_quantity: number;
   price_per_unit: number | null;
+  planned_time_min_per_unit: number | null;
   started_at: string | null;
 };
 
@@ -77,6 +78,7 @@ export default function EmployeeMobilePage({
   const [confirmNextOperation, setConfirmNextOperation] = useState(false);
   const [nextOperationPreview, setNextOperationPreview] = useState<ProductionOperation | null>(null);
   const [lastOperationReady, setLastOperationReady] = useState(false);
+  const [operationSummary, setOperationSummary] = useState<{batchNumber:string;operationName:string;quantity:number;defects:number;seconds:number;plannedSeconds:number|null;earned:number}|null>(null);
   const [finishedFinalBatch, setFinishedFinalBatch] = useState<{ batchNumber: string } | null>(null);
   const [postOperationAction, setPostOperationAction] = useState<{
     batchId: string;
@@ -800,7 +802,10 @@ export default function EmployeeMobilePage({
       const shouldShowPostOperationAction =
         defectQuantity > 0 && isCurrentBatchOperationDone;
 
+      const planPerUnit = Number(operation.planned_time_min_per_unit);
+      const plannedSeconds = operation.planned_time_min_per_unit != null && Number.isFinite(planPerUnit) && planPerUnit > 0 ? Math.round(planPerUnit * finishQty * 60) : null;
       closeModal();
+      setOperationSummary({batchNumber:batch.batch_number,operationName:operation.operation_name,quantity:finishQty,defects:defectQuantity,seconds:durationSeconds,plannedSeconds,earned:earnedAmount});
       await loadMyBatches(user.id);
 
       if (shouldShowPostOperationAction) {
@@ -1538,7 +1543,25 @@ export default function EmployeeMobilePage({
         </div>
       )}
 
-      {postOperationAction && (
+      {operationSummary && (
+        <div style={modalOverlayStyle}>
+          <div style={modalBoxStyle}>
+            <div style={{fontSize:24,fontWeight:900,color:"#111827"}}>Операция завершена</div>
+            <div style={{color:"#64748b"}}>{operationSummary.operationName} · {operationSummary.batchNumber}</div>
+            <div style={infoBoxStyle}>
+              <div>Готово: <b>{operationSummary.quantity} шт.</b></div>
+              {operationSummary.defects > 0 && <div>Брак: <b>{operationSummary.defects} шт.</b></div>}
+              <div>Фактически: <b>{formatOperationTime(operationSummary.seconds)}</b></div>
+              <div>План: <b>{operationSummary.plannedSeconds === null ? "Не задан" : formatOperationTime(operationSummary.plannedSeconds)}</b></div>
+              {operationSummary.plannedSeconds !== null && <div>Отклонение: <b style={{color:operationSummary.seconds > operationSummary.plannedSeconds ? "#b91c1c" : "#15803d"}}>{operationSummary.seconds > operationSummary.plannedSeconds ? "+" : operationSummary.seconds < operationSummary.plannedSeconds ? "−" : ""}{formatOperationTime(Math.abs(operationSummary.seconds - operationSummary.plannedSeconds))}</b> ({Math.round(100 * Math.abs(operationSummary.seconds - operationSummary.plannedSeconds) / operationSummary.plannedSeconds)}%)</div>}
+              <div>На изделие: <b>{formatOperationTime(operationSummary.seconds / operationSummary.quantity)}</b></div>
+              <div>Начислено: <b>{operationSummary.earned.toLocaleString("ru-RU",{maximumFractionDigits:2})} ₽</b></div>
+            </div>
+            <button style={bigGreenButtonStyle} onClick={()=>setOperationSummary(null)}>Продолжить</button>
+          </div>
+        </div>
+      )}
+      {!operationSummary && postOperationAction && (
         <div style={modalOverlayStyle}>
           <div style={modalBoxStyle}>
             <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
@@ -1625,7 +1648,7 @@ export default function EmployeeMobilePage({
         </div>
       )}
 
-      {finishedFinalBatch && (
+      {!operationSummary && finishedFinalBatch && (
         <div style={modalOverlayStyle}>
           <div style={modalBoxStyle}>
             <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
@@ -1663,6 +1686,11 @@ export default function EmployeeMobilePage({
   );
 }
 
+function formatOperationTime(seconds:number) {
+  const value=Math.max(0,Math.round(seconds));
+  const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),sec=value%60;
+  return h>0 ? `${h} ч ${m} мин ${sec} сек` : `${m} мин ${sec} сек`;
+}
 function getShiftDuration(openedAt: string | null) {
   if (!openedAt) return "0 мин";
 
