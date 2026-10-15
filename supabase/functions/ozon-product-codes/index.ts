@@ -97,34 +97,69 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
-    const ozonProducts: any[] = [];
-    let lastId = "";
-    let guard = 0;
+    const catalogRows: any[] = [];
+    let catalogLastId = "";
+    let catalogGuard = 0;
 
     do {
-      const response = await ozon("/v4/product/info/attributes", {
+      const response = await ozon("/v3/product/list", {
         filter: { visibility: "ALL" },
-        last_id: lastId,
+        last_id: catalogLastId,
         limit: 1000,
-        sort_by: "offer_id",
-        sort_dir: "ASC",
       });
 
-      const rows = Array.isArray(response?.result)
-        ? response.result
-        : Array.isArray(response?.items)
-        ? response.items
-        : Array.isArray(response?.result?.items)
-        ? response.result.items
+      const rows = Array.isArray(response?.result?.items) ? response.result.items : [];
+      catalogRows.push(...rows);
+
+      const nextLastId = String(response?.result?.last_id || "");
+      catalogGuard += 1;
+      if (!nextLastId || nextLastId === catalogLastId || !rows.length || catalogGuard >= 100) break;
+      catalogLastId = nextLastId;
+    } while (true);
+
+    const productIds = [...new Set(
+      catalogRows
+        .map((row: any) => String(row?.product_id || row?.id || ""))
+        .filter(Boolean)
+    )];
+
+    const ozonProducts: any[] = [];
+    const infoByArticle = new Map<string, any>();
+
+    for (let offset = 0; offset < productIds.length; offset += 1000) {
+      const chunk = productIds.slice(offset, offset + 1000);
+
+      const [attributesResponse, infoResponse] = await Promise.all([
+        ozon("/v4/product/info/attributes", {
+          filter: { product_id: chunk },
+          limit: 1000,
+        }),
+        ozon("/v3/product/info/list", {
+          product_id: chunk,
+        }),
+      ]);
+
+      const attributeRows = Array.isArray(attributesResponse?.result)
+        ? attributesResponse.result
+        : Array.isArray(attributesResponse?.items)
+        ? attributesResponse.items
+        : Array.isArray(attributesResponse?.result?.items)
+        ? attributesResponse.result.items
         : [];
 
-      ozonProducts.push(...rows);
+      ozonProducts.push(...attributeRows);
 
-      const nextLastId = String(response?.last_id || response?.result?.last_id || "");
-      guard += 1;
-      if (!nextLastId || nextLastId === lastId || !rows.length || guard >= 100) break;
-      lastId = nextLastId;
-    } while (true);
+      const infoRows = Array.isArray(infoResponse?.items)
+        ? infoResponse.items
+        : Array.isArray(infoResponse?.result?.items)
+        ? infoResponse.result.items
+        : [];
+
+      for (const info of infoRows) {
+        const article = normalizeArticle(info?.offer_id);
+        if (article) infoByArticle.set(article, info);
+      }
+    }
 
     const categoryPairs = new Map<string, { descriptionCategoryId: number; typeId: number }>();
     for (const product of ozonProducts) {
@@ -200,15 +235,20 @@ Deno.serve(async (req: Request) => {
         return "";
       };
 
-      const barcodes = Array.isArray(product?.barcodes)
+      const info = infoByArticle.get(article) || {};
+      const attributeBarcodes = Array.isArray(product?.barcodes)
         ? product.barcodes.map((value: unknown) => normalizeText(value)).filter(Boolean)
         : [];
-      const barcode = firstNonEmpty([product?.barcode, ...barcodes]);
+      const infoBarcodes = Array.isArray(info?.barcodes)
+        ? info.barcodes.map((value: unknown) => normalizeText(value)).filter(Boolean)
+        : [];
+      const barcodes = [...new Set([...infoBarcodes, ...attributeBarcodes])];
+      const barcode = firstNonEmpty([info?.barcode, product?.barcode, ...barcodes]);
 
       ozonByArticle.set(article, {
-        offerId: String(product?.offer_id || ""),
-        productId: String(product?.id || product?.product_id || ""),
-        sku: String(product?.sku || ""),
+        offerId: String(product?.offer_id || info?.offer_id || ""),
+        productId: String(product?.id || product?.product_id || info?.id || info?.product_id || ""),
+        sku: String(info?.sku || product?.sku || ""),
         barcode,
         barcodes,
         gtin: valueForIds(attributeIds.gtinIds),
@@ -354,7 +394,7 @@ Deno.serve(async (req: Request) => {
 
     return json({
       action,
-      fetchedFromOzon: ozonProducts.length,
+      fetchedFromOzon: catalogRows.length,
       updated,
       skipped,
       summary,
