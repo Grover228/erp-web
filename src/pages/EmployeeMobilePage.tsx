@@ -832,70 +832,14 @@ export default function EmployeeMobilePage({
     }
   }
 
-  async function startNextAfterSummary() {
-    if (!pendingNextAfterSummary) return;
-    const selected = pendingNextAfterSummary;
-    try {
-      const {data:{user},error:userError} = await supabase.auth.getUser();
-      if (userError) throw userError;
-      if (!user) throw new Error("Пользователь не найден");
-      const now = new Date().toISOString();
-      const {data,error} = await supabase.from("production_batches")
-        .update({status:"in_progress",assigned_user_id:user.id,assigned_at:now,started_at:now})
-        .eq("id",selected.batchId).eq("status","waiting")
-        .eq("current_operation_order",selected.nextOperation.sort_order)
-        .select("id").maybeSingle();
-      if (error) throw error;
-      if (!data) throw new Error("Пачка уже изменена. Обновите список.");
-      setPendingNextAfterSummary(null);
-      await loadMyBatches(user.id);
-    } catch (error) {
-      setClosingError(error instanceof Error ? error.message : "Не удалось начать следующую операцию");
-      setPendingNextAfterSummary(null);
-    }
+  function startNextAfterSummary() {
+    setPendingNextAfterSummary(null);
+    onOpenScanner();
   }
 
-  async function takeNextOperationFromPostAction() {
-    if (!postOperationAction?.nextOperation) return;
-
-    try {
-      setClosingLoading(true);
-      setClosingError("");
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
-      if (!user) throw new Error("Пользователь не найден");
-
-      const now = new Date().toISOString();
-
-      const { error: batchError } = await supabase
-        .from("production_batches")
-        .update({
-          status: "in_progress",
-          assigned_user_id: user.id,
-          assigned_at: now,
-          started_at: now,
-          completed_at: null,
-        })
-        .eq("id", postOperationAction.batchId);
-
-      if (batchError) throw batchError;
-
-      setPostOperationAction(null);
-      await loadMyBatches(user.id);
-    } catch (error) {
-      setClosingError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось начать следующую операцию"
-      );
-    } finally {
-      setClosingLoading(false);
-    }
+  function takeNextOperationFromPostAction() {
+    setPostOperationAction(null);
+    onOpenScanner();
   }
 
   function handleOpenScanner() {
