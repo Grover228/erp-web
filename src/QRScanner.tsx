@@ -176,6 +176,8 @@ export default function QRScanner({
   const [successMessage, setSuccessMessage] = useState("");
 
   const [basketStep, setBasketStep] = useState<"none"|"scan"|"ready">("none");
+  const basketStepRef = useRef<"none"|"scan"|"ready">("none");
+  function changeBasketStep(step: "none"|"scan"|"ready") { basketStepRef.current = step; setBasketStep(step); }
   const [basketCode, setBasketCode] = useState("");
   const [loadingBatch, setLoadingBatch] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -340,14 +342,14 @@ export default function QRScanner({
 
     await pauseScannerAfterScan();
     const containerCode = decodedText.trim().replace(/^ERP:CONTAINER:/i, "");
-    if (basketStep === "scan") {
+    if (basketStepRef.current === "scan") {
       if (!/^K-\d{3,}$/.test(containerCode)) {
         setErrorMessage("Отсканируйте QR корзины K-001, K-002 или K-003.");
         await resumeScanner();
         return;
       }
       setBasketCode(containerCode);
-      setBasketStep("ready");
+      changeBasketStep("ready");
       setErrorMessage("");
       return;
     }
@@ -410,7 +412,7 @@ export default function QRScanner({
 
   async function handleCloseModal() {
     setScannedBatchData(null);
-    setBasketStep("none");
+    changeBasketStep("none");
     setBasketCode("");
     setErrorMessage("");
     setSuccessMessage("");
@@ -426,7 +428,7 @@ export default function QRScanner({
 
     const { batch, order, operation } = scannedBatchData;
     if (operation?.operation_name === "Заготовка" && basketStep === "none") {
-      setBasketStep("scan");
+      changeBasketStep("scan");
       setErrorMessage("");
       await resumeScanner();
       return;
@@ -693,8 +695,8 @@ export default function QRScanner({
       {basketStep === "scan" && scannedBatchData && (
         <div style={{padding:18,background:"#eff6ff",borderRadius:14,marginBottom:12}}>
           <b>Отсканируйте корзину для заготовок</b>
-          <p>Пачка {scannedBatchData.batch.batch_number}. Камера активна — наведите на QR корзины.</p>
-          <button onClick={()=>{setBasketStep("none");void pauseScannerAfterScan();}} style={{padding:14,width:"100%"}}>Отмена</button>
+          <p>Пачка {scannedBatchData.batch.batch_number}. Наведите камеру выше на QR корзины.</p>
+          <button onClick={()=>{changeBasketStep("none");void pauseScannerAfterScan();}} style={{padding:14,width:"100%"}}>Отмена</button>
         </div>
       )}
       {scannedBatchData && modalBatch && basketStep !== "scan" && (
