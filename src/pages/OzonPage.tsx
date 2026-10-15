@@ -295,6 +295,12 @@ export default function OzonPage() {
   const [stockSummary, setStockSummary] = useState<OzonStockSummary | null>(null);
   const [stocksFetchedAt, setStocksFetchedAt] = useState("");
   const [erpStockByArticle, setErpStockByArticle] = useState<Record<string, number>>({});
+  const [productCodesLoading, setProductCodesLoading] = useState(false);
+  const [productCodesApplying, setProductCodesApplying] = useState(false);
+  const [productCodesRows, setProductCodesRows] = useState<any[]>([]);
+  const [productCodesSummary, setProductCodesSummary] = useState<Record<string, number>>({});
+  const [productCodesError, setProductCodesError] = useState("");
+  const [productCodesMessage, setProductCodesMessage] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [stocksLoading, setStocksLoading] = useState(false);
@@ -481,6 +487,57 @@ export default function OzonPage() {
       setStocksError(cause instanceof Error ? cause.message : "Не удалось загрузить остатки Ozon");
     } finally {
       setStocksLoading(false);
+    }
+  }
+
+  async function syncOzonProductCodes(action: "preview" | "apply") {
+    try {
+      if (action === "apply") {
+        const confirmed = window.confirm(
+          "Записать штрихкоды, GTIN и ТН ВЭД из Ozon в сопоставленные товары ERP?\n\nСопоставление выполняется только по точному артикулу. Несопоставленные и неоднозначные позиции будут пропущены.",
+        );
+        if (!confirmed) return;
+        setProductCodesApplying(true);
+      } else {
+        setProductCodesLoading(true);
+      }
+
+      setProductCodesError("");
+      setProductCodesMessage("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-product-codes", {
+        body: { action },
+      });
+
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(data.error);
+
+      if (action === "apply") {
+        setProductCodesMessage(
+          `Записано позиций: ${Number(data?.updated || 0)}. Пропущено: ${Number(data?.skipped || 0)}.`,
+        );
+
+        const { data: refreshed, error: refreshedError } = await supabase.functions.invoke("ozon-product-codes", {
+          body: { action: "preview" },
+        });
+        if (refreshedError) throw refreshedError;
+        if (refreshed?.error) throw new Error(refreshed.error);
+        setProductCodesRows(Array.isArray(refreshed?.preview) ? refreshed.preview : []);
+        setProductCodesSummary(refreshed?.summary || {});
+      } else {
+        setProductCodesRows(Array.isArray(data?.preview) ? data.preview : []);
+        setProductCodesSummary(data?.summary || {});
+        setProductCodesMessage(
+          `Ozon вернул товаров: ${Number(data?.fetchedFromOzon || 0)}. Проверьте сопоставление перед записью.`,
+        );
+      }
+    } catch (cause) {
+      setProductCodesError(
+        cause instanceof Error ? cause.message : "Не удалось синхронизировать коды товаров Ozon",
+      );
+    } finally {
+      setProductCodesLoading(false);
+      setProductCodesApplying(false);
     }
   }
 
@@ -1951,6 +2008,119 @@ export default function OzonPage() {
               </tbody>
             </table>
           </div>
+        </section>
+
+
+        <section style={{ ...panelStyle, overflow: "hidden" }}>
+          <div style={{ padding: 18, display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 900, fontSize: 18 }}>Коды товаров Ozon → ERP</div>
+              <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                Сопоставление только по точному артикулу. Загружаются ШК, GTIN и ТН ВЭД для изделий и товаров на перепродажу.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                disabled={productCodesLoading || productCodesApplying}
+                onClick={() => void syncOzonProductCodes("preview")}
+                style={{ border: "1px solid #cbd5e1", background: "#fff", borderRadius: 10, padding: "10px 13px", fontWeight: 850, cursor: productCodesLoading ? "wait" : "pointer" }}
+              >
+                {productCodesLoading ? "Загружаю…" : "Проверить коды Ozon"}
+              </button>
+              <button
+                type="button"
+                disabled={productCodesApplying || productCodesLoading || !productCodesRows.some((row) => row.status === "matched")}
+                onClick={() => void syncOzonProductCodes("apply")}
+                style={{
+                  border: 0,
+                  background: !productCodesApplying && !productCodesLoading && productCodesRows.some((row) => row.status === "matched") ? "#16a34a" : "#94a3b8",
+                  color: "#fff",
+                  borderRadius: 10,
+                  padding: "10px 13px",
+                  fontWeight: 900,
+                  cursor: productCodesApplying ? "wait" : "pointer",
+                }}
+              >
+                {productCodesApplying ? "Записываю…" : "Записать коды в ERP"}
+              </button>
+            </div>
+          </div>
+
+          {(productCodesMessage || productCodesError) && (
+            <div style={{
+              margin: "0 18px 14px",
+              padding: 12,
+              borderRadius: 10,
+              background: productCodesError ? "#fef2f2" : "#f0fdf4",
+              border: productCodesError ? "1px solid #fecaca" : "1px solid #bbf7d0",
+              color: productCodesError ? "#b91c1c" : "#166534",
+              fontWeight: 700,
+            }}>
+              {productCodesError || productCodesMessage}
+            </div>
+          )}
+
+          {productCodesRows.length > 0 && (
+            <>
+              <div style={{ padding: "0 18px 14px", display: "flex", gap: 8, flexWrap: "wrap", color: "#475569", fontSize: 12 }}>
+                <span><b>Всего:</b> {productCodesSummary.total || 0}</span>
+                <span><b>Совпало:</b> {productCodesSummary.matched || 0}</span>
+                <span><b>Нет в Ozon:</b> {productCodesSummary.not_found_on_ozon || 0}</span>
+                <span><b>Нет в ERP:</b> {productCodesSummary.not_found_in_erp || 0}</span>
+                <span><b>Пустые коды Ozon:</b> {productCodesSummary.ozon_codes_empty || 0}</span>
+                <span><b>Дубли ERP:</b> {productCodesSummary.duplicate_erp_article || 0}</span>
+              </div>
+
+              <div style={{ overflowX: "auto", maxHeight: 520, overflowY: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1250 }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left", position: "sticky", top: 0, zIndex: 1 }}>
+                      {["Тип", "Артикул", "Товар", "ШК ERP", "ШК Ozon", "GTIN ERP", "GTIN Ozon", "ТН ВЭД ERP", "ТН ВЭД Ozon", "Статус"].map((title) => (
+                        <th key={title} style={{ padding: 11, fontSize: 12 }}>{title}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {productCodesRows.map((row, index) => {
+                      const statusLabel =
+                        row.status === "matched" ? "Готово к записи" :
+                        row.status === "not_found_on_ozon" ? "Нет на Ozon" :
+                        row.status === "not_found_in_erp" ? "Нет в ERP" :
+                        row.status === "ozon_codes_empty" ? "Коды Ozon пустые" :
+                        row.status === "duplicate_erp_article" ? "Дубль артикула ERP" :
+                        row.status;
+                      const ok = row.status === "matched";
+                      return (
+                        <tr key={`${row.entity || "ozon"}:${row.id || row.article}:${index}`} style={{ borderTop: "1px solid #eef2f7" }}>
+                          <td style={{ padding: 11 }}>{row.entity === "product" ? "Изделие" : row.entity === "resale_product" ? "Перепродажа" : "Ozon"}</td>
+                          <td style={{ padding: 11, fontWeight: 850 }}>{row.article || "—"}</td>
+                          <td style={{ padding: 11 }}>{row.name || "—"}</td>
+                          <td style={{ padding: 11 }}>{row.current?.barcode || "—"}</td>
+                          <td style={{ padding: 11, fontWeight: row.ozon?.barcode ? 800 : 400 }}>{row.ozon?.barcode || "—"}</td>
+                          <td style={{ padding: 11 }}>{row.current?.gtin || "—"}</td>
+                          <td style={{ padding: 11 }}>{row.ozon?.gtin || "—"}</td>
+                          <td style={{ padding: 11 }}>{row.current?.tnved || "—"}</td>
+                          <td style={{ padding: 11 }}>{row.ozon?.tnved || "—"}</td>
+                          <td style={{ padding: 11 }}>
+                            <span style={{
+                              display: "inline-block",
+                              borderRadius: 999,
+                              padding: "5px 8px",
+                              fontSize: 11,
+                              fontWeight: 850,
+                              background: ok ? "#dcfce7" : "#fef3c7",
+                              color: ok ? "#166534" : "#92400e",
+                            }}>{statusLabel}</span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </section>
       </>
     );
