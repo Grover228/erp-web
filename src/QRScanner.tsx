@@ -537,7 +537,11 @@ export default function QRScanner({
       onTakenToWork?.();
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Не удалось взять пачку в работу";
+        error instanceof Error
+          ? error.message
+          : error && typeof error === "object" && "message" in error
+            ? String(error.message)
+            : String(error || "Не удалось взять пачку в работу");
 
       setErrorMessage(message);
     } finally {
