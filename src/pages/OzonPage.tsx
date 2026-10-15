@@ -505,25 +505,46 @@ export default function OzonPage() {
       setProductCodesError("");
       setProductCodesMessage("");
 
+      const applyRows = action === "apply"
+        ? productCodesRows
+            .filter((row) => row.status === "matched" && row.id && row.entity && row.ozon)
+            .map((row) => ({
+              entity: row.entity,
+              id: row.id,
+              article: row.article,
+              ozon: {
+                barcode: row.ozon?.barcode || "",
+                gtin: row.ozon?.gtin || "",
+                tnved: row.ozon?.tnved || "",
+              },
+            }))
+        : [];
+
       const { data, error: invokeError } = await supabase.functions.invoke("ozon-product-codes", {
-        body: { action },
+        body: action === "apply" ? { action, rows: applyRows } : { action },
       });
 
       if (invokeError) throw invokeError;
       if (data?.error) throw new Error(data.error);
 
       if (action === "apply") {
+        setProductCodesRows((current) =>
+          current.map((row) =>
+            row.status === "matched" && row.ozon
+              ? {
+                  ...row,
+                  current: {
+                    barcode: row.ozon?.barcode || "",
+                    gtin: row.ozon?.gtin || "",
+                    tnved: row.ozon?.tnved || "",
+                  },
+                }
+              : row,
+          ),
+        );
         setProductCodesMessage(
           `Записано позиций: ${Number(data?.updated || 0)}. Пропущено: ${Number(data?.skipped || 0)}.`,
         );
-
-        const { data: refreshed, error: refreshedError } = await supabase.functions.invoke("ozon-product-codes", {
-          body: { action: "preview" },
-        });
-        if (refreshedError) throw refreshedError;
-        if (refreshed?.error) throw new Error(refreshed.error);
-        setProductCodesRows(Array.isArray(refreshed?.preview) ? refreshed.preview : []);
-        setProductCodesSummary(refreshed?.summary || {});
       } else {
         setProductCodesRows(Array.isArray(data?.preview) ? data.preview : []);
         setProductCodesSummary(data?.summary || {});
