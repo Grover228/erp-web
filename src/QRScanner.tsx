@@ -806,7 +806,12 @@ export default function QRScanner({
               </button>
             </div>
 
-            {basketStep === "ready" && <div style={{padding:14,background:"#dcfce7",borderRadius:14,fontWeight:900}}>Корзина {basketCode} выбрана. Таймер ещё не запущен.</div>}
+            {errorMessage && (
+              <div role="alert" style={{padding:14,background:"#fef2f2",border:"2px solid #ef4444",borderRadius:12,color:"#991b1b",fontWeight:800,wordBreak:"break-word"}}>
+                Ошибка запуска: {errorMessage}
+              </div>
+            )}
+            {basketStep === "ready" && <div style={{padding:14,background:"#dcfce7",borderRadius:14,fontWeight:900}}>Корзина {basketCode} выбрана. Таймер ещё не запущен.</div>
             {modalOperation && (
               <div
                 style={{
