@@ -71,7 +71,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
-const APP_BUILD = "2026.10.15-52";
+const APP_BUILD = "2026.10.15-53";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
@@ -128,6 +128,7 @@ function App() {
   });
   const [productionInitialTab, setProductionInitialTab] =
     useState<ProductionTab>("jobs");
+  const [ozonVisited, setOzonVisited] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const [session, setSession] = useState<any>(null);
@@ -144,6 +145,12 @@ function App() {
   const [currentEmployeeLoading, setCurrentEmployeeLoading] = useState(false);
 
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (currentScreen === "ozon") {
+      setOzonVisited(true);
+    }
+  }, [currentScreen]);
 
   const alerts = [
     "Пачка №124 зависла",
@@ -877,7 +884,7 @@ function App() {
     if (currentScreen === "ozon") {
       if (!canViewOzon) return renderAccessDenied();
 
-      return <OzonPage />;
+      return null;
     }
 
     if (currentScreen === "chestny-znak") {
@@ -1659,7 +1666,13 @@ function App() {
             </div>
           )}
 
-          {renderContent()}
+          {canViewOzon && ozonVisited && (
+            <div style={{ display: currentScreen === "ozon" ? "block" : "none" }}>
+              <OzonPage />
+            </div>
+          )}
+
+          {currentScreen !== "ozon" && renderContent()}
         </div>
       </main>
     </div>
