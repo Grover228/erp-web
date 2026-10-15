@@ -7,6 +7,8 @@ type ResaleProductItem = {
   name: string;
   article: string | null;
   barcode: string | null;
+  gtin: string | null;
+  tnved: string | null;
   unit_id: string | null;
   default_price: number | null;
   min_stock: number | null;
@@ -41,6 +43,8 @@ export default function ResaleProductsDirectory() {
   const [name, setName] = useState("");
   const [article, setArticle] = useState("");
   const [barcode, setBarcode] = useState("");
+  const [gtin, setGtin] = useState("");
+  const [tnved, setTnved] = useState("");
   const [unitId, setUnitId] = useState("");
   const [defaultPrice, setDefaultPrice] = useState("");
   const [minStock, setMinStock] = useState("");
@@ -49,6 +53,8 @@ export default function ResaleProductsDirectory() {
   const [editName, setEditName] = useState("");
   const [editArticle, setEditArticle] = useState("");
   const [editBarcode, setEditBarcode] = useState("");
+  const [editGtin, setEditGtin] = useState("");
+  const [editTnved, setEditTnved] = useState("");
   const [editUnitId, setEditUnitId] = useState("");
   const [editDefaultPrice, setEditDefaultPrice] = useState("");
   const [editMinStock, setEditMinStock] = useState("");
@@ -119,6 +125,8 @@ export default function ResaleProductsDirectory() {
     setName("");
     setArticle("");
     setBarcode("");
+    setGtin("");
+    setTnved("");
     setUnitId(units[0]?.id || "");
     setDefaultPrice("");
     setMinStock("");
@@ -129,6 +137,8 @@ export default function ResaleProductsDirectory() {
     setEditName(item.name || "");
     setEditArticle(item.article || "");
     setEditBarcode(item.barcode || "");
+    setEditGtin(item.gtin || "");
+    setEditTnved(item.tnved || "");
     setEditUnitId(item.unit_id || "");
     setEditDefaultPrice(
       item.default_price !== null ? String(item.default_price) : ""
@@ -183,6 +193,8 @@ export default function ResaleProductsDirectory() {
           name: name.trim(),
           article: article.trim() || null,
           barcode: barcode.trim() || null,
+          gtin: gtin.trim() || null,
+          tnved: tnved.trim() || null,
           unit_id: unitId,
           default_price: defaultPrice ? Number(defaultPrice) : null,
           min_stock: minStock ? Number(minStock) : null,
@@ -238,6 +250,8 @@ export default function ResaleProductsDirectory() {
           name: editName.trim(),
           article: editArticle.trim() || null,
           barcode: editBarcode.trim() || null,
+          gtin: editGtin.trim() || null,
+          tnved: editTnved.trim() || null,
           unit_id: editUnitId,
           default_price: editDefaultPrice ? Number(editDefaultPrice) : null,
           min_stock: editMinStock ? Number(editMinStock) : null,
@@ -318,6 +332,8 @@ export default function ResaleProductsDirectory() {
         item.name.toLowerCase().includes(query) ||
         (item.article || "").toLowerCase().includes(query) ||
         (item.barcode || "").toLowerCase().includes(query) ||
+        (item.gtin || "").toLowerCase().includes(query) ||
+        (item.tnved || "").toLowerCase().includes(query) ||
         getUnitLabel(item.unit_id).toLowerCase().includes(query)
       );
     });
@@ -447,6 +463,8 @@ export default function ResaleProductsDirectory() {
                     "Название",
                     "Артикул",
                     "Штрихкод",
+                    "GTIN",
+                    "ТН ВЭД",
                     "Ед. изм.",
                     "Цена",
                     "Мин. остаток",
@@ -483,6 +501,8 @@ export default function ResaleProductsDirectory() {
 
                       <td style={cellStyle}>{item.article || "—"}</td>
                       <td style={cellStyle}>{item.barcode || "—"}</td>
+                      <td style={cellStyle}>{item.gtin || "—"}</td>
+                      <td style={cellStyle}>{item.tnved || "—"}</td>
                       <td style={cellStyle}>{getUnitLabel(item.unit_id)}</td>
                       <td style={cellStyle}>
                         {item.default_price !== null ? item.default_price : "—"}
@@ -558,6 +578,20 @@ export default function ResaleProductsDirectory() {
                   value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
                   placeholder="Штрихкод"
+                  style={inputStyle}
+                />
+
+                <input
+                  value={gtin}
+                  onChange={(e) => setGtin(e.target.value)}
+                  placeholder="GTIN"
+                  style={inputStyle}
+                />
+
+                <input
+                  value={tnved}
+                  onChange={(e) => setTnved(e.target.value)}
+                  placeholder="ТН ВЭД"
                   style={inputStyle}
                 />
 
@@ -640,6 +674,8 @@ export default function ResaleProductsDirectory() {
                   <InfoCard label="Название" value={viewItem.name} />
                   <InfoCard label="Артикул" value={viewItem.article || "—"} />
                   <InfoCard label="Штрихкод" value={viewItem.barcode || "—"} />
+                  <InfoCard label="GTIN" value={viewItem.gtin || "—"} />
+                  <InfoCard label="ТН ВЭД" value={viewItem.tnved || "—"} />
                   <InfoCard
                     label="Единица измерения"
                     value={getUnitLabel(viewItem.unit_id)}
@@ -707,6 +743,20 @@ export default function ResaleProductsDirectory() {
                     value={editBarcode}
                     onChange={(e) => setEditBarcode(e.target.value)}
                     placeholder="Штрихкод"
+                    style={inputStyle}
+                  />
+
+                  <input
+                    value={editGtin}
+                    onChange={(e) => setEditGtin(e.target.value)}
+                    placeholder="GTIN"
+                    style={inputStyle}
+                  />
+
+                  <input
+                    value={editTnved}
+                    onChange={(e) => setEditTnved(e.target.value)}
+                    placeholder="ТН ВЭД"
                     style={inputStyle}
                   />
 
