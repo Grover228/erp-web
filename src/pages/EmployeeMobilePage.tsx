@@ -745,11 +745,6 @@ export default function EmployeeMobilePage({
         };
       }
 
-      if (isCurrentBatchOperationDone && operation.operation_name === "Стачивание" && nextOperation) {
-        const {error:transferError} = await supabase.rpc("complete_stitching_container_transfer",{p_batch_id:batch.id});
-        // Transfer is finalized after the batch moves to the next operation.
-        if (transferError && !transferError.message.includes("ещё не завершено")) throw transferError;
-      }
       const { error: batchError } = await supabase
         .from("production_batches")
         .update(nextBatchData)
@@ -799,6 +794,12 @@ export default function EmployeeMobilePage({
         .eq("id", shift.id);
 
       if (shiftUpdateError) throw shiftUpdateError;
+
+      // A completed production route releases its basket for reuse.
+      if (isCurrentBatchOperationDone && !nextOperation) {
+        const { error: releaseError } = await supabase.rpc("release_completed_batch_containers", { p_batch_id: batch.id });
+        if (releaseError) throw releaseError;
+      }
 
       setShift({
         ...shift,
