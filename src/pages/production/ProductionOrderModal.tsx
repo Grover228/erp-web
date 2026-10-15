@@ -127,6 +127,16 @@ export default function ProductionOrderModal({
   const [suzSignature, setSuzSignature] = useState("");
   const [receivedSuzCodes, setReceivedSuzCodes] = useState<string[]>([]);
   const [receivedSuzBlockId, setReceivedSuzBlockId] = useState("");
+  const [labelProductData, setLabelProductData] = useState<{
+    brand: string;
+    productName: string;
+    color: string;
+    size: string;
+    composition: string;
+    barcode: string;
+    article: string;
+  } | null>(null);
+  const [labelDataLoading, setLabelDataLoading] = useState(false);
 
   async function loadChzOrderStatus() {
     if (!sourceOrder?.id) return;
@@ -166,6 +176,78 @@ export default function ProductionOrderModal({
   useEffect(() => {
     void loadChzOrderStatus();
   }, [sourceOrder?.id]);
+
+  useEffect(() => {
+    if (!sourceOrder?.product_id) {
+      setLabelProductData(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadLabelProductData() {
+      try {
+        setLabelDataLoading(true);
+
+        const [productResult, mappingResult] = await Promise.all([
+          supabase
+            .from("products")
+            .select("name,article,barcode")
+            .eq("id", sourceOrder!.product_id)
+            .maybeSingle(),
+          supabase
+            .from("chz_product_mappings")
+            .select("brand_name,good_name,raw_data")
+            .eq("product_id", sourceOrder!.product_id)
+            .maybeSingle(),
+        ]);
+
+        if (productResult.error) throw productResult.error;
+        if (mappingResult.error) throw mappingResult.error;
+        if (cancelled) return;
+
+        const product: any = productResult.data || {};
+        const mapping: any = mappingResult.data || {};
+        const attrs = Array.isArray(mapping?.raw_data?.good_attrs)
+          ? mapping.raw_data.good_attrs
+          : [];
+
+        const attr = (...names: string[]) => {
+          const lowered = names.map((name) => name.toLowerCase().replace(/ё/g, "е"));
+          const row = attrs.find((item: any) =>
+            lowered.includes(String(item?.attr_name || "").toLowerCase().replace(/ё/g, "е")),
+          );
+          return String(row?.attr_value || "").trim();
+        };
+
+        setLabelProductData({
+          brand: String(mapping?.brand_name || mapping?.raw_data?.brand_name || "СТРИТСТРИМ").trim(),
+          productName: attr("Вид товара") || String(mapping?.good_name || product?.name || "Изделие").trim(),
+          color: attr("Цвет"),
+          size: attr("Размер одежды / изделия", "Размер"),
+          composition: attr("Состав"),
+          barcode: String(product?.barcode || "").trim(),
+          article: String(product?.article || "").trim(),
+        });
+      } catch (cause) {
+        if (!cancelled) {
+          setChzError(
+            cause instanceof Error
+              ? `Не удалось подготовить данные этикетки: ${cause.message}`
+              : "Не удалось подготовить данные этикетки.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLabelDataLoading(false);
+      }
+    }
+
+    void loadLabelProductData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceOrder?.product_id]);
 
   async function prepareSuzSubmission() {
     if (!sourceOrder?.id) return;
@@ -262,6 +344,180 @@ export default function ProductionOrderModal({
       setChzError(cause instanceof Error ? cause.message : "Не удалось получить коды из СУЗ.");
     } finally {
       setChzLoading(false);
+    }
+  }
+
+  function renderBarcodeDataUrl(value: string) {
+    const bwipjs = window.bwipjs;
+    if (!bwipjs?.toCanvas) throw new Error("Модуль штрихкодов ещё не загрузился.");
+
+    const canvas = document.createElement("canvas");
+    const clean = String(value || "").trim();
+    if (!clean) return "";
+
+    try {
+      bwipjs.toCanvas(canvas, {
+        bcid: /^\d{13}$/.test(clean) ? "ean13" : "code128",
+        text: clean,
+        scale: 3,
+        height: 9,
+        includetext: false,
+        padding: 0,
+        backgroundcolor: "FFFFFF",
+      });
+    } catch {
+      bwipjs.toCanvas(canvas, {
+        bcid: "code128",
+        text: clean,
+        scale: 3,
+        height: 9,
+        includetext: false,
+        padding: 0,
+        backgroundcolor: "FFFFFF",
+      });
+    }
+
+    return canvas.toDataURL("image/png");
+  }
+
+  function renderDataMatrixDataUrl(code: string) {
+    const bwipjs = window.bwipjs;
+    if (!bwipjs?.toCanvas) throw new Error("Модуль DataMatrix ещё не загрузился.");
+
+    const canvas = document.createElement("canvas");
+    const gs1Text =
+      "^FNC1" +
+      String(code || "")
+        .replace(/\^/g, "^^")
+        .replace(/\x1d/g, "^FNC1");
+
+    bwipjs.toCanvas(canvas, {
+      bcid: "datamatrix",
+      text: gs1Text,
+      parsefnc: true,
+      scale: 5,
+      padding: 2,
+      backgroundcolor: "FFFFFF",
+    });
+
+    return canvas.toDataURL("image/png");
+  }
+
+  function printUnifiedLabels() {
+    if (!receivedSuzCodes.length) {
+      setChzError("Сначала получите коды Честного знака.");
+      return;
+    }
+    if (!labelProductData) {
+      setChzError("Данные товара для этикетки ещё не загружены.");
+      return;
+    }
+
+    try {
+      setChzError("");
+      const barcodeImage = labelProductData.barcode
+        ? renderBarcodeDataUrl(labelProductData.barcode)
+        : "";
+
+      const labels = receivedSuzCodes.map((code, index) => ({
+        index: index + 1,
+        dm: renderDataMatrixDataUrl(code),
+      }));
+
+      const popup = window.open("", "_blank", "width=900,height=700");
+      if (!popup) throw new Error("Браузер заблокировал окно печати.");
+
+      const esc = (value: string) =>
+        String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
+
+      popup.document.write(`<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Этикетки 58×40 — ${esc(sourceOrder?.order_number || "")}</title>
+<style>
+  @page { size: 58mm 40mm; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #000; background: #fff; }
+  .label {
+    width: 58mm;
+    height: 40mm;
+    page-break-after: always;
+    overflow: hidden;
+    display: grid;
+    grid-template-columns: 20mm 1fr;
+    gap: 1.6mm;
+    padding: 1.4mm;
+  }
+  .label:last-child { page-break-after: auto; }
+  .left {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: .8mm;
+    min-width: 0;
+  }
+  .dm { width: 18.5mm; height: 18.5mm; object-fit: contain; image-rendering: pixelated; }
+  .dm-caption { font-size: 5.2pt; font-weight: 700; text-align: center; line-height: 1.05; }
+  .right {
+    min-width: 0;
+    border-left: .25mm solid #222;
+    padding-left: 1.6mm;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .brand { font-size: 10pt; font-weight: 900; line-height: 1; margin-bottom: 1mm; }
+  .name { font-size: 7.7pt; font-weight: 900; line-height: 1.05; margin-bottom: .8mm; text-transform: none; }
+  .row { font-size: 6.6pt; line-height: 1.14; margin-bottom: .35mm; }
+  .row b { font-weight: 900; }
+  .composition { font-size: 6.1pt; line-height: 1.08; margin-top: .2mm; }
+  .barcode-wrap { margin-top: auto; padding-top: .7mm; text-align: center; }
+  .barcode { width: 100%; height: 8mm; object-fit: fill; display: block; }
+  .barcode-number { font: 6.2pt monospace; line-height: 1; letter-spacing: .15mm; margin-top: .25mm; }
+  .no-barcode { font-size: 6pt; border: .25mm solid #999; padding: 1mm; text-align: center; }
+  @media screen {
+    body { background: #e5e7eb; padding: 8mm; }
+    .label { margin: 0 auto 8mm; background: #fff; box-shadow: 0 2mm 5mm rgba(0,0,0,.18); }
+  }
+</style>
+</head>
+<body>
+${labels.map((label) => `
+  <section class="label">
+    <div class="left">
+      <img class="dm" src="${label.dm}" alt="DataMatrix">
+      <div class="dm-caption">ЧЕСТНЫЙ ЗНАК<br>DATA MATRIX</div>
+    </div>
+    <div class="right">
+      <div class="brand">${esc(labelProductData.brand)}</div>
+      <div class="name">${esc(labelProductData.productName)}</div>
+      ${labelProductData.color ? `<div class="row">Цвет: <b>${esc(labelProductData.color)}</b></div>` : ""}
+      ${labelProductData.size ? `<div class="row">Размер: <b>${esc(labelProductData.size)}</b></div>` : ""}
+      ${labelProductData.composition ? `<div class="composition">Состав: <b>${esc(labelProductData.composition)}</b></div>` : ""}
+      <div class="barcode-wrap">
+        ${barcodeImage
+          ? `<img class="barcode" src="${barcodeImage}" alt="Штрихкод"><div class="barcode-number">${esc(labelProductData.barcode)}</div>`
+          : `<div class="no-barcode">Штрихкод товара не заполнен</div>`}
+      </div>
+    </div>
+  </section>`).join("")}
+<script>
+  window.addEventListener("load", () => {
+    setTimeout(() => window.print(), 250);
+  });
+</script>
+</body>
+</html>`);
+      popup.document.close();
+      setChzMessage(`Подготовлено к печати единых этикеток 58×40: ${labels.length} шт.`);
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось сформировать этикетки 58×40.");
     }
   }
 
@@ -753,6 +1009,47 @@ export default function ProductionOrderModal({
                       >
                         Копировать полученные коды
                       </button>
+
+                      <div
+                        style={{
+                          border: "1px solid #bbf7d0",
+                          background: "#f0fdf4",
+                          borderRadius: 12,
+                          padding: 12,
+                          display: "grid",
+                          gap: 9,
+                        }}
+                      >
+                        <div style={{ fontSize: 14, fontWeight: 900, color: "#166534" }}>
+                          Единая этикетка 58×40 мм
+                        </div>
+                        <div style={{ color: "#475569", fontSize: 12, lineHeight: 1.45 }}>
+                          Бренд · изделие · цвет · размер · состав · Data Matrix ЧЗ · штрихкод товара.
+                        </div>
+                        {labelProductData && (
+                          <div style={{ color: "#334155", fontSize: 12, lineHeight: 1.45 }}>
+                            <b>{labelProductData.brand}</b> · {labelProductData.productName}
+                            {labelProductData.color ? ` · ${labelProductData.color}` : ""}
+                            {labelProductData.size ? ` · размер ${labelProductData.size}` : ""}
+                            {labelProductData.composition ? ` · ${labelProductData.composition}` : ""}
+                            {labelProductData.barcode ? ` · ШК ${labelProductData.barcode}` : " · ШК не заполнен"}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={printUnifiedLabels}
+                          disabled={chzLoading || labelDataLoading || !labelProductData}
+                          style={{
+                            ...primaryBlueButtonStyle,
+                            background: chzLoading || labelDataLoading || !labelProductData ? "#94a3b8" : "#16a34a",
+                            opacity: chzLoading || labelDataLoading || !labelProductData ? 0.65 : 1,
+                          }}
+                        >
+                          {labelDataLoading
+                            ? "Подготавливаю данные…"
+                            : `Печать ${receivedSuzCodes.length} этикеток 58×40`}
+                        </button>
+                      </div>
 
                       <div style={{ display: "grid", gap: 10 }}>
                         <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a" }}>
