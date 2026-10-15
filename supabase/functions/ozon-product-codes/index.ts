@@ -67,6 +67,56 @@ Deno.serve(async (req: Request) => {
 
   const admin = createClient(supabaseUrl, serviceKey);
 
+  if (action === "apply") {
+    try {
+      const rows = Array.isArray(body?.rows) ? body.rows : [];
+      if (!rows.length) return json({ error: "Нет подтверждённых строк для записи." }, 400);
+      if (rows.length > 1000) return json({ error: "Слишком много строк за один запрос." }, 400);
+
+      let updated = 0;
+      let skipped = 0;
+      const tasks = rows.map((row: any) => async () => {
+        const entity = String(row?.entity || "");
+        const id = String(row?.id || "");
+        const article = normalizeArticle(row?.article);
+        const barcode = normalizeText(row?.ozon?.barcode).slice(0, 128) || null;
+        const gtin = normalizeText(row?.ozon?.gtin).slice(0, 128) || null;
+        const tnved = normalizeText(row?.ozon?.tnved).slice(0, 512) || null;
+
+        if (!id || !article || !["product", "resale_product"].includes(entity)) {
+          skipped += 1;
+          return;
+        }
+
+        const table = entity === "product" ? "products" : "items";
+        let query = admin
+          .from(table)
+          .update({ barcode, gtin, tnved })
+          .eq("id", id)
+          .ilike("article", article);
+
+        if (entity === "resale_product") {
+          query = query.eq("item_type", "resale_product");
+        }
+
+        const { error } = await query;
+        if (error) throw error;
+        updated += 1;
+      });
+
+      const chunkSize = 20;
+      for (let offset = 0; offset < tasks.length; offset += chunkSize) {
+        await Promise.all(tasks.slice(offset, offset + chunkSize).map((task) => task()));
+      }
+
+      return json({ action, updated, skipped });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Не удалось записать коды Ozon";
+      console.error("ozon-product-codes apply failed", message);
+      return json({ error: message }, 500);
+    }
+  }
+
   async function ozon(path: string, payload: unknown) {
     const response = await fetch(`https://api-seller.ozon.ru${path}`, {
       method: "POST",
@@ -356,32 +406,8 @@ Deno.serve(async (req: Request) => {
       String(a.article || "").localeCompare(String(b.article || ""), "ru")
     );
 
-    let updated = 0;
-    let skipped = 0;
-
-    if (action === "apply") {
-      for (const row of preview) {
-        if (row.status !== "matched" || !row.id || !row.entity || !row.ozon) {
-          skipped += 1;
-          continue;
-        }
-
-        const patch = {
-          barcode: normalizeText(row.ozon.barcode) || null,
-          gtin: normalizeText(row.ozon.gtin) || null,
-          tnved: normalizeText(row.ozon.tnved) || null,
-        };
-
-        const table = row.entity === "product" ? "products" : "items";
-        const query = admin.from(table).update(patch).eq("id", row.id);
-        const { error } = row.entity === "resale_product"
-          ? await query.eq("item_type", "resale_product")
-          : await query;
-
-        if (error) throw error;
-        updated += 1;
-      }
-    }
+    const updated = 0;
+    const skipped = 0;
 
     const summary = preview.reduce(
       (sum, row) => {
