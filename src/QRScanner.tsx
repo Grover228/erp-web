@@ -175,6 +175,8 @@ export default function QRScanner({
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
+  const [basketStep, setBasketStep] = useState<"none"|"scan"|"ready">("none");
+  const [basketCode, setBasketCode] = useState("");
   const [loadingBatch, setLoadingBatch] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [scannedBatchData, setScannedBatchData] =
@@ -337,6 +339,27 @@ export default function QRScanner({
     lastScannedRef.current = decodedText;
 
     await pauseScannerAfterScan();
+    const containerCode = decodedText.trim().replace(/^ERP:CONTAINER:/i, "");
+    if (basketStep === "scan") {
+      if (!/^K-\d{3,}$/.test(containerCode)) {
+        setErrorMessage("Отсканируйте QR корзины K-001, K-002 или K-003.");
+        await resumeScanner();
+        return;
+      }
+      setBasketCode(containerCode);
+      setBasketStep("ready");
+      setErrorMessage("");
+      return;
+    }
+    if (/^K-\d{3,}$/.test(containerCode)) {
+      const {data,error}=await supabase.from("production_containers").select("batch_id").eq("code",containerCode).maybeSingle();
+      if(error){setErrorMessage(error.message);return;}
+      if(!data?.batch_id){setErrorMessage("Корзина свободна. Сначала отсканируйте пачку.");return;}
+      const {data:batch,error:batchError}=await supabase.from("production_batches").select("batch_number").eq("id",data.batch_id).single();
+      if(batchError){setErrorMessage(batchError.message);return;}
+      await findBatchByQr(batch.batch_number);
+      return;
+    }
     await findBatchByQr(decodedText);
   }
 
@@ -387,6 +410,8 @@ export default function QRScanner({
 
   async function handleCloseModal() {
     setScannedBatchData(null);
+    setBasketStep("none");
+    setBasketCode("");
     setErrorMessage("");
     setSuccessMessage("");
     await resumeScanner();
@@ -400,7 +425,13 @@ export default function QRScanner({
     if (!scannedBatchData) return;
 
     const { batch, order, operation } = scannedBatchData;
-
+    if (operation?.operation_name === "Заготовка" && basketStep === "none") {
+      setBasketStep("scan");
+      setErrorMessage("");
+      await resumeScanner();
+      return;
+    }
+    if (operation?.operation_name === "Заготовка" && basketStep !== "ready") return;
     if (!operation) {
       setErrorMessage(
         "Не найдена операция для этой пачки. Проверь current_operation_order в production_batches."
@@ -451,6 +482,10 @@ export default function QRScanner({
 
       if (userError) throw userError;
 
+      if (operation.operation_name === "Заготовка") {
+        const {error:basketError}=await supabase.rpc("assign_production_container",{p_batch_id:batch.id,p_code:basketCode});
+        if(basketError) throw basketError;
+      }
       const now = new Date().toISOString();
 
       const { error: batchError } = await supabase
@@ -496,9 +531,7 @@ export default function QRScanner({
           : `Пачка ${batch.batch_number} взята в работу: ${operation.operation_name}`
       );
 
-      window.setTimeout(() => {
-        onTakenToWork?.();
-      }, 500);
+      onTakenToWork?.();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Не удалось взять пачку в работу";
@@ -657,7 +690,14 @@ export default function QRScanner({
         </div>
       )}
 
-      {scannedBatchData && modalBatch && (
+      {basketStep === "scan" && scannedBatchData && (
+        <div style={{padding:18,background:"#eff6ff",borderRadius:14,marginBottom:12}}>
+          <b>Отсканируйте корзину для заготовок</b>
+          <p>Пачка {scannedBatchData.batch.batch_number}. Камера активна — наведите на QR корзины.</p>
+          <button onClick={()=>{setBasketStep("none");void pauseScannerAfterScan();}} style={{padding:14,width:"100%"}}>Отмена</button>
+        </div>
+      )}
+      {scannedBatchData && modalBatch && basketStep !== "scan" && (
         <div
           onClick={handleCloseModal}
           style={{
@@ -763,6 +803,7 @@ export default function QRScanner({
               </button>
             </div>
 
+            {basketStep === "ready" && <div style={{padding:14,background:"#dcfce7",borderRadius:14,fontWeight:900}}>Корзина {basketCode} выбрана. Таймер ещё не запущен.</div>}
             {modalOperation && (
               <div
                 style={{
@@ -1049,7 +1090,7 @@ export default function QRScanner({
               >
                 {actionLoading
                   ? "Сохраняю..."
-                  : getTakeBatchButtonText(modalBatch.status)}
+                  : basketStep === "ready" ? "НАЧАТЬ РАБОТУ" : "Да, взять в работу"}
               </button>
             )}
           </div>
