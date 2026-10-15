@@ -427,13 +427,13 @@ export default function QRScanner({
     if (!scannedBatchData) return;
 
     const { batch, order, operation } = scannedBatchData;
-    if (operation?.operation_name === "Заготовка" && basketStep === "none") {
+    if ((operation?.operation_name === "Заготовка" || operation?.operation_name === "Стачивание") && basketStep === "none") {
       changeBasketStep("scan");
       setErrorMessage("");
       await resumeScanner();
       return;
     }
-    if (operation?.operation_name === "Заготовка" && basketStep !== "ready") return;
+    if ((operation?.operation_name === "Заготовка" || operation?.operation_name === "Стачивание") && basketStep !== "ready") return;
     if (!operation) {
       setErrorMessage(
         "Не найдена операция для этой пачки. Проверь current_operation_order в production_batches."
@@ -484,8 +484,9 @@ export default function QRScanner({
 
       if (userError) throw userError;
 
-      if (operation.operation_name === "Заготовка") {
-        const {error:basketError}=await supabase.rpc("assign_production_container",{p_batch_id:batch.id,p_code:basketCode});
+      if (operation.operation_name === "Заготовка" || operation.operation_name === "Стачивание") {
+        const method = operation.operation_name === "Заготовка" ? "assign_production_container" : "reserve_stitching_container";
+        const {error:basketError}=await supabase.rpc(method,{p_batch_id:batch.id,p_code:basketCode});
         if(basketError) throw basketError;
       }
       const now = new Date().toISOString();
@@ -694,7 +695,7 @@ export default function QRScanner({
 
       {basketStep === "scan" && scannedBatchData && (
         <div style={{padding:18,background:"#eff6ff",borderRadius:14,marginBottom:12}}>
-          <b>Отсканируйте корзину для заготовок</b>
+          <b>{scannedBatchData.operation?.operation_name === "Стачивание" ? "Отсканируйте вторую свободную корзину для стачанных деталей" : "Отсканируйте корзину для заготовок"}</b>
           <p>Пачка {scannedBatchData.batch.batch_number}. Наведите камеру выше на QR корзины.</p>
           <button onClick={()=>{changeBasketStep("none");void pauseScannerAfterScan();}} style={{padding:14,width:"100%"}}>Отмена</button>
         </div>
