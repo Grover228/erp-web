@@ -6,6 +6,9 @@ type ProductItem = {
   id: string;
   name: string;
   article: string | null;
+  barcode: string | null;
+  gtin: string | null;
+  tnved: string | null;
   unit_id: string;
   category: string | null;
   gender: string | null;
@@ -68,6 +71,9 @@ export default function ProductsDirectory() {
 
   const [name, setName] = useState("");
   const [article, setArticle] = useState("");
+  const [barcode, setBarcode] = useState("");
+  const [gtin, setGtin] = useState("");
+  const [tnved, setTnved] = useState("");
   const [unitId, setUnitId] = useState("");
   const [category, setCategory] = useState("");
   const [gender, setGender] = useState("");
@@ -80,6 +86,9 @@ export default function ProductsDirectory() {
 
   const [editName, setEditName] = useState("");
   const [editArticle, setEditArticle] = useState("");
+  const [editBarcode, setEditBarcode] = useState("");
+  const [editGtin, setEditGtin] = useState("");
+  const [editTnved, setEditTnved] = useState("");
   const [editUnitId, setEditUnitId] = useState("");
   const [editCategory, setEditCategory] = useState("");
   const [editGender, setEditGender] = useState("");
@@ -149,6 +158,9 @@ export default function ProductsDirectory() {
   function resetForm() {
     setName("");
     setArticle("");
+    setBarcode("");
+    setGtin("");
+    setTnved("");
     setUnitId(units[0]?.id || "");
     setCategory("");
     setGender("");
@@ -163,6 +175,9 @@ export default function ProductsDirectory() {
   function fillEditForm(product: ProductItem) {
     setEditName(product.name || "");
     setEditArticle(product.article || "");
+    setEditBarcode(product.barcode || "");
+    setEditGtin(product.gtin || "");
+    setEditTnved(product.tnved || "");
     setEditUnitId(product.unit_id || "");
     setEditCategory(product.category || "");
     setEditGender(product.gender || "");
@@ -223,6 +238,9 @@ export default function ProductsDirectory() {
         .insert({
           name: name.trim(),
           article: article.trim() || null,
+          barcode: barcode.trim() || null,
+          gtin: gtin.trim() || null,
+          tnved: tnved.trim() || null,
           unit_id: unitId,
           category: category.trim() || null,
           gender: gender.trim() || null,
@@ -278,6 +296,9 @@ export default function ProductsDirectory() {
         .update({
           name: editName.trim(),
           article: editArticle.trim() || null,
+          barcode: editBarcode.trim() || null,
+          gtin: editGtin.trim() || null,
+          tnved: editTnved.trim() || null,
           unit_id: editUnitId,
           category: editCategory.trim() || null,
           gender: editGender.trim() || null,
@@ -375,6 +396,9 @@ export default function ProductsDirectory() {
       item_type: "resale_product",
       name: product.name.trim(),
       article: product.article || null,
+      barcode: product.barcode || null,
+      gtin: product.gtin || null,
+      tnved: product.tnved || null,
       unit_id: product.unit_id,
       default_price: product.default_price,
       min_stock: product.min_stock,
@@ -439,6 +463,9 @@ export default function ProductsDirectory() {
       item_type: "asset",
       name: product.name.trim(),
       article: product.article || null,
+      barcode: product.barcode || null,
+      gtin: product.gtin || null,
+      tnved: product.tnved || null,
       unit_id: product.unit_id,
       default_price: product.default_price,
       min_stock: product.min_stock,
@@ -715,6 +742,9 @@ export default function ProductsDirectory() {
       return (
         product.name.toLowerCase().includes(query) ||
         (product.article || "").toLowerCase().includes(query) ||
+        (product.barcode || "").toLowerCase().includes(query) ||
+        (product.gtin || "").toLowerCase().includes(query) ||
+        (product.tnved || "").toLowerCase().includes(query) ||
         (product.category || "").toLowerCase().includes(query) ||
         (product.gender || "").toLowerCase().includes(query) ||
         (product.season || "").toLowerCase().includes(query) ||
@@ -991,6 +1021,10 @@ export default function ProductsDirectory() {
                     onClear={() => clearColumnFilter("article")}
                   />
 
+                  <th style={headCellStyle}>Штрихкод</th>
+                  <th style={headCellStyle}>GTIN</th>
+                  <th style={headCellStyle}>ТН ВЭД</th>
+
                   <FilterableHeadCell
                     title="Категория"
                     filterKey="category"
@@ -1104,6 +1138,9 @@ export default function ProductsDirectory() {
                       </td>
 
                       <td style={cellStyle}>{product.article || "—"}</td>
+                      <td style={cellStyle}>{product.barcode || "—"}</td>
+                      <td style={cellStyle}>{product.gtin || "—"}</td>
+                      <td style={cellStyle}>{product.tnved || "—"}</td>
                       <td style={cellStyle}>{product.category || "—"}</td>
                       <td style={cellStyle}>{product.season || "—"}</td>
                       <td style={cellStyle}>{getUnitLabel(product.unit_id)}</td>
@@ -1170,6 +1207,9 @@ export default function ProductsDirectory() {
                 >
                   <Info label="Название" value={viewProduct.name} />
                   <Info label="Артикул" value={viewProduct.article || "—"} />
+                  <Info label="Штрихкод" value={viewProduct.barcode || "—"} />
+                  <Info label="GTIN" value={viewProduct.gtin || "—"} />
+                  <Info label="ТН ВЭД" value={viewProduct.tnved || "—"} />
                   <Info
                     label="Единица измерения"
                     value={getUnitLabel(viewProduct.unit_id)}
@@ -1289,6 +1329,33 @@ export default function ProductsDirectory() {
                   <input
                     value={editArticle}
                     onChange={(e) => setEditArticle(e.target.value)}
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="Штрихкод">
+                  <input
+                    value={editBarcode}
+                    onChange={(e) => setEditBarcode(e.target.value)}
+                    placeholder="Например: EAN-13"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="GTIN">
+                  <input
+                    value={editGtin}
+                    onChange={(e) => setEditGtin(e.target.value)}
+                    placeholder="GTIN товара"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="ТН ВЭД">
+                  <input
+                    value={editTnved}
+                    onChange={(e) => setEditTnved(e.target.value)}
+                    placeholder="Код ТН ВЭД"
                     style={inputStyle}
                   />
                 </Field>
@@ -1474,6 +1541,33 @@ export default function ProductsDirectory() {
                   value={article}
                   onChange={(e) => setArticle(e.target.value)}
                   placeholder="Необязательно"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Штрихкод">
+                <input
+                  value={barcode}
+                  onChange={(e) => setBarcode(e.target.value)}
+                  placeholder="Например: EAN-13"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="GTIN">
+                <input
+                  value={gtin}
+                  onChange={(e) => setGtin(e.target.value)}
+                  placeholder="GTIN товара"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="ТН ВЭД">
+                <input
+                  value={tnved}
+                  onChange={(e) => setTnved(e.target.value)}
+                  placeholder="Код ТН ВЭД"
                   style={inputStyle}
                 />
               </Field>
