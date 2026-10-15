@@ -414,7 +414,7 @@ export default function QRScanner({
     setScannedBatchData(null);
     changeBasketStep("none");
     setBasketCode("");
-    setErrorMessage("");
+    // Keep the last error visible after dismissing the batch modal.
     setSuccessMessage("");
     await resumeScanner();
   }
@@ -807,7 +807,7 @@ export default function QRScanner({
             </div>
 
             {errorMessage && (
-              <div role="alert" style={{padding:14,background:"#fef2f2",border:"2px solid #ef4444",borderRadius:12,color:"#991b1b",fontWeight:800,wordBreak:"break-word"}}>
+              <div role="alert" style={{padding:14,background:"#fef2f2",border:"2px solid #ef4444",borderRadius:12,color:"#991b1b",fontWeight:800,wordBreak:"break-word",flexShrink:0,position:"sticky",top:0,zIndex:2}}>
                 Ошибка запуска: {errorMessage}
               </div>
             )}
