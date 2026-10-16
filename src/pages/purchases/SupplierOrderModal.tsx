@@ -1337,7 +1337,7 @@ export default function SupplierOrderModal({
 
   function getStatusLabel(status: string) {
     if (status === "draft") return "Черновик";
-    if (status === "ordered") return "Заказан";
+    if (status === "ordered") return "Заказан / в пути";
     if (status === "received") return "Поступил";
     if (status === "cancelled") return "Отменён";
     return status;
@@ -1345,7 +1345,7 @@ export default function SupplierOrderModal({
 
   function getDocumentStatusLabel(status: string | null | undefined) {
     if (status === "draft") return "Черновик";
-    if (status === "ordered") return "Заказан";
+    if (status === "ordered") return "Заказан / в пути";
     if (status === "received") return "Поступил";
     if (status === "posted") return "Проведён";
     if (status === "cancelled") return "Отменён";
