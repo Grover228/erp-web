@@ -189,45 +189,25 @@ export default function ProductionOrderModal({
       try {
         setLabelDataLoading(true);
 
-        const [productResult, mappingResult] = await Promise.all([
-          supabase
-            .from("products")
-            .select("name,article,barcode")
-            .eq("id", sourceOrder!.product_id)
-            .maybeSingle(),
-          supabase
-            .from("chz_product_mappings")
-            .select("brand_name,good_name,raw_data")
-            .eq("product_id", sourceOrder!.product_id)
-            .maybeSingle(),
-        ]);
+        const { data: product, error: productError } = await supabase
+          .from("products")
+          .select("name,article,barcode,brand,label_name,color_name,size_name,composition")
+          .eq("id", sourceOrder!.product_id)
+          .maybeSingle();
 
-        if (productResult.error) throw productResult.error;
-        if (mappingResult.error) throw mappingResult.error;
+        if (productError) throw productError;
         if (cancelled) return;
 
-        const product: any = productResult.data || {};
-        const mapping: any = mappingResult.data || {};
-        const attrs = Array.isArray(mapping?.raw_data?.good_attrs)
-          ? mapping.raw_data.good_attrs
-          : [];
-
-        const attr = (...names: string[]) => {
-          const lowered = names.map((name) => name.toLowerCase().replace(/ё/g, "е"));
-          const row = attrs.find((item: any) =>
-            lowered.includes(String(item?.attr_name || "").toLowerCase().replace(/ё/g, "е")),
-          );
-          return String(row?.attr_value || "").trim();
-        };
+        const row: any = product || {};
 
         setLabelProductData({
-          brand: String(mapping?.brand_name || mapping?.raw_data?.brand_name || "СТРИТСТРИМ").trim(),
-          productName: attr("Вид товара") || String(mapping?.good_name || product?.name || "Изделие").trim(),
-          color: attr("Цвет"),
-          size: attr("Размер одежды / изделия", "Размер"),
-          composition: attr("Состав"),
-          barcode: String(product?.barcode || "").trim(),
-          article: String(product?.article || "").trim(),
+          brand: String(row.brand || "СТРИТСТРИМ").trim(),
+          productName: String(row.label_name || row.name || "Изделие").trim(),
+          color: String(row.color_name || "").trim(),
+          size: String(row.size_name || "").trim(),
+          composition: String(row.composition || "").trim(),
+          barcode: String(row.barcode || "").trim(),
+          article: String(row.article || "").trim(),
         });
       } catch (cause) {
         if (!cancelled) {
@@ -1041,6 +1021,12 @@ ${labels.map((label) => `
                           disabled={chzLoading || labelDataLoading || !labelProductData}
                           style={{
                             ...primaryBlueButtonStyle,
+                            width: "100%",
+                            maxWidth: "100%",
+                            whiteSpace: "normal",
+                            textAlign: "center",
+                            lineHeight: 1.2,
+                            padding: "12px 10px",
                             background: chzLoading || labelDataLoading || !labelProductData ? "#94a3b8" : "#16a34a",
                             opacity: chzLoading || labelDataLoading || !labelProductData ? 0.65 : 1,
                           }}
