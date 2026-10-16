@@ -9,6 +9,11 @@ type ProductItem = {
   barcode: string | null;
   gtin: string | null;
   tnved: string | null;
+  brand: string | null;
+  label_name: string | null;
+  color_name: string | null;
+  size_name: string | null;
+  composition: string | null;
   unit_id: string;
   category: string | null;
   gender: string | null;
@@ -74,6 +79,11 @@ export default function ProductsDirectory() {
   const [barcode, setBarcode] = useState("");
   const [gtin, setGtin] = useState("");
   const [tnved, setTnved] = useState("");
+  const [brand, setBrand] = useState("");
+  const [labelName, setLabelName] = useState("");
+  const [colorName, setColorName] = useState("");
+  const [sizeName, setSizeName] = useState("");
+  const [composition, setComposition] = useState("");
   const [unitId, setUnitId] = useState("");
   const [category, setCategory] = useState("");
   const [gender, setGender] = useState("");
@@ -89,6 +99,11 @@ export default function ProductsDirectory() {
   const [editBarcode, setEditBarcode] = useState("");
   const [editGtin, setEditGtin] = useState("");
   const [editTnved, setEditTnved] = useState("");
+  const [editBrand, setEditBrand] = useState("");
+  const [editLabelName, setEditLabelName] = useState("");
+  const [editColorName, setEditColorName] = useState("");
+  const [editSizeName, setEditSizeName] = useState("");
+  const [editComposition, setEditComposition] = useState("");
   const [editUnitId, setEditUnitId] = useState("");
   const [editCategory, setEditCategory] = useState("");
   const [editGender, setEditGender] = useState("");
@@ -161,6 +176,11 @@ export default function ProductsDirectory() {
     setBarcode("");
     setGtin("");
     setTnved("");
+    setBrand("");
+    setLabelName("");
+    setColorName("");
+    setSizeName("");
+    setComposition("");
     setUnitId(units[0]?.id || "");
     setCategory("");
     setGender("");
@@ -178,6 +198,11 @@ export default function ProductsDirectory() {
     setEditBarcode(product.barcode || "");
     setEditGtin(product.gtin || "");
     setEditTnved(product.tnved || "");
+    setEditBrand(product.brand || "");
+    setEditLabelName(product.label_name || "");
+    setEditColorName(product.color_name || "");
+    setEditSizeName(product.size_name || "");
+    setEditComposition(product.composition || "");
     setEditUnitId(product.unit_id || "");
     setEditCategory(product.category || "");
     setEditGender(product.gender || "");
@@ -241,6 +266,11 @@ export default function ProductsDirectory() {
           barcode: barcode.trim() || null,
           gtin: gtin.trim() || null,
           tnved: tnved.trim() || null,
+          brand: brand.trim() || null,
+          label_name: labelName.trim() || null,
+          color_name: colorName.trim() || null,
+          size_name: sizeName.trim() || null,
+          composition: composition.trim() || null,
           unit_id: unitId,
           category: category.trim() || null,
           gender: gender.trim() || null,
@@ -299,6 +329,11 @@ export default function ProductsDirectory() {
           barcode: editBarcode.trim() || null,
           gtin: editGtin.trim() || null,
           tnved: editTnved.trim() || null,
+          brand: editBrand.trim() || null,
+          label_name: editLabelName.trim() || null,
+          color_name: editColorName.trim() || null,
+          size_name: editSizeName.trim() || null,
+          composition: editComposition.trim() || null,
           unit_id: editUnitId,
           category: editCategory.trim() || null,
           gender: editGender.trim() || null,
@@ -1210,6 +1245,11 @@ export default function ProductsDirectory() {
                   <Info label="Штрихкод" value={viewProduct.barcode || "—"} />
                   <Info label="GTIN" value={viewProduct.gtin || "—"} />
                   <Info label="ТН ВЭД" value={viewProduct.tnved || "—"} />
+                  <Info label="Бренд на этикетке" value={viewProduct.brand || "—"} />
+                  <Info label="Изделие на этикетке" value={viewProduct.label_name || "—"} />
+                  <Info label="Цвет" value={viewProduct.color_name || "—"} />
+                  <Info label="Размер" value={viewProduct.size_name || "—"} />
+                  <Info label="Состав" value={viewProduct.composition || "—"} />
                   <Info
                     label="Единица измерения"
                     value={getUnitLabel(viewProduct.unit_id)}
@@ -1356,6 +1396,51 @@ export default function ProductsDirectory() {
                     value={editTnved}
                     onChange={(e) => setEditTnved(e.target.value)}
                     placeholder="Код ТН ВЭД"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="Бренд на этикетке">
+                  <input
+                    value={editBrand}
+                    onChange={(e) => setEditBrand(e.target.value)}
+                    placeholder="Например: СТРИТСТРИМ"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="Изделие на этикетке">
+                  <input
+                    value={editLabelName}
+                    onChange={(e) => setEditLabelName(e.target.value)}
+                    placeholder="Например: Шапка бини"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="Цвет">
+                  <input
+                    value={editColorName}
+                    onChange={(e) => setEditColorName(e.target.value)}
+                    placeholder="Например: Чёрный"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="Размер">
+                  <input
+                    value={editSizeName}
+                    onChange={(e) => setEditSizeName(e.target.value)}
+                    placeholder="Например: 56"
+                    style={inputStyle}
+                  />
+                </Field>
+
+                <Field label="Состав">
+                  <input
+                    value={editComposition}
+                    onChange={(e) => setEditComposition(e.target.value)}
+                    placeholder="Например: 100% хлопок"
                     style={inputStyle}
                   />
                 </Field>
@@ -1568,6 +1653,51 @@ export default function ProductsDirectory() {
                   value={tnved}
                   onChange={(e) => setTnved(e.target.value)}
                   placeholder="Код ТН ВЭД"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Бренд на этикетке">
+                <input
+                  value={brand}
+                  onChange={(e) => setBrand(e.target.value)}
+                  placeholder="Например: СТРИТСТРИМ"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Изделие на этикетке">
+                <input
+                  value={labelName}
+                  onChange={(e) => setLabelName(e.target.value)}
+                  placeholder="Например: Шапка бини"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Цвет">
+                <input
+                  value={colorName}
+                  onChange={(e) => setColorName(e.target.value)}
+                  placeholder="Например: Чёрный"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Размер">
+                <input
+                  value={sizeName}
+                  onChange={(e) => setSizeName(e.target.value)}
+                  placeholder="Например: 56"
+                  style={inputStyle}
+                />
+              </Field>
+
+              <Field label="Состав">
+                <input
+                  value={composition}
+                  onChange={(e) => setComposition(e.target.value)}
+                  placeholder="Например: 100% хлопок"
                   style={inputStyle}
                 />
               </Field>
