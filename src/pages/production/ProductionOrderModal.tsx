@@ -424,8 +424,9 @@ export default function ProductionOrderModal({
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; font-family: Arial, sans-serif; color: #000; background: #fff; }
   .label {
-    width: 58mm;
+    width: 55.5mm;
     height: 40mm;
+    margin-left: 2.5mm;
     page-break-after: always;
     overflow: hidden;
     display: grid;
