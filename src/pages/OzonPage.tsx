@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 
-type Tab = "overview" | "analytics" | "stocks" | "matching" | "fbo" | "transfer";
+type Tab = "overview" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "transfer";
 
 type Operation = {
   id: string;
@@ -84,6 +84,23 @@ type OzonStockSummary = {
   fboReserved: number;
   fbsPresent: number;
   fbsReserved: number;
+};
+
+type OzonPromoProduct = {
+  product_id: number;
+  offer_id: string;
+  sku: string;
+  name: string;
+  current_price: number;
+  auto_add_price: number;
+  quantity_to_auto_add: number;
+};
+
+type OzonPromoWave = {
+  action_id: number;
+  title: string;
+  auto_add_date: string;
+  products: OzonPromoProduct[];
 };
 
 type SavedFboDraft = {
@@ -301,6 +318,12 @@ export default function OzonPage() {
   const [productCodesSummary, setProductCodesSummary] = useState<Record<string, number>>({});
   const [productCodesError, setProductCodesError] = useState("");
   const [productCodesMessage, setProductCodesMessage] = useState("");
+  const [promoWaves, setPromoWaves] = useState<OzonPromoWave[]>([]);
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promoDeleting, setPromoDeleting] = useState(false);
+  const [promoError, setPromoError] = useState("");
+  const [promoMessage, setPromoMessage] = useState("");
+  const [promoCheckedAt, setPromoCheckedAt] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [stocksLoading, setStocksLoading] = useState(false);
@@ -437,6 +460,9 @@ export default function OzonPage() {
       setFboError("");
       setFboView("board");
       void loadFboCards();
+    }
+    if (activeTab === "promotions") {
+      void loadPromoAutoAdd();
     }
   }, [activeTab]);
 
@@ -1741,11 +1767,71 @@ export default function OzonPage() {
     }
   }
 
+
+  async function loadPromoAutoAdd() {
+    try {
+      setPromoLoading(true);
+      setPromoError("");
+      setPromoMessage("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-promotions", {
+        body: { action: "list_auto_add" },
+      });
+
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(String(data.error));
+
+      setPromoWaves((data?.waves as OzonPromoWave[]) || []);
+      setPromoCheckedAt(String(data?.checked_at || ""));
+    } catch (cause) {
+      setPromoError(cause instanceof Error ? cause.message : "Не удалось загрузить автодобавление Ozon.");
+    } finally {
+      setPromoLoading(false);
+    }
+  }
+
+  async function deleteAllPromoAutoAdd() {
+    if (!promoWaves.length) return;
+
+    const total = promoWaves.reduce((sum, wave) => sum + wave.products.length, 0);
+    const confirmed = window.confirm(
+      `Удалить из автодобавления все запланированные товары Ozon?\n\nПозиций в очередях: ${total}.\nЭто не удалит товары из каталога Ozon.`,
+    );
+    if (!confirmed) return;
+
+    try {
+      setPromoDeleting(true);
+      setPromoError("");
+      setPromoMessage("");
+
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-promotions", {
+        body: { action: "delete_all_auto_add" },
+      });
+
+      if (invokeError) throw invokeError;
+      if (data?.error) throw new Error(String(data.error));
+
+      const remaining = Number(data?.remaining_products || 0);
+      setPromoWaves((data?.remaining_waves as OzonPromoWave[]) || []);
+      setPromoMessage(
+        remaining === 0
+          ? "Все товары удалены из очередей автодобавления Ozon."
+          : `Очистка выполнена. В очередях осталось: ${remaining}.`,
+      );
+      setPromoCheckedAt(new Date().toISOString());
+    } catch (cause) {
+      setPromoError(cause instanceof Error ? cause.message : "Не удалось очистить автодобавление Ozon.");
+    } finally {
+      setPromoDeleting(false);
+    }
+  }
+
   const tabs: Array<{ id: Tab; label: string; icon: string }> = [
     { id: "overview", label: "Обзор", icon: "🏠" },
     { id: "analytics", label: "Аналитика", icon: "📊" },
     { id: "stocks", label: "Остатки", icon: "📦" },
     { id: "matching", label: "Сопоставление", icon: "🔗" },
+    { id: "promotions", label: "Акции", icon: "🏷️" },
     { id: "fbo", label: "Поставки FBO", icon: "🚚" },
     { id: "transfer", label: "Перенос (тест)", icon: "🧪" },
   ];
@@ -2177,6 +2263,138 @@ export default function OzonPage() {
           </div>
         </section>
       </>
+    );
+  }
+
+
+  function Promotions() {
+    const totalProducts = promoWaves.reduce((sum, wave) => sum + wave.products.length, 0);
+
+    return (
+      <section style={{ display: "grid", gap: 14 }}>
+        <section style={{ ...panelStyle, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <div>
+              <div style={{ fontWeight: 900, fontSize: 22 }}>🏷️ Акции Ozon</div>
+              <div style={{ color: "#64748b", marginTop: 5, lineHeight: 1.45 }}>
+                Здесь показываются товары, которые Ozon запланировал автоматически добавить в акции.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button
+                type="button"
+                onClick={() => void loadPromoAutoAdd()}
+                disabled={promoLoading || promoDeleting}
+                style={{
+                  border: "1px solid #cbd5e1",
+                  background: "#fff",
+                  color: "#334155",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  fontWeight: 850,
+                  cursor: promoLoading || promoDeleting ? "wait" : "pointer",
+                }}
+              >
+                {promoLoading ? "Обновляю…" : "Обновить"}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => void deleteAllPromoAutoAdd()}
+                disabled={promoDeleting || promoLoading || totalProducts === 0}
+                style={{
+                  border: 0,
+                  background: promoDeleting || promoLoading || totalProducts === 0 ? "#cbd5e1" : "#dc2626",
+                  color: "#fff",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  fontWeight: 900,
+                  cursor: promoDeleting || promoLoading || totalProducts === 0 ? "default" : "pointer",
+                }}
+              >
+                {promoDeleting ? "Удаляю…" : "Убрать всё автодобавление"}
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: 12, padding: "10px 13px", fontWeight: 850, color: "#1d4ed8" }}>
+              Волн автодобавления: {promoWaves.length}
+            </div>
+            <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: "10px 13px", fontWeight: 850, color: "#334155" }}>
+              Товаров в очередях: {totalProducts}
+            </div>
+            {promoCheckedAt && (
+              <div style={{ color: "#64748b", alignSelf: "center", fontSize: 12 }}>
+                Проверено: {new Date(promoCheckedAt).toLocaleString("ru-RU")}
+              </div>
+            )}
+          </div>
+        </section>
+
+        {promoError && (
+          <div style={{ padding: 14, borderRadius: 12, background: "#fef2f2", border: "1px solid #fecaca", color: "#991b1b", fontWeight: 700 }}>
+            {promoError}
+          </div>
+        )}
+
+        {promoMessage && (
+          <div style={{ padding: 14, borderRadius: 12, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontWeight: 700 }}>
+            {promoMessage}
+          </div>
+        )}
+
+        {!promoLoading && promoWaves.length === 0 && (
+          <section style={{ ...panelStyle, padding: 22, textAlign: "center" }}>
+            <div style={{ fontSize: 32 }}>✅</div>
+            <div style={{ fontWeight: 900, fontSize: 18, marginTop: 6 }}>Очередь автодобавления пустая</div>
+            <div style={{ color: "#64748b", marginTop: 5 }}>Ozon сейчас не планирует автоматически добавлять ваши товары в акции.</div>
+          </section>
+        )}
+
+        {promoWaves.map((wave) => (
+          <section key={`${wave.action_id}:${wave.auto_add_date}`} style={{ ...panelStyle, overflow: "hidden" }}>
+            <div style={{ padding: 16, borderBottom: "1px solid #e2e8f0", background: "#fffbeb" }}>
+              <div style={{ fontWeight: 900, fontSize: 18 }}>{wave.title}</div>
+              <div style={{ color: "#92400e", marginTop: 4, fontSize: 13 }}>
+                Автодобавление: {new Date(wave.auto_add_date).toLocaleString("ru-RU")} · товаров: {wave.products.length}
+              </div>
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                <thead>
+                  <tr>
+                    {["Артикул", "Товар", "Текущая цена", "Цена автодобавления", "Изменение"].map((title) => (
+                      <th key={title} style={{ textAlign: "left", padding: "11px 12px", borderBottom: "1px solid #e2e8f0", color: "#64748b", fontSize: 12 }}>
+                        {title}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {wave.products.map((product) => {
+                    const diff = Number(product.auto_add_price || 0) - Number(product.current_price || 0);
+                    const pct = product.current_price > 0 ? (diff / product.current_price) * 100 : 0;
+                    return (
+                      <tr key={product.product_id}>
+                        <td style={{ padding: "11px 12px", borderBottom: "1px solid #f1f5f9", fontWeight: 800 }}>{product.offer_id || "—"}</td>
+                        <td style={{ padding: "11px 12px", borderBottom: "1px solid #f1f5f9" }}>{product.name || "—"}</td>
+                        <td style={{ padding: "11px 12px", borderBottom: "1px solid #f1f5f9" }}>{money(product.current_price)}</td>
+                        <td style={{ padding: "11px 12px", borderBottom: "1px solid #f1f5f9", fontWeight: 900 }}>{money(product.auto_add_price)}</td>
+                        <td style={{ padding: "11px 12px", borderBottom: "1px solid #f1f5f9", color: diff < 0 ? "#b91c1c" : "#166534", fontWeight: 800 }}>
+                          {diff === 0 ? "0%" : `${pct.toFixed(1)}%`}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        ))}
+      </section>
     );
   }
 
@@ -3135,6 +3353,7 @@ export default function OzonPage() {
       {activeTab === "analytics" && <Analytics />}
       {activeTab === "stocks" && <Stocks />}
       {activeTab === "matching" && <Matching />}
+      {activeTab === "promotions" && <Promotions />}
       {activeTab === "fbo" && <FboSupply />}
       {activeTab === "transfer" && <TransferTest />}
     </div>
