@@ -115,7 +115,9 @@ export default function ReceiptsPage() {
                 <th style={thStyle}>Номер</th>
                 <th style={thStyle}>Дата</th>
                 <th style={thStyle}>Поставщик</th>
-                <th style={thStyle}>Сумма</th>
+                <th style={thStyle}>Товары</th>
+                <th style={thStyle}>Доставка</th>
+                <th style={thStyle}>Фактическая стоимость</th>
                 <th style={thStyle}>Статус</th>
               </tr>
             </thead>
@@ -145,6 +147,25 @@ export default function ReceiptsPage() {
                         maximumFractionDigits: 2,
                       },
                     )}{" "}
+                    ₽
+                  </td>
+
+                  <td style={tdStyle}>
+                    {Number(receipt.delivery_cost || 0).toLocaleString("ru-RU", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{" "}
+                    ₽
+                  </td>
+
+                  <td style={tdStyle}>
+                    {Number(
+                      receipt.landed_total_amount ||
+                        Number(receipt.total_amount || 0) + Number(receipt.delivery_cost || 0),
+                    ).toLocaleString("ru-RU", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}{" "}
                     ₽
                   </td>
 

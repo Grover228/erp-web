@@ -1,0 +1,34 @@
+name: Apply resale stock fix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-resale-stock-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Apply exact source patch
+        run: node scripts/apply-resale-stock-fix.cjs
+      - name: Restore normal build command
+        run: npm pkg set scripts.build='vite build'
+      - name: Verify build
+        run: npm ci && npm run build
+      - name: Commit patched source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/pages/warehouse/SalesPage.tsx src/pages/warehouse/CustomerOrderModal.tsx src/pages/warehouse/CustomerRelatedDocumentModal.tsx src/pages/warehouse/CustomerShipmentModal.tsx src/pages/warehouse/StockPage.tsx package.json
+          git commit -m "fix: normalize migrated resale stock" || exit 0
+          git push origin main

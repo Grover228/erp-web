@@ -38,6 +38,7 @@ type ProductionOperation = {
   status: string;
   completed_quantity: number;
   price_per_unit: number | null;
+  planned_time_min_per_unit: number | null;
   started_at: string | null;
 };
 
@@ -77,6 +78,8 @@ export default function EmployeeMobilePage({
   const [confirmNextOperation, setConfirmNextOperation] = useState(false);
   const [nextOperationPreview, setNextOperationPreview] = useState<ProductionOperation | null>(null);
   const [lastOperationReady, setLastOperationReady] = useState(false);
+  const [pendingNextAfterSummary, setPendingNextAfterSummary] = useState<{batchId:string;batchNumber:string;nextOperation:ProductionOperation}|null>(null);
+  const [operationSummary, setOperationSummary] = useState<{batchNumber:string;operationName:string;quantity:number;defects:number;seconds:number;plannedSeconds:number|null;earned:number}|null>(null);
   const [finishedFinalBatch, setFinishedFinalBatch] = useState<{ batchNumber: string } | null>(null);
   const [postOperationAction, setPostOperationAction] = useState<{
     batchId: string;
@@ -712,7 +715,7 @@ export default function EmployeeMobilePage({
       let nextBatchData: Record<string, unknown>;
 
       if (isCurrentBatchOperationDone && nextOperation) {
-        const takeNextBySelf = nextAction === "self";
+        const takeNextBySelf = false;
 
         nextBatchData = {
           status: takeNextBySelf ? "in_progress" : "waiting",
@@ -748,6 +751,10 @@ export default function EmployeeMobilePage({
         .eq("id", batch.id);
 
       if (batchError) throw batchError;
+      if (isCurrentBatchOperationDone && operation.operation_name === "Стачивание" && nextOperation) {
+        const {error:transferError} = await supabase.rpc("complete_stitching_container_transfer",{p_batch_id:batch.id});
+        if (transferError) throw transferError;
+      }
 
       const pricePerUnit = Number(operation.price_per_unit || 0);
       const earnedAmount = finishQty * pricePerUnit;
@@ -788,6 +795,12 @@ export default function EmployeeMobilePage({
 
       if (shiftUpdateError) throw shiftUpdateError;
 
+      // A completed production route releases its basket for reuse.
+      if (isCurrentBatchOperationDone && !nextOperation) {
+        const { error: releaseError } = await supabase.rpc("release_completed_batch_containers", { p_batch_id: batch.id });
+        if (releaseError) throw releaseError;
+      }
+
       setShift({
         ...shift,
         total_quantity: newShiftQuantity,
@@ -800,7 +813,13 @@ export default function EmployeeMobilePage({
       const shouldShowPostOperationAction =
         defectQuantity > 0 && isCurrentBatchOperationDone;
 
-      closeModal();
+      const planPerUnit = Number(operation.planned_time_min_per_unit);
+      const plannedSeconds = operation.planned_time_min_per_unit != null && Number.isFinite(planPerUnit) && planPerUnit > 0 ? Math.round(planPerUnit * finishQty * 60) : null;
+      setClosingBatch(null);
+      setConfirmNextOperation(false);
+      setLastOperationReady(false);
+      setOperationSummary({batchNumber:batch.batch_number,operationName:operation.operation_name,quantity:finishQty,defects:defectQuantity,seconds:durationSeconds,plannedSeconds,earned:earnedAmount});
+      setPendingNextAfterSummary(isCurrentBatchOperationDone && nextOperation && defectQuantity === 0 ? {batchId:batch.id,batchNumber:batch.batch_number,nextOperation} : null);
       await loadMyBatches(user.id);
 
       if (shouldShowPostOperationAction) {
@@ -823,47 +842,14 @@ export default function EmployeeMobilePage({
     }
   }
 
-  async function takeNextOperationFromPostAction() {
-    if (!postOperationAction?.nextOperation) return;
+  function startNextAfterSummary() {
+    setPendingNextAfterSummary(null);
+    onOpenScanner();
+  }
 
-    try {
-      setClosingLoading(true);
-      setClosingError("");
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
-      if (!user) throw new Error("Пользователь не найден");
-
-      const now = new Date().toISOString();
-
-      const { error: batchError } = await supabase
-        .from("production_batches")
-        .update({
-          status: "in_progress",
-          assigned_user_id: user.id,
-          assigned_at: now,
-          started_at: now,
-          completed_at: null,
-        })
-        .eq("id", postOperationAction.batchId);
-
-      if (batchError) throw batchError;
-
-      setPostOperationAction(null);
-      await loadMyBatches(user.id);
-    } catch (error) {
-      setClosingError(
-        error instanceof Error
-          ? error.message
-          : "Не удалось начать следующую операцию"
-      );
-    } finally {
-      setClosingLoading(false);
-    }
+  function takeNextOperationFromPostAction() {
+    setPostOperationAction(null);
+    onOpenScanner();
   }
 
   function handleOpenScanner() {
@@ -1238,7 +1224,7 @@ export default function EmployeeMobilePage({
             {!partialMode && !confirmNextOperation && !lastOperationReady && (
               <>
                 <button
-                  onClick={() => prepareCompleteCurrentOperation(closingBatch)}
+                  onClick={() => finishBatch(closingBatch, "all", "waiting")}
                   disabled={closingLoading}
                   style={bigGreenButtonStyle}
                 >
@@ -1538,7 +1524,39 @@ export default function EmployeeMobilePage({
         </div>
       )}
 
-      {postOperationAction && (
+      {operationSummary && (
+        <div style={modalOverlayStyle}>
+          <div style={modalBoxStyle}>
+            <div style={{fontSize:24,fontWeight:900,color:"#111827"}}>Операция завершена</div>
+            <div style={{color:"#64748b"}}>{operationSummary.operationName} · {operationSummary.batchNumber}</div>
+            <div style={infoBoxStyle}>
+              <div>Готово: <b>{operationSummary.quantity} шт.</b></div>
+              {operationSummary.defects > 0 && <div>Брак: <b>{operationSummary.defects} шт.</b></div>}
+              <div>Фактически: <b>{formatOperationTime(operationSummary.seconds)}</b></div>
+              <div>План: <b>{operationSummary.plannedSeconds === null ? "Не задан" : formatOperationTime(operationSummary.plannedSeconds)}</b></div>
+              {operationSummary.plannedSeconds !== null && <div>Отклонение: <b style={{color:operationSummary.seconds > operationSummary.plannedSeconds ? "#b91c1c" : "#15803d"}}>{operationSummary.seconds > operationSummary.plannedSeconds ? "+" : operationSummary.seconds < operationSummary.plannedSeconds ? "−" : ""}{formatOperationTime(Math.abs(operationSummary.seconds - operationSummary.plannedSeconds))}</b> ({Math.round(100 * Math.abs(operationSummary.seconds - operationSummary.plannedSeconds) / operationSummary.plannedSeconds)}%)</div>}
+              <div>На изделие: <b>{formatOperationTime(operationSummary.seconds / operationSummary.quantity)}</b></div>
+              <div>Начислено: <b>{operationSummary.earned.toLocaleString("ru-RU",{maximumFractionDigits:2})} ₽</b></div>
+            </div>
+            <button style={bigGreenButtonStyle} onClick={()=>setOperationSummary(null)}>Продолжить</button>
+          </div>
+        </div>
+      )}
+      {!operationSummary && pendingNextAfterSummary && (
+        <div style={modalOverlayStyle}>
+          <div style={modalBoxStyle}>
+            <div style={{fontSize:24,fontWeight:900,color:"#111827"}}>Следующая операция</div>
+            <div style={{color:"#64748b"}}>Пачка {pendingNextAfterSummary.batchNumber}</div>
+            <div style={infoBoxStyle}>
+              Текущая операция уже сохранена. Следующая: <b>{pendingNextAfterSummary.nextOperation.operation_name}</b>.
+              <div style={{marginTop:8}}>Будете выполнять её самостоятельно?</div>
+            </div>
+            <button style={bigGreenButtonStyle} onClick={() => void startNextAfterSummary()}>Да, буду делать</button>
+            <button style={bigYellowButtonStyle} onClick={() => setPendingNextAfterSummary(null)}>Нет, оставить в ожидании</button>
+          </div>
+        </div>
+      )}
+      {!operationSummary && postOperationAction && (
         <div style={modalOverlayStyle}>
           <div style={modalBoxStyle}>
             <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
@@ -1625,7 +1643,7 @@ export default function EmployeeMobilePage({
         </div>
       )}
 
-      {finishedFinalBatch && (
+      {!operationSummary && finishedFinalBatch && (
         <div style={modalOverlayStyle}>
           <div style={modalBoxStyle}>
             <div style={{ fontSize: 24, fontWeight: 900, color: "#111827" }}>
@@ -1663,6 +1681,11 @@ export default function EmployeeMobilePage({
   );
 }
 
+function formatOperationTime(seconds:number) {
+  const value=Math.max(0,Math.round(seconds));
+  const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),sec=value%60;
+  return h>0 ? `${h} ч ${m} мин ${sec} сек` : `${m} мин ${sec} сек`;
+}
 function getShiftDuration(openedAt: string | null) {
   if (!openedAt) return "0 мин";
 

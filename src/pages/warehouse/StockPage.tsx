@@ -23,6 +23,7 @@ type BulkEditChange = {
 };
 
 type StockAvailableRow = {
+  warehouse_id?: string | null;
   item_type: StockItemType | string;
   product_id: string | null;
   material_id: string | null;
@@ -31,6 +32,21 @@ type StockAvailableRow = {
   quantity_on_hand: number | null;
   quantity_reserved: number | null;
   quantity_available: number | null;
+};
+
+type WarehouseOption = {
+  id: string;
+  code: string;
+  name: string;
+};
+
+type IncomingStockRow = {
+  item_type: StockItemType | string;
+  product_id: string | null;
+  material_id: string | null;
+  consumable_id: string | null;
+  item_id: string | null;
+  quantity_in_transit: number | null;
 };
 
 type ProductCatalogItem = {
@@ -71,6 +87,7 @@ type ColorCatalogItem = {
 
 type StockMovementRow = {
   id?: string;
+  warehouse_id?: string | null;
   item_type: StockItemType | string;
   product_id: string | null;
   material_id: string | null;
@@ -101,6 +118,7 @@ type StockRow = {
   quantityOnHand: number;
   quantityReserved: number;
   quantityAvailable: number;
+  quantityInTransit: number;
   avgPrice: number;
   amount: number;
   lastMovementDate: string;
@@ -142,6 +160,8 @@ function getMovementLabel(type: string) {
   if (type === "production_write_off") return "Списание в производство";
   if (type === "manual_receipt") return "Оприходование";
   if (type === "manual_write_off") return "Списание";
+  if (type === "warehouse_transfer_out") return "Перемещение: расход";
+  if (type === "warehouse_transfer_in") return "Перемещение: приход";
   if (type === "reservation") return "Резерв";
   if (type === "release") return "Снятие резерва";
   return type || "—";
@@ -153,11 +173,15 @@ function getDocumentLabel(type: string) {
   if (type === "customer_shipment") return "Отгрузка покупателю";
   if (type === "customer_order") return "Заказ покупателя";
   if (type === "stock_adjustment") return "Корректировка склада";
+  if (type === "warehouse_transfer") return "Перемещение между складами";
   return type || "—";
 }
 
 export default function StockPage() {
   const [stockAvailable, setStockAvailable] = useState<StockAvailableRow[]>([]);
+  const [incomingStock, setIncomingStock] = useState<IncomingStockRow[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
+  const [selectedWarehouseId, setSelectedWarehouseId] = useState<"all" | string>("all");
   const [products, setProducts] = useState<ProductCatalogItem[]>([]);
   const [resaleProducts, setResaleProducts] = useState<ResaleCatalogItem[]>([]);
   const [materials, setMaterials] = useState<MaterialCatalogItem[]>([]);
@@ -183,15 +207,31 @@ export default function StockPage() {
 
   useEffect(() => {
     loadStockItems();
-  }, []);
+  }, [selectedWarehouseId]);
 
   async function loadStockItems() {
     try {
       setLoading(true);
       setError("");
 
+      const stockQuery =
+        selectedWarehouseId === "all"
+          ? supabase
+              .from("stock_available")
+              .select(
+                "item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
+              )
+          : supabase
+              .from("stock_available_by_warehouse")
+              .select(
+                "warehouse_id, item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
+              )
+              .eq("warehouse_id", selectedWarehouseId);
+
       const [
         stockResult,
+        incomingStockResult,
+        warehousesResult,
         productsResult,
         resaleProductsResult,
         materialsResult,
@@ -200,11 +240,17 @@ export default function StockPage() {
         movementsResult,
         productionCostsResult,
       ] = await Promise.all([
+        stockQuery,
+
         supabase
-          .from("stock_available")
-          .select(
-            "item_type, product_id, material_id, consumable_id, item_id, quantity_on_hand, quantity_reserved, quantity_available",
-          ),
+          .from("incoming_stock")
+          .select("item_type,product_id,material_id,consumable_id,item_id,quantity_in_transit"),
+
+        supabase
+          .from("warehouses")
+          .select("id,code,name")
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
 
         supabase
           .from("products")
@@ -235,7 +281,7 @@ export default function StockPage() {
         supabase
           .from("stock_movements")
           .select(
-            "id, item_type, product_id, material_id, consumable_id, item_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
+            "id, warehouse_id, item_type, product_id, material_id, consumable_id, item_id, movement_type, source_document_type, source_document_id, production_order_id, quantity, created_at",
           )
           .order("created_at", { ascending: false }),
 
@@ -246,6 +292,8 @@ export default function StockPage() {
       ]);
 
       if (stockResult.error) throw stockResult.error;
+      if (incomingStockResult.error) throw incomingStockResult.error;
+      if (warehousesResult.error) throw warehousesResult.error;
       if (productsResult.error) throw productsResult.error;
       if (resaleProductsResult.error) throw resaleProductsResult.error;
       if (materialsResult.error) throw materialsResult.error;
@@ -255,6 +303,8 @@ export default function StockPage() {
       if (productionCostsResult.error) throw productionCostsResult.error;
 
       setStockAvailable((stockResult.data as StockAvailableRow[]) || []);
+      setIncomingStock((incomingStockResult.data as IncomingStockRow[]) || []);
+      setWarehouses((warehousesResult.data as WarehouseOption[]) || []);
       setProducts((productsResult.data as ProductCatalogItem[]) || []);
       setResaleProducts((resaleProductsResult.data as ResaleCatalogItem[]) || []);
       setMaterials((materialsResult.data as MaterialCatalogItem[]) || []);
@@ -326,6 +376,7 @@ export default function StockPage() {
         source_document_type: "stock_adjustment",
         source_document_id: null,
         production_order_id: null,
+        warehouse_id: selectedWarehouseId === "all" ? null : selectedWarehouseId,
         item_type: selectedRow.itemType,
         product_id: selectedRow.itemType === "product" ? selectedRow.itemId : null,
         material_id:
@@ -368,6 +419,21 @@ export default function StockPage() {
     const consumableMap = new Map(consumables.map((item) => [item.id, item]));
     const colorMap = new Map(colors.map((item) => [item.id, item]));
     const productCostMap = new Map<string, { quantity: number; cost: number }>();
+    const incomingMap = new Map<string, number>();
+
+    incomingStock.forEach((row) => {
+      const itemId =
+        row.item_type === "resale_product"
+          ? row.item_id
+          : row.item_type === "product"
+            ? row.product_id
+            : row.item_type === "material"
+              ? row.material_id
+              : row.consumable_id;
+      if (!itemId) return;
+      const key = getStockKey(row.item_type, itemId);
+      incomingMap.set(key, (incomingMap.get(key) || 0) + Number(row.quantity_in_transit || 0));
+    });
 
     productionCosts.forEach((order) => {
       if (!order.product_id) return;
@@ -462,6 +528,7 @@ export default function StockPage() {
             quantityOnHand,
             quantityReserved,
             quantityAvailable,
+            quantityInTransit: 0,
             avgPrice: price,
             amount: quantityOnHand * price,
             lastMovementDate: lastMovement?.created_at || "",
@@ -485,6 +552,7 @@ export default function StockPage() {
             quantityOnHand,
             quantityReserved,
             quantityAvailable,
+            quantityInTransit: 0,
             avgPrice: price,
             amount: quantityOnHand * price,
             lastMovementDate: lastMovement?.created_at || "",
@@ -509,6 +577,7 @@ export default function StockPage() {
             quantityOnHand,
             quantityReserved,
             quantityAvailable,
+            quantityInTransit: 0,
             avgPrice: price,
             amount: quantityOnHand * price,
             lastMovementDate: lastMovement?.created_at || "",
@@ -531,6 +600,7 @@ export default function StockPage() {
           quantityOnHand,
           quantityReserved,
           quantityAvailable,
+          quantityInTransit: 0,
           avgPrice: price,
           amount: quantityOnHand * price,
           lastMovementDate: lastMovement?.created_at || "",
@@ -540,6 +610,31 @@ export default function StockPage() {
       })
       .filter(Boolean) as StockRow[];
 
+    const aggregatedMovementRows = Array.from(
+      movementRows
+        .reduce((rowsByKey, row) => {
+          const existing = rowsByKey.get(row.key);
+          if (!existing) {
+            rowsByKey.set(row.key, { ...row });
+            return rowsByKey;
+          }
+
+          const quantityOnHand = existing.quantityOnHand + row.quantityOnHand;
+          const quantityReserved = existing.quantityReserved + row.quantityReserved;
+          const quantityAvailable = existing.quantityAvailable + row.quantityAvailable;
+
+          rowsByKey.set(row.key, {
+            ...existing,
+            quantityOnHand,
+            quantityReserved,
+            quantityAvailable,
+            amount: quantityOnHand * existing.avgPrice,
+          });
+          return rowsByKey;
+        }, new Map<string, StockRow>())
+        .values(),
+    );
+
     const stockIdsByType = new Map<StockItemType, Set<string>>([
       ["product", new Set()],
       ["resale_product", new Set()],
@@ -547,7 +642,7 @@ export default function StockPage() {
       ["consumable", new Set()],
     ]);
 
-    movementRows.forEach((row) => {
+    aggregatedMovementRows.forEach((row) => {
       stockIdsByType.get(row.itemType)?.add(row.itemId);
     });
 
@@ -575,6 +670,7 @@ export default function StockPage() {
           quantityOnHand: 0,
           quantityReserved: 0,
           quantityAvailable: 0,
+          quantityInTransit: 0,
           avgPrice: price,
           amount: 0,
           lastMovementDate: "",
@@ -600,6 +696,7 @@ export default function StockPage() {
         quantityOnHand: 0,
         quantityReserved: 0,
         quantityAvailable: 0,
+        quantityInTransit: 0,
         avgPrice: Number(item.default_price || 0),
         amount: 0,
         lastMovementDate: "",
@@ -624,6 +721,7 @@ export default function StockPage() {
           quantityOnHand: 0,
           quantityReserved: 0,
           quantityAvailable: 0,
+          quantityInTransit: 0,
           avgPrice: price,
           amount: 0,
           lastMovementDate: "",
@@ -645,6 +743,7 @@ export default function StockPage() {
         quantityOnHand: 0,
         quantityReserved: 0,
         quantityAvailable: 0,
+        quantityInTransit: 0,
         avgPrice: Number(item.default_price || 0),
         amount: 0,
         lastMovementDate: "",
@@ -653,13 +752,18 @@ export default function StockPage() {
       }));
 
     return [
-      ...movementRows,
+      ...aggregatedMovementRows,
       ...zeroStockProductRows,
       ...zeroStockResaleRows,
       ...zeroStockMaterialRows,
       ...zeroStockConsumableRows,
-    ].sort((a, b) => a.name.localeCompare(b.name, "ru"));
-  }, [stockAvailable, products, resaleProducts, materials, consumables, colors, movements, productionCosts]);
+    ]
+      .map((row) => ({
+        ...row,
+        quantityInTransit: incomingMap.get(row.key) || 0,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  }, [stockAvailable, incomingStock, products, resaleProducts, materials, consumables, colors, movements, productionCosts]);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -696,6 +800,7 @@ export default function StockPage() {
       "Цвет": row.colorName || "",
       "Остаток": row.quantityOnHand,
       "Резерв": row.quantityReserved,
+      "В пути": row.quantityInTransit,
       "Доступно": row.quantityAvailable,
       "Цена": row.avgPrice,
       "Стоимость": row.amount,
@@ -865,6 +970,7 @@ export default function StockPage() {
         source_document_type: "stock_adjustment",
         source_document_id: null,
         production_order_id: null,
+        warehouse_id: selectedWarehouseId === "all" ? null : selectedWarehouseId,
         item_type: change.itemType,
         product_id: change.itemType === "product" ? change.id : null,
         material_id: change.itemType === "material" ? change.id : null,
@@ -899,6 +1005,7 @@ export default function StockPage() {
   const selectedMovements = selectedRow
     ? movements
         .filter((movement) => {
+          if (selectedWarehouseId !== "all" && movement.warehouse_id !== selectedWarehouseId) return false;
           if (movement.item_type !== selectedRow.itemType) return false;
           if (selectedRow.itemType === "resale_product") return movement.item_id === selectedRow.itemId;
           if (selectedRow.itemType === "product") return movement.product_id === selectedRow.itemId;
@@ -922,8 +1029,9 @@ export default function StockPage() {
               <span style={sectionTitleStyle}>Остатки</span>
             </div>
             <div style={sectionSubtitleStyle}>
-              Остатки считаются по всем складским движениям: приёмки, производство,
-              списания, выпуск продукции, отгрузки и активные резервы.
+              {selectedWarehouseId === "all"
+                ? "Общий остаток по всем складам. Перемещения между складами не меняют эту сумму."
+                : `Остаток по складу «${warehouses.find((row) => row.id === selectedWarehouseId)?.name || "Склад"}».`}
             </div>
           </div>
 
@@ -964,6 +1072,29 @@ export default function StockPage() {
         {error && <div style={errorStyle}>{error}</div>}
 
         
+
+        <div style={warehouseFilterWrapStyle}>
+          <span style={warehouseFilterLabelStyle}>Склад:</span>
+          <div style={warehouseFilterTabsStyle}>
+            <button
+              type="button"
+              onClick={() => { setSelectedWarehouseId("all"); setSelectedRowKey(null); }}
+              style={warehouseFilterButtonStyle(selectedWarehouseId === "all")}
+            >
+              Все склады
+            </button>
+            {warehouses.map((warehouse) => (
+              <button
+                key={warehouse.id}
+                type="button"
+                onClick={() => { setSelectedWarehouseId(warehouse.id); setSelectedRowKey(null); }}
+                style={warehouseFilterButtonStyle(selectedWarehouseId === warehouse.id)}
+              >
+                {warehouse.name}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div style={toolbarStyle}>
           <div style={filterTabsStyle}>
@@ -1010,6 +1141,7 @@ export default function StockPage() {
                   <th style={thStyle}>Цвет</th>
                   <th style={thStyle}>Остаток</th>
                   <th style={thStyle}>Резерв</th>
+                  <th style={thStyle}>В пути</th>
                   <th style={thStyle}>Доступно</th>
                   <th style={thStyle}>Цена</th>
                   <th style={thStyle}>Стоимость</th>
@@ -1045,6 +1177,9 @@ export default function StockPage() {
                     <td style={tdStyle}>{renderColor(row)}</td>
                     <td style={tdStrongStyle}>{formatQuantity(row.quantityOnHand)}</td>
                     <td style={tdStyle}>{formatQuantity(row.quantityReserved)}</td>
+                    <td style={row.quantityInTransit > 0 ? tdStrongStyle : tdStyle}>
+                      {formatQuantity(row.quantityInTransit)}
+                    </td>
                     <td style={row.quantityAvailable < 0 ? tdDangerStyle : tdStrongStyle}>
                       {formatQuantity(row.quantityAvailable)}
                     </td>
@@ -1101,6 +1236,7 @@ export default function StockPage() {
             <div style={modalSummaryGridStyle}>
               <SummaryCard label="Остаток" value={formatQuantity(selectedRow.quantityOnHand)} />
               <SummaryCard label="Резерв" value={formatQuantity(selectedRow.quantityReserved)} />
+              <SummaryCard label="В пути" value={formatQuantity(selectedRow.quantityInTransit)} />
               <SummaryCard label="Доступно" value={formatQuantity(selectedRow.quantityAvailable)} />
               <SummaryCard label="Цена" value={`${formatMoney(selectedRow.avgPrice)} ₽`} />
               <SummaryCard label="Стоимость" value={`${formatMoney(selectedRow.amount)} ₽`} />
@@ -1892,3 +2028,40 @@ const errorStyle: React.CSSProperties = {
   padding: 14,
   fontWeight: 700,
 };
+
+
+const warehouseFilterWrapStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  flexWrap: "wrap",
+  padding: 12,
+  border: "1px solid #dbeafe",
+  background: "#f8fbff",
+  borderRadius: 14,
+};
+
+const warehouseFilterLabelStyle: React.CSSProperties = {
+  color: "#475569",
+  fontSize: 13,
+  fontWeight: 900,
+};
+
+const warehouseFilterTabsStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+function warehouseFilterButtonStyle(active: boolean): React.CSSProperties {
+  return {
+    border: active ? "1px solid #60a5fa" : "1px solid #cbd5e1",
+    background: active ? "#dbeafe" : "#ffffff",
+    color: active ? "#1d4ed8" : "#475569",
+    borderRadius: 999,
+    padding: "8px 12px",
+    cursor: "pointer",
+    fontWeight: 900,
+    fontSize: 13,
+  };
+}
