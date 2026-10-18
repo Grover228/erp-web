@@ -62,6 +62,110 @@ PRINT 1
 `;
 }
 
+
+function escapeTsplText(value) {
+  return safeText(value, "")
+    .replace(/~/g, "~~")
+    .replace(/"/g, "'");
+}
+
+function encodeDataMatrixValue(value) {
+  const raw = String(value || "");
+  let encoded = "~1";
+
+  for (const char of raw) {
+    const code = char.charCodeAt(0);
+
+    if (char === "~") {
+      encoded += "~~";
+    } else if (char === '"') {
+      encoded += "~d034";
+    } else if (code < 32 || code === 127) {
+      encoded += `~d${String(code).padStart(3, "0")}`;
+    } else {
+      encoded += char;
+    }
+  }
+
+  return encoded;
+}
+
+function splitHumanCode(value) {
+  const printable = String(value || "")
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const middle = Math.ceil(printable.length / 2);
+  return [printable.slice(0, middle), printable.slice(middle)];
+}
+
+function buildProductBarcode(data) {
+  const barcode = String(data.barcode || "").trim();
+
+  if (/^\d{13}$/.test(barcode)) {
+    return [
+      `BARCODE 215,252,"EAN13",38,0,0,2,2,"${barcode}"`,
+      `TEXT 255,296,"1",0,1,1,"${barcode}"`,
+    ].join("\n");
+  }
+
+  if (barcode) {
+    return [
+      `BARCODE 215,252,"128",38,0,0,1,2,"${escapeTsplText(barcode)}"`,
+      `TEXT 235,296,"1",0,1,1,"${escapeTsplText(barcode)}"`,
+    ].join("\n");
+  }
+
+  return `TEXT 230,270,"1",0,1,1,"barcode not set"`;
+}
+
+function buildChzLabelTspl(data) {
+  const brand = escapeTsplText(data.brand || "СТРИТСТРИМ");
+  const productName = escapeTsplText(data.productName || "Изделие");
+  const color = escapeTsplText(data.color || "-");
+  const size = escapeTsplText(data.size || "-");
+  const composition = escapeTsplText(data.composition || "-");
+  const [codeLine1, codeLine2] = splitHumanCode(data.code);
+  const datamatrix = encodeDataMatrixValue(data.code);
+  const barcodeCommands = buildProductBarcode(data);
+
+  return `
+SIZE 58 mm,40 mm
+GAP 2 mm,0 mm
+DENSITY 8
+SPEED 3
+DIRECTION 1
+CODEPAGE 1251
+CLS
+
+DMATRIX 20,22,170,170,C126,x4,r0,"${datamatrix}"
+
+BAR 202,12,2,188
+
+TEXT 218,16,"3",0,1,1,"${brand}"
+TEXT 218,49,"2",0,1,1,"${productName}"
+TEXT 218,76,"1",0,1,1,"Цвет: ${color}"
+TEXT 218,96,"1",0,1,1,"Размер: ${size}"
+TEXT 218,116,"1",0,1,1,"Состав: ${composition}"
+
+TEXT 20,205,"1",0,1,1,"${escapeTsplText(codeLine1)}"
+TEXT 20,220,"1",0,1,1,"${escapeTsplText(codeLine2)}"
+
+${barcodeCommands}
+
+PRINT 1
+`;
+}
+
+function buildChzLabelsTspl(labels) {
+  if (!Array.isArray(labels) || labels.length === 0) {
+    throw new Error("No Chestny Znak labels in print job");
+  }
+
+  return labels.map((label) => buildChzLabelTspl(label || {})).join("\n");
+}
+
 function writeToPrinter(tspl) {
   return new Promise((resolve, reject) => {
     const filePath = path.join(__dirname, "label.txt");
@@ -158,7 +262,11 @@ async function processQueueOnce() {
     if (!job) return;
 
     try {
-      const tspl = buildTspl(job.payload || {});
+      const payload = job.payload || {};
+      const tspl =
+        job.job_type === "chz_labels"
+          ? buildChzLabelsTspl(payload.labels || [])
+          : buildTspl(payload);
       await writeToPrinter(tspl);
       await queueRequest("complete", { jobId: job.id });
 
