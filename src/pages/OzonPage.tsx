@@ -86,6 +86,12 @@ type OzonStockSummary = {
   fbsReserved: number;
 };
 
+type OzonWarehouseMatch = {
+  id: string;
+  name: string;
+  address: string;
+};
+
 type OzonPromoProduct = {
   product_id: number;
   offer_id: string;
@@ -311,6 +317,11 @@ export default function OzonPage() {
   const [stocks, setStocks] = useState<OzonStock[]>([]);
   const [stockSummary, setStockSummary] = useState<OzonStockSummary | null>(null);
   const [stocksFetchedAt, setStocksFetchedAt] = useState("");
+  const [warehouseSearch, setWarehouseSearch] = useState("");
+  const [warehouseMatches, setWarehouseMatches] = useState<OzonWarehouseMatch[]>([]);
+  const [warehouseStocks, setWarehouseStocks] = useState<OzonStock[]>([]);
+  const [warehouseSearchWarning, setWarehouseSearchWarning] = useState("");
+  const [snapshotSavedRows, setSnapshotSavedRows] = useState(0);
   const [erpStockByArticle, setErpStockByArticle] = useState<Record<string, number>>({});
   const [productCodesLoading, setProductCodesLoading] = useState(false);
   const [productCodesApplying, setProductCodesApplying] = useState(false);
@@ -499,16 +510,33 @@ export default function OzonPage() {
     }
   }
 
-  async function loadStocks() {
+  async function loadStocks(searchValue = "") {
     try {
       setStocksLoading(true);
       setStocksError("");
-      const { data, error: invokeError } = await supabase.functions.invoke("ozon-stocks", { body: {} });
+      setWarehouseSearchWarning("");
+
+      const normalizedSearch = searchValue.trim();
+      const { data, error: invokeError } = await supabase.functions.invoke("ozon-stocks", {
+        body: {
+          warehouseSearch: normalizedSearch || undefined,
+          saveSnapshot: true,
+        },
+      });
+
       if (invokeError) throw invokeError;
       if (data?.error) throw new Error(data.error);
+
       setStocks((data?.stocks as OzonStock[]) || []);
       setStockSummary((data?.summary as OzonStockSummary) || null);
       setStocksFetchedAt(String(data?.fetchedAt || ""));
+      setSnapshotSavedRows(Number(data?.snapshot?.savedRows || 0));
+
+      if (normalizedSearch) {
+        setWarehouseMatches((data?.warehouseMatches as OzonWarehouseMatch[]) || []);
+        setWarehouseStocks((data?.warehouseStocks as OzonStock[]) || []);
+        setWarehouseSearchWarning(String(data?.warehouseSearchWarning || ""));
+      }
     } catch (cause) {
       setStocksError(cause instanceof Error ? cause.message : "Не удалось загрузить остатки Ozon");
     } finally {
@@ -2102,6 +2130,118 @@ export default function OzonPage() {
           <SummaryCard title="FBS в резерве" value={String(stockSummary?.fbsReserved || 0)} />
           <SummaryCard title="Позиций с остатком" value={String(stockSummary?.products || 0)} />
         </div>
+
+
+        <section style={{ ...panelStyle, padding: 18 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div style={{ flex: "1 1 360px" }}>
+              <div style={{ fontWeight: 900, fontSize: 18 }}>Остатки по складу Ozon</div>
+              <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                Введи город или название склада. Ozon вернёт склады, а ERP покажет товары, связанные с их warehouse_id.
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", flex: "1 1 420px", justifyContent: "flex-end" }}>
+              <input
+                value={warehouseSearch}
+                onChange={(event) => setWarehouseSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && warehouseSearch.trim().length >= 2) {
+                    void loadStocks(warehouseSearch);
+                  }
+                }}
+                placeholder="Например: Санкт-Петербург"
+                style={{ ...inputStyle, minWidth: 240, flex: "1 1 280px" }}
+              />
+              <button
+                type="button"
+                disabled={stocksLoading || warehouseSearch.trim().length < 2}
+                onClick={() => void loadStocks(warehouseSearch)}
+                style={{
+                  border: 0,
+                  background: stocksLoading ? "#94a3b8" : "#2563eb",
+                  color: "#fff",
+                  borderRadius: 11,
+                  padding: "10px 14px",
+                  fontWeight: 850,
+                  cursor: stocksLoading ? "wait" : "pointer",
+                }}
+              >
+                {stocksLoading ? "Ищу…" : "Найти склад"}
+              </button>
+            </div>
+          </div>
+
+          {snapshotSavedRows > 0 && (
+            <div style={{ marginTop: 10, color: "#64748b", fontSize: 12 }}>
+              Исторический снимок сохранён: {snapshotSavedRows} FBO-позиций.
+            </div>
+          )}
+
+          {warehouseSearchWarning && (
+            <div style={{ marginTop: 12, color: "#92400e", background: "#fffbeb", border: "1px solid #fde68a", padding: 12, borderRadius: 10 }}>
+              {warehouseSearchWarning}
+            </div>
+          )}
+
+          {warehouseMatches.length > 0 && (
+            <div style={{ marginTop: 14, display: "grid", gap: 8 }}>
+              <div style={{ color: "#334155", fontWeight: 850 }}>Найденные склады</div>
+              {warehouseMatches.map((warehouse) => (
+                <div
+                  key={warehouse.id}
+                  style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 12, background: "#f8fafc" }}
+                >
+                  <div style={{ fontWeight: 850, color: "#0f172a" }}>
+                    {warehouse.name || `Склад Ozon ${warehouse.id}`}
+                  </div>
+                  <div style={{ color: "#64748b", fontSize: 12, marginTop: 3 }}>
+                    ID: {warehouse.id}{warehouse.address ? ` · ${warehouse.address}` : ""}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {warehouseSearch.trim() && !stocksLoading && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontWeight: 900, color: "#0f172a", marginBottom: 10 }}>
+                Товары на найденных складах: {warehouseStocks.length}
+              </div>
+
+              {warehouseStocks.length === 0 ? (
+                <EmptyState
+                  title="Совпадений по текущему остатку нет"
+                  text="Либо на найденном складе сейчас нет наших товаров, либо Ozon уже успел изменить распределение остатков."
+                />
+              ) : (
+                <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: 12 }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>
+                        {["Артикул", "Товар", "FBO SKU", "FBO всего", "Резерв", "warehouse_id"].map((title) => (
+                          <th key={title} style={{ padding: 11, fontSize: 12 }}>{title}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {warehouseStocks.map((row) => (
+                        <tr key={row.productId || row.article} style={{ borderTop: "1px solid #eef2f7" }}>
+                          <td style={{ padding: 11, fontWeight: 850 }}>{row.article}</td>
+                          <td style={{ padding: 11 }}>{row.name}</td>
+                          <td style={{ padding: 11 }}>{row.fboSku || "—"}</td>
+                          <td style={{ padding: 11, color: "#005bff", fontWeight: 850 }}>{row.fboPresent}</td>
+                          <td style={{ padding: 11 }}>{row.fboReserved}</td>
+                          <td style={{ padding: 11, color: "#64748b", fontSize: 12 }}>{row.fboWarehouseIds.join(", ") || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
 
         <section style={{ ...panelStyle, overflow: "hidden" }}>
           <div style={{ padding: 18, fontWeight: 850, fontSize: 18 }}>Остатки товаров на Ozon</div>
