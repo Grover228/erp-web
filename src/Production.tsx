@@ -1130,6 +1130,113 @@ export default function Production({
     return null;
   }
 
+  async function printChzLabelsForBatch(batchNumber: string) {
+    try {
+      setActionLoading(true);
+      setMessage("");
+      setError("");
+
+      const batch =
+        batches.find((itemBatch) => itemBatch.batch_number === batchNumber) ||
+        null;
+
+      if (!batch) {
+        throw new Error(`Пачка ${batchNumber} не найдена`);
+      }
+
+      const { data: labelRows, error: labelsError } = await supabase.rpc(
+        "get_chz_batch_label_payloads",
+        { p_batch_id: batch.id },
+      );
+
+      if (labelsError) throw labelsError;
+
+      const rows = Array.isArray(labelRows) ? labelRows : [];
+      if (rows.length === 0) {
+        throw new Error("У этой пачки пока нет закреплённых кодов Честного ЗНАКа");
+      }
+
+      const alreadyPrinted = rows.filter((row: any) => row.printed_at).length;
+      if (alreadyPrinted > 0) {
+        const confirmed = window.confirm(
+          `У этой пачки уже печаталось этикеток: ${alreadyPrinted}. Повторно будут напечатаны те же самые коды, новые коды не выделяются. Продолжить?`,
+        );
+        if (!confirmed) return;
+      }
+
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError) throw userError;
+      if (!user) throw new Error("Для печати нужно войти в ERP");
+
+      const labels = rows.map((row: any) => ({
+        codeId: String(row.code_id || ""),
+        code: String(row.code || ""),
+        gtin: String(row.gtin || ""),
+        brand: String(row.brand || "СТРИТСТРИМ"),
+        productName: String(row.label_name || row.product_name || "Изделие"),
+        color: String(row.color_name || ""),
+        size: String(row.size_name || ""),
+        composition: String(row.composition || ""),
+        barcode: String(row.barcode || ""),
+        article: String(row.article || ""),
+      }));
+
+      if (labels.some((label: any) => !label.codeId || !label.code)) {
+        throw new Error("В пачке найден код ЧЗ без идентификатора или содержимого");
+      }
+
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
+        .insert({
+          printer_code: "xprinter-main",
+          job_type: "chz_labels",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber,
+            batchId: batch.id,
+            productionOrderId: batch.production_order_id,
+            codeIds: labels.map((label: any) => label.codeId),
+            labels,
+          },
+        })
+        .select("id, status")
+        .single();
+
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать задание печати этикеток");
+
+      const result = await waitForPrintJob(job.id, Math.max(12000, labels.length * 900));
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Принтер не смог выполнить печать этикеток");
+      }
+
+      if (result?.status === "printed") {
+        setMessage(
+          `Напечатано товарных этикеток ЧЗ: ${labels.length}. Пачка ${batchNumber}. Использованы те же закреплённые коды.`,
+        );
+        await loadProductionOrders();
+        return;
+      }
+
+      setMessage(
+        `Этикетки ЧЗ для пачки ${batchNumber} поставлены в очередь: ${labels.length} шт.`,
+      );
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка печати этикеток Честного ЗНАКа",
+      );
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function printQrLabel(item: GeneratedQr) {
     try {
       setMessage("");
@@ -2474,6 +2581,27 @@ export default function Production({
                     Эти коды принадлежат именно этой QR-пачке и не будут повторно
                     выданы другой пачке.
                   </div>
+
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => void printChzLabelsForBatch(generatedQr.batchNumber)}
+                    style={{
+                      marginTop: 10,
+                      border: 0,
+                      borderRadius: 10,
+                      padding: "10px 14px",
+                      background: "#166534",
+                      color: "#fff",
+                      fontWeight: 850,
+                      cursor: actionLoading ? "wait" : "pointer",
+                      opacity: actionLoading ? 0.7 : 1,
+                    }}
+                  >
+                    {actionLoading
+                      ? "Отправляю на печать…"
+                      : `Печатать товарные этикетки · ${generatedBatchChz.allocated} шт.`}
+                  </button>
                 </>
               )}
             </div>
