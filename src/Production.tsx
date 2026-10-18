@@ -187,6 +187,12 @@ export default function Production({
   const [defectError, setDefectError] = useState("");
 
   const [generatedQr, setGeneratedQr] = useState<GeneratedQr | null>(null);
+  const [generatedBatchChz, setGeneratedBatchChz] = useState<{
+    gtin: string | null;
+    allocated: number;
+    required: number;
+    warning?: string;
+  } | null>(null);
   const [qrHistoryOrder, setQrHistoryOrder] =
     useState<ProductionOrder | null>(null);
   const [qrHistoryItems, setQrHistoryItems] = useState<GeneratedQr[]>([]);
@@ -891,6 +897,7 @@ export default function Production({
     setError("");
     setMessage("");
     setGeneratedQr(null);
+    setGeneratedBatchChz(null);
   }
 
   function openFinishBatch(item: ActiveBatchItem) {
@@ -1693,6 +1700,8 @@ export default function Production({
         но складской приход создаётся только по QR-пачкам после последней операции.
       */
 
+      let chzAllocationNote = "";
+
       if (finishOperation.sort_order === 1) {
         const batchNumber = `PK-${String(Date.now()).slice(-6)}`;
 
@@ -1707,7 +1716,7 @@ export default function Production({
 
         const qrItem = await makeQrFromPayload(payload);
 
-        const { error: batchError } = await supabase
+        const { data: createdBatch, error: batchError } = await supabase
           .from("production_batches")
           .insert({
             production_order_id: order.id,
@@ -1723,15 +1732,59 @@ export default function Production({
             color_name: payload.color_name,
             qr_payload: payload,
             comment: finishComment.trim() || null,
-          });
+          })
+          .select("id,batch_number,quantity,chz_gtin,chz_codes_allocated")
+          .single();
 
         if (batchError) throw batchError;
+        if (!createdBatch?.id) {
+          throw new Error("Пачка создана без идентификатора. Коды ЧЗ не могут быть закреплены.");
+        }
+
+        try {
+          const { data: allocatedCodes, error: allocationError } = await supabase.rpc(
+            "allocate_chz_codes_to_batch",
+            {
+              p_batch_id: createdBatch.id,
+              p_quantity: addedQuantity,
+            },
+          );
+
+          if (allocationError) throw allocationError;
+
+          const allocatedRows = Array.isArray(allocatedCodes) ? allocatedCodes : [];
+          const gtin = allocatedRows[0]?.gtin ? String(allocatedRows[0].gtin) : null;
+
+          if (allocatedRows.length > 0) {
+            setGeneratedBatchChz({
+              gtin,
+              allocated: allocatedRows.length,
+              required: addedQuantity,
+            });
+            chzAllocationNote = ` Коды ЧЗ закреплены за пачкой: ${allocatedRows.length} шт.`;
+          } else {
+            setGeneratedBatchChz(null);
+          }
+        } catch (allocationCause) {
+          const allocationMessage =
+            allocationCause instanceof Error
+              ? allocationCause.message
+              : "не удалось выделить коды ЧЗ";
+
+          setGeneratedBatchChz({
+            gtin: null,
+            allocated: 0,
+            required: addedQuantity,
+            warning: allocationMessage,
+          });
+          chzAllocationNote = ` Пачка создана, но коды ЧЗ не выделены: ${allocationMessage}`;
+        }
 
         setGeneratedQr(qrItem);
       }
 
       setMessage(
-        `Операция сохранена. Выполнено: ${addedQuantity} шт. Заработано: ${formatMoney(earned)}.`
+        `Операция сохранена. Выполнено: ${addedQuantity} шт. Заработано: ${formatMoney(earned)}.${chzAllocationNote}`
       );
       setFinishOperation(null);
       setFinishQuantity("");
@@ -2391,6 +2444,40 @@ export default function Production({
           </div>
 
           <QrCard item={generatedQr} onPrint={printQrLabel} />
+
+          {generatedBatchChz && (
+            <div
+              style={{
+                border: generatedBatchChz.warning
+                  ? "1px solid #fecaca"
+                  : "1px solid #86efac",
+                background: generatedBatchChz.warning ? "#fef2f2" : "#f0fdf4",
+                borderRadius: 12,
+                padding: 12,
+                color: generatedBatchChz.warning ? "#991b1b" : "#166534",
+                fontWeight: 700,
+              }}
+            >
+              {generatedBatchChz.warning ? (
+                <>
+                  Пачка создана, но коды Честного ЗНАКа пока не выделены.
+                  <div style={{ marginTop: 5, fontSize: 13, fontWeight: 600 }}>
+                    {generatedBatchChz.warning}
+                  </div>
+                </>
+              ) : (
+                <>
+                  Честный ЗНАК: закреплено {generatedBatchChz.allocated} из{" "}
+                  {generatedBatchChz.required} кодов
+                  {generatedBatchChz.gtin ? ` · GTIN ${generatedBatchChz.gtin}` : ""}.
+                  <div style={{ marginTop: 5, fontSize: 13, fontWeight: 600 }}>
+                    Эти коды принадлежат именно этой QR-пачке и не будут повторно
+                    выданы другой пачке.
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
