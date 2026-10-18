@@ -1,10 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const jsonHeaders = { "Content-Type": "application/json", "Cache-Control": "no-store" };
+const jsonHeaders = { "Content-Type": "application/json", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type", "Access-Control-Allow-Methods": "POST, OPTIONS" };
 const respond = (status: number, body: Record<string, unknown>) =>
   new Response(JSON.stringify(body), { status, headers: jsonHeaders });
 
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: jsonHeaders });
   if (req.method !== "POST") return respond(405, { error: "Method not allowed" });
 
   const authHeader = req.headers.get("Authorization");
