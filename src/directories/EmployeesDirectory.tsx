@@ -251,23 +251,11 @@ export default function EmployeesDirectory() {
       setRequestsError("");
 
       const { data, error } = await supabase.functions.invoke("approve-user", {
-        body: {
-          email: request.email,
-          password: request.password,
-          full_name: request.full_name,
-          phone: request.phone,
-        },
+        body: { request_id: request.id },
       });
 
       if (error) throw new Error(error.message);
       if (data?.error) throw new Error(data.error);
-
-      const { error: updateError } = await supabase
-        .from("registration_requests")
-        .update({ status: "approved" })
-        .eq("id", request.id);
-
-      if (updateError) throw updateError;
 
       setRequests((prev) =>
         prev.map((item) =>
