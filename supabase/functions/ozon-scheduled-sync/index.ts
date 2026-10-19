@@ -2,7 +2,7 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "null",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
@@ -27,7 +27,7 @@ function isoStart(date: string) { return `${date}T00:00:00.000Z`; }
 function isoEnd(date: string) { return `${date}T23:59:59.999Z`; }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return json({ error: "Not supported" }, 405);
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -35,7 +35,7 @@ Deno.serve(async (req: Request) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const clientId = Deno.env.get("OZON_CLIENT_ID");
   const apiKey = Deno.env.get("OZON_API_KEY");
-  if (!clientId || !apiKey) return json({ error: "Не заданы секреты OZON_CLIENT_ID и OZON_API_KEY." }, 503);
+
 
   // Private server-to-server endpoint. Never put the scheduler secret in the browser.
   const secret = Deno.env.get("OZON_SYNC_CRON_SECRET");
@@ -45,7 +45,7 @@ Deno.serve(async (req: Request) => {
   const actualBytes = new TextEncoder().encode(supplied);
   let mismatch = expectedBytes.length ^ actualBytes.length;
   for (let i = 0; i < Math.min(expectedBytes.length, actualBytes.length); i++) mismatch |= expectedBytes[i] ^ actualBytes[i];
-  if (mismatch !== 0) return json({ error: "Unauthorized" }, 401);
+  if (mismatch !== 0) return json({ error: "Unauthorized" }, 401);\n  if (!clientId || !apiKey) return json({ error: "Ozon API credentials unavailable" }, 503);
 
   // UTC dates, lagged by 14 days; refresh the last completed financial week.
   const today = new Date();
