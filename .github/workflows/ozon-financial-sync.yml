@@ -1,0 +1,24 @@
+name: Ozon financial sync
+on:
+  schedule:
+    - cron: '0 5 * * 1,3'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Call private Ozon sync endpoint
+        env:
+          SYNC_URL: ${{ secrets.OZON_SYNC_URL }}
+          CRON_SECRET: ${{ secrets.OZON_SYNC_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          test -n "$SYNC_URL" && test -n "$CRON_SECRET"
+          curl --fail-with-body --show-error --silent --retry 2 --retry-delay 15 \
+            -X POST "$SYNC_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-ozon-cron-secret: $CRON_SECRET" \
+            -d '{}'
