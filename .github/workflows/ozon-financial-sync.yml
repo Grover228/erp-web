@@ -17,8 +17,8 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$SYNC_URL" && test -n "$CRON_SECRET"
-          curl --fail-with-body --show-error --silent --retry 2 --retry-delay 15 \\
-            -X POST "$SYNC_URL" \\
-            -H "Content-Type: application/json" \\
-            -H "x-ozon-cron-secret: $CRON_SECRET" \\
+          curl --fail-with-body --show-error --silent --retry 2 --retry-delay 15 \
+            -X POST "$SYNC_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-ozon-cron-secret: $CRON_SECRET" \
             -d '{}'
