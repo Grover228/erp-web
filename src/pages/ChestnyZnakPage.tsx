@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
-import { getCryptoProCertificates, signChallengeWithCryptoPro, type CryptoProCertificateInfo } from "../integrations/cryptopro";
+import { getCryptoProCertificates, signChallengeWithCryptoPro, verifyDetachedSignatureWithCryptoPro, type CryptoProCertificateInfo, type CryptoProDetachedVerification } from "../integrations/cryptopro";
 import { checkChzSignature } from "../integrations/chzSignatureCheck";
 
 type Challenge = {
@@ -125,6 +125,7 @@ export default function ChestnyZnakPage() {
   const [inn, setInn] = useState("");
   const [challenge, setChallenge] = useState<Challenge | null>(null);
   const [signature, setSignature] = useState("");
+  const [signatureVerification, setSignatureVerification] = useState<{ challengeData: string; signature: string; result: CryptoProDetachedVerification } | null>(null);
   const [gisChallenge, setGisChallenge] = useState<Challenge | null>(null);
   const [gisSignature, setGisSignature] = useState("");
   const [certificates, setCertificates] = useState<CryptoProCertificateInfo[]>([]);
@@ -406,6 +407,7 @@ export default function ChestnyZnakPage() {
       setMessage("");
       setChallenge(null);
       setSignature("");
+      setSignatureVerification(null);
       setAuth(null);
 
       const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
@@ -482,10 +484,39 @@ export default function ChestnyZnakPage() {
       if (!createdSignature) throw new Error("КриптоПро не вернул подпись.");
 
       setSignature(createdSignature);
+      setSignatureVerification(null);
       setMessage("Строка подписана локально через КриптоПро. Закрытый ключ не покидал Рутокен. Проверяю авторизацию в Честном ЗНАКе…");
       await signIn(createdSignature);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось подписать данные через КриптоПро.");
+      setLoading(false);
+    }
+  }
+
+  async function verifySignatureLocally() {
+    if (!challenge || !signature.trim()) return;
+    const checkedChallenge = challenge.data;
+    const checkedSignature = signature;
+    try {
+      setLoading(true);
+      setSignatureVerification(null);
+      const structure = checkChzSignature(checkedSignature);
+      if (!structure.ok) throw new Error(structure.details);
+      if (structure.mode !== "detached") throw new Error("Для этого сценария требуется отделённая CMS-подпись.");
+
+      const result = await verifyDetachedSignatureWithCryptoPro(checkedChallenge, checkedSignature);
+      setSignatureVerification({ challengeData: checkedChallenge, signature: checkedSignature, result });
+    } catch (cause) {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      setSignatureVerification({
+        challengeData: checkedChallenge,
+        signature: checkedSignature,
+        result: {
+          matchedEncoding: null,
+          message: `Криптографическая проверка не выполнена: ${reason}. Это не означает, что подпись неверная.`,
+        },
+      });
+    } finally {
       setLoading(false);
     }
   }
@@ -679,7 +710,7 @@ export default function ChestnyZnakPage() {
           <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
             <textarea
               value={signature}
-              onChange={(event) => setSignature(event.target.value)}
+              onChange={(event) => { setSignature(event.target.value); setSignatureVerification(null); }}
               rows={5}
               placeholder="Вставьте подпись Base64"
               style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace" }}
@@ -687,6 +718,27 @@ export default function ChestnyZnakPage() {
             {signatureCheck && (
               <div role="status" style={{ fontSize: 12, color: signatureCheck.ok ? "#166534" : "#b91c1c" }}>
                 {signatureCheck.ok ? "Локальная проверка: " : "Ошибка структуры: "}{signatureCheck.details}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => void verifySignatureLocally()}
+              disabled={loading || !challenge || !signatureCheck?.ok || signatureCheck.mode !== "detached"}
+              style={{
+                justifySelf: "start", border: "1px solid #0f766e", borderRadius: 10, padding: "10px 14px",
+                background: loading || !challenge || !signatureCheck?.ok || signatureCheck.mode !== "detached" ? "#cbd5e1" : "#f0fdfa",
+                color: "#115e59", fontWeight: 900, cursor: loading ? "wait" : "pointer",
+              }}
+            >
+              {loading ? "Проверяю…" : "Проверить подпись КриптоПро без отправки в ЧЗ"}
+            </button>
+            {signatureVerification && signatureVerification.challengeData === challenge?.data && signatureVerification.signature === signature && (
+              <div role="status" style={{
+                border: "1px solid #cbd5e1", borderRadius: 10, padding: 12,
+                color: signatureVerification.result.matchedEncoding === "utf8" ? "#166534" : "#92400e",
+                fontSize: 13, whiteSpace: "pre-wrap",
+              }}>
+                <b>Результат криптографической проверки:</b> {signatureVerification.result.message}
               </div>
             )}
             <button
