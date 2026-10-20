@@ -229,6 +229,36 @@ export default function ProductionOrderModal({
     };
   }, [sourceOrder?.product_id]);
 
+  async function prepareMissingChzDraft() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "prepare_production_code_order",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+      if (!data?.prepared || !data?.codeOrder?.id || !data?.item?.id) {
+        throw new Error("Сервер не подтвердил создание черновика ЧЗ.");
+      }
+
+      await loadChzOrderStatus();
+      setChzMessage("Черновик ЧЗ создан и связан с производственным заказом. В СУЗ ничего не отправлено.");
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось подготовить черновик ЧЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
   async function prepareSuzSubmission() {
     if (!sourceOrder?.id) return;
 
@@ -1073,8 +1103,26 @@ ${labels.map((label) => `
                   )}
                 </div>
               ) : (
-                <div style={emptySmallStyle}>
-                  Связанный черновик ЧЗ для этого задания не найден.
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={emptySmallStyle}>
+                    Связанный черновик ЧЗ для этого задания не найден.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void prepareMissingChzDraft()}
+                    disabled={chzLoading || !sourceOrder?.id}
+                    style={{ ...primaryBlueButtonStyle, justifySelf: "start" }}
+                  >
+                    Подготовить черновик ЧЗ для этого заказа
+                  </button>
+                  <div style={{ color: "#64748b", fontSize: 12 }}>
+                    По GTIN изделия и количеству производственного заказа. В СУЗ коды пока не заказываются.
+                  </div>
+                  {chzError && (
+                    <div role="alert" style={{ padding: 10, borderRadius: 10, background: "#fef2f2", color: "#b91c1c" }}>
+                      {chzError}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
