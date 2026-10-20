@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import { getCryptoProCertificates, signChallengeWithCryptoPro, type CryptoProCertificateInfo } from "../integrations/cryptopro";
+import { checkChzSignature } from "../integrations/chzSignatureCheck";
 
 type Challenge = {
   uuid: string;
@@ -145,6 +146,7 @@ export default function ChestnyZnakPage() {
   const [message, setMessage] = useState("");
 
   const configurationReady = Boolean(omsId.trim() && omsConnection.trim());
+  const signatureCheck = useMemo(() => signature.trim() ? checkChzSignature(signature) : null, [signature]);
 
   useEffect(() => {
     void loadServerStatus();
@@ -499,6 +501,8 @@ export default function ChestnyZnakPage() {
       if (!configurationReady) throw new Error("Сначала укажите OMS ID и идентификатор соединения.");
       const signatureValue = String(signatureOverride || signature).trim();
       if (!signatureValue) throw new Error("Не получена подпись УКЭП.");
+      const structure = checkChzSignature(signatureValue);
+      if (!structure.ok) throw new Error(`Подпись не отправлена в ЧЗ: ${structure.details}`);
 
       const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
         body: {
@@ -680,10 +684,15 @@ export default function ChestnyZnakPage() {
               placeholder="Вставьте подпись Base64"
               style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace" }}
             />
+            {signatureCheck && (
+              <div role="status" style={{ fontSize: 12, color: signatureCheck.ok ? "#166534" : "#b91c1c" }}>
+                {signatureCheck.ok ? "Локальная проверка: " : "Ошибка структуры: "}{signatureCheck.details}
+              </div>
+            )}
             <button
               type="button"
               onClick={() => void signIn()}
-              disabled={loading || !challenge || !signature.trim() || !configurationReady}
+              disabled={loading || !challenge || !signature.trim() || !configurationReady || signatureCheck?.ok === false}
               style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "10px 14px", background: loading || !challenge || !signature.trim() || !configurationReady ? "#94a3b8" : "#0f172a", color: "#fff", fontWeight: 900 }}
             >
               Авторизоваться с ручной подписью
