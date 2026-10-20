@@ -72,6 +72,9 @@ export type ProductionBatch = {
   started_at: string | null;
   completed_at: string | null;
   created_at: string | null;
+  chz_gtin?: string | null;
+  chz_codes_allocated?: number | null;
+  chz_labels_printed_at?: string | null;
 };
 
 export type ProductItem = {
