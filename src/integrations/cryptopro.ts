@@ -158,7 +158,7 @@ export async function signChallengeWithCryptoPro(
     const signature = await signedData.SignCades(
       signer,
       plugin.CADESCOM_CADES_BES,
-      true,
+      false, // True API simpleSignIn requires an attached CMS/CAdES signature.
     );
 
     return String(signature || "").replace(/\s+/g, "");
@@ -181,7 +181,7 @@ export async function signChallengeWithCryptoPro(
 }
 
 export type CryptoProDetachedVerification = {
-  matchedEncoding: "utf8" | "utf16le" | null;
+  matchedEncoding: "utf8" | "utf16le" | "attached" | null;
   message: string;
 };
 
@@ -238,4 +238,20 @@ export async function verifyDetachedSignatureWithCryptoPro(
       };
     }
   }
+}
+
+/** Verify the embedded CMS/CAdES signature locally via CryptoPro.
+ * This confirms cryptographic integrity of the attached content, not whether
+ * the embedded text matches a particular True API challenge or grants access.
+ */
+export async function verifyAttachedSignatureWithCryptoPro(
+  signature: string,
+): Promise<CryptoProDetachedVerification> {
+  const plugin = await getPlugin();
+  const signedData = await plugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+  await signedData.VerifyCades(signature.replace(/\s+/g, ""), plugin.CADESCOM_CADES_BES, false);
+  return {
+    matchedEncoding: "attached",
+    message: "КриптоПро подтвердил действительность присоединённой подписи. Соответствие вложенного текста запросу и права в ЧЗ отдельно не проверены.",
+  };
 }
