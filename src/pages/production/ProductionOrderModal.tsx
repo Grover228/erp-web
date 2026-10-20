@@ -426,9 +426,6 @@ export default function ProductionOrderModal({
     '<svg viewBox="0 0 32 32" aria-label="Бережная стирка 30 градусов"><path d="M3 7 Q7 4 11 7 T19 7 T29 7 L26 27 H6 Z M7 30 H25" fill="none" stroke="#000" stroke-width="2"/><text x="16" y="21" font-size="12" text-anchor="middle" font-weight="700" font-family="Arial">30</text></svg>',
     '<svg viewBox="0 0 32 32" aria-label="Не отбеливать"><path d="M16 4 L29 27 H3 Z M3 3 L29 29 M29 3 L3 29" fill="none" stroke="#000" stroke-width="2"/></svg>',
     '<svg viewBox="0 0 32 32" aria-label="Не сушить в барабане"><rect x="4" y="4" width="24" height="24" fill="none" stroke="#000" stroke-width="2"/><circle cx="16" cy="16" r="9" fill="none" stroke="#000" stroke-width="2"/><path d="M4 4 L28 28 M28 4 L4 28" stroke="#000" stroke-width="2"/></svg>',
-    '<svg viewBox="0 0 32 32" aria-label="Гладить при низкой температуре"><path d="M4 25 H29 L25 12 H8 Z" fill="none" stroke="#000" stroke-width="2"/><circle cx="17" cy="20" r="1.7" fill="#000"/></svg>',
-    '<svg viewBox="0 0 32 32" aria-label="Сушить горизонтально"><rect x="4" y="4" width="24" height="24" fill="none" stroke="#000" stroke-width="2"/><path d="M8 16 H24" stroke="#000" stroke-width="2"/></svg>',
-    '<svg viewBox="0 0 32 32" aria-label="Не выкручивать"><path d="M7 12 C7 5 14 5 16 12 C18 19 25 19 25 12 M7 20 C7 27 14 27 16 20 C18 13 25 13 25 20 M3 3 L29 29" fill="none" stroke="#000" stroke-width="2"/></svg>',
   ].join("");
 
   function printUnifiedLabels() {
@@ -510,7 +507,7 @@ export default function ProductionOrderModal({
   .barcode-wrap { margin-top: auto; padding-top: .7mm; text-align: center; }
   .barcode { width: 100%; height: 8mm; object-fit: fill; display: block; }
   .barcode-number { font: 6.2pt monospace; line-height: 1; letter-spacing: .15mm; margin-top: .25mm; }
-  .care { display: flex; gap: .3mm; justify-content: space-between; align-items: center; margin-top: 1mm; height: 4.4mm; }
+  .care { display: flex; gap: 1.7mm; justify-content: center; align-items: center; margin-top: 1mm; height: 4.4mm; }
   .care svg { width: 4.3mm; height: 4.3mm; flex: 0 0 4.3mm; display: block; }
   .no-barcode { font-size: 6pt; border: .25mm solid #999; padding: 1mm; text-align: center; }
   @media screen {
