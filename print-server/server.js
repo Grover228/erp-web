@@ -91,13 +91,37 @@ function encodeDataMatrixValue(value) {
 }
 
 function splitHumanCode(value) {
-  const printable = String(value || "")
-    .replace(/[\x00-\x1f\x7f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  const code = String(value || "").replace(/^\]d2/, "");
+  if (!/^01\d{14}21/.test(code)) throw new Error("Invalid GS1 01/21 marking code");
+  const serial = code.slice(18).split("\x1d")[0];
+  if (!serial || serial.length > 20) throw new Error("Invalid CHZ serial for label");
+  return ["(01)" + code.slice(2, 16), "(21)" + serial];
+}
 
-  const middle = Math.ceil(printable.length / 2);
-  return [printable.slice(0, middle), printable.slice(middle)];
+/** 6 care symbols for cotton knitwear; all coordinates in 203-dpi TSPL dots.
+ * Symbols occupy x=218..449, y=270..310, safely below the barcode.
+ */
+function buildCareSymbolsTspl() {
+  return [
+    // Gentle wash 30 C
+    "DIAGONAL 221,277,224,300,2", "DIAGONAL 250,277,247,300,2",
+    "BAR 221,276,29,2", "BAR 224,299,23,2", "BAR 226,307,19,2",
+    'TEXT 225,284,"1",0,1,1,"30"',
+    // Do not bleach: crossed triangle
+    "DIAGONAL 258,302,274,273,2", "DIAGONAL 274,273,290,302,2",
+    "BAR 258,302,32,2", "DIAGONAL 259,275,289,306,2", "DIAGONAL 289,275,259,306,2",
+    // No tumble drying: crossed circle in square
+    "BOX 295,274,324,303,2", "CIRCLE 299,278,21,2",
+    "DIAGONAL 296,275,323,302,2", "DIAGONAL 323,275,296,302,2",
+    // Iron, one dot (low heat)
+    "DIAGONAL 337,281,363,281,2", "DIAGONAL 363,281,367,301,2",
+    "BAR 335,301,32,2", "CIRCLE 348,289,5,2",
+    // Dry flat
+    "BOX 374,274,403,303,2", "BAR 379,287,19,2",
+    // Do not wring: crossed twisted loop
+    "CIRCLE 414,279,24,2", "DIAGONAL 413,275,444,306,2",
+    "DIAGONAL 444,275,413,306,2",
+  ].join("\n");
 }
 
 function buildProductBarcode(data) {
@@ -105,19 +129,19 @@ function buildProductBarcode(data) {
 
   if (/^\d{13}$/.test(barcode)) {
     return [
-      `BARCODE 215,252,"EAN13",38,0,0,2,2,"${barcode}"`,
-      `TEXT 255,296,"1",0,1,1,"${barcode}"`,
+      `BARCODE 215,201,"EAN13",38,0,0,2,2,"${barcode}"`,
+      `TEXT 255,245,"1",0,1,1,"${barcode}"`,
     ].join("\n");
   }
 
   if (barcode) {
     return [
-      `BARCODE 215,252,"128",38,0,0,1,2,"${escapeTsplText(barcode)}"`,
-      `TEXT 235,296,"1",0,1,1,"${escapeTsplText(barcode)}"`,
+      `BARCODE 215,201,"128",38,0,0,1,2,"${escapeTsplText(barcode)}"`,
+      `TEXT 235,245,"1",0,1,1,"${escapeTsplText(barcode)}"`,
     ].join("\n");
   }
 
-  return `TEXT 230,270,"1",0,1,1,"barcode not set"`;
+  return `TEXT 230,245,"1",0,1,1,"barcode not set"`;
 }
 
 function buildChzLabelTspl(data) {
@@ -129,6 +153,7 @@ function buildChzLabelTspl(data) {
   const [codeLine1, codeLine2] = splitHumanCode(data.code);
   const datamatrix = encodeDataMatrixValue(data.code);
   const barcodeCommands = buildProductBarcode(data);
+  const careCommands = buildCareSymbolsTspl();
 
   return `
 SIZE 58 mm,40 mm
@@ -153,6 +178,7 @@ TEXT 20,205,"1",0,1,1,"${escapeTsplText(codeLine1)}"
 TEXT 20,220,"1",0,1,1,"${escapeTsplText(codeLine2)}"
 
 ${barcodeCommands}
+${careCommands}
 
 PRINT 1
 `;
