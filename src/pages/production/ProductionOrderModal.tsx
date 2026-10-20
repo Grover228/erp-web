@@ -413,6 +413,24 @@ export default function ProductionOrderModal({
     return canvas.toDataURL("image/png");
   }
 
+
+  function humanChzLines(value: string): [string, string] {
+    const code = String(value || "").replace(/^\]d2/, "");
+    if (!/^01\d{14}21/.test(code)) throw new Error("Код ЧЗ не содержит GS1 (01)/(21); печать остановлена.");
+    const serial = code.slice(18).split("\x1d")[0];
+    if (!serial || serial.length > 20) throw new Error("Серийный номер кода ЧЗ не помещается на этикетку.");
+    return ["(01)" + code.slice(2, 16), "(21)" + serial];
+  }
+
+  const careHtml = [
+    '<svg viewBox="0 0 32 32" aria-label="Бережная стирка 30 градусов"><path d="M3 7 Q7 4 11 7 T19 7 T29 7 L26 27 H6 Z M7 30 H25" fill="none" stroke="#000" stroke-width="2"/><text x="16" y="21" font-size="12" text-anchor="middle" font-weight="700" font-family="Arial">30</text></svg>',
+    '<svg viewBox="0 0 32 32" aria-label="Не отбеливать"><path d="M16 4 L29 27 H3 Z M3 3 L29 29 M29 3 L3 29" fill="none" stroke="#000" stroke-width="2"/></svg>',
+    '<svg viewBox="0 0 32 32" aria-label="Не сушить в барабане"><rect x="4" y="4" width="24" height="24" fill="none" stroke="#000" stroke-width="2"/><circle cx="16" cy="16" r="9" fill="none" stroke="#000" stroke-width="2"/><path d="M4 4 L28 28 M28 4 L4 28" stroke="#000" stroke-width="2"/></svg>',
+    '<svg viewBox="0 0 32 32" aria-label="Гладить при низкой температуре"><path d="M4 25 H29 L25 12 H8 Z" fill="none" stroke="#000" stroke-width="2"/><circle cx="17" cy="20" r="1.7" fill="#000"/></svg>',
+    '<svg viewBox="0 0 32 32" aria-label="Сушить горизонтально"><rect x="4" y="4" width="24" height="24" fill="none" stroke="#000" stroke-width="2"/><path d="M8 16 H24" stroke="#000" stroke-width="2"/></svg>',
+    '<svg viewBox="0 0 32 32" aria-label="Не выкручивать"><path d="M7 12 C7 5 14 5 16 12 C18 19 25 19 25 12 M7 20 C7 27 14 27 16 20 C18 13 25 13 25 20 M3 3 L29 29" fill="none" stroke="#000" stroke-width="2"/></svg>',
+  ].join("");
+
   function printUnifiedLabels() {
     if (!receivedSuzCodes.length) {
       setChzError("Сначала получите коды Честного знака.");
@@ -432,6 +450,7 @@ export default function ProductionOrderModal({
       const labels = receivedSuzCodes.map((code, index) => ({
         index: index + 1,
         dm: renderDataMatrixDataUrl(code),
+        human: humanChzLines(code),
       }));
 
       const popup = window.open("", "_blank", "width=900,height=700");
@@ -474,7 +493,7 @@ export default function ProductionOrderModal({
     min-width: 0;
   }
   .dm { width: 18.5mm; height: 18.5mm; object-fit: contain; image-rendering: pixelated; }
-  .dm-caption { font-size: 5.2pt; font-weight: 700; text-align: center; line-height: 1.05; }
+  .dm-code { font: 5pt/1.15 monospace; text-align: center; width: 20mm; white-space: nowrap; letter-spacing: -.1pt; }
   .right {
     min-width: 0;
     border-left: .25mm solid #222;
@@ -491,6 +510,8 @@ export default function ProductionOrderModal({
   .barcode-wrap { margin-top: auto; padding-top: .7mm; text-align: center; }
   .barcode { width: 100%; height: 8mm; object-fit: fill; display: block; }
   .barcode-number { font: 6.2pt monospace; line-height: 1; letter-spacing: .15mm; margin-top: .25mm; }
+  .care { display: flex; gap: .3mm; justify-content: space-between; align-items: center; margin-top: 1mm; height: 4.4mm; }
+  .care svg { width: 4.3mm; height: 4.3mm; flex: 0 0 4.3mm; display: block; }
   .no-barcode { font-size: 6pt; border: .25mm solid #999; padding: 1mm; text-align: center; }
   @media screen {
     body { background: #e5e7eb; padding: 8mm; }
@@ -503,7 +524,7 @@ ${labels.map((label) => `
   <section class="label">
     <div class="left">
       <img class="dm" src="${label.dm}" alt="DataMatrix">
-      <div class="dm-caption">ЧЕСТНЫЙ ЗНАК<br>DATA MATRIX</div>
+      <div class="dm-code"><div>${esc(label.human[0])}</div><div>${esc(label.human[1])}</div></div>
     </div>
     <div class="right">
       <div class="brand">${esc(labelProductData.brand)}</div>
@@ -516,6 +537,7 @@ ${labels.map((label) => `
           ? `<img class="barcode" src="${barcodeImage}" alt="Штрихкод"><div class="barcode-number">${esc(labelProductData.barcode)}</div>`
           : `<div class="no-barcode">Штрихкод товара не заполнен</div>`}
       </div>
+      <div class="care">${careHtml}</div>
     </div>
   </section>`).join("")}
 <script>
