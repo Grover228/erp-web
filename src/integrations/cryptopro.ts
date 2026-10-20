@@ -179,3 +179,63 @@ export async function signChallengeWithCryptoPro(
     }
   }
 }
+
+export type CryptoProDetachedVerification = {
+  matchedEncoding: "utf8" | "utf16le" | null;
+  message: string;
+};
+
+/** Verify a detached CMS/CAdES signature against the exact current challenge.
+ * Runs in the browser's CryptoPro extension; nothing is sent to ERP or Supabase.
+ */
+export async function verifyDetachedSignatureWithCryptoPro(
+  challenge: string,
+  signature: string,
+): Promise<CryptoProDetachedVerification> {
+  const plugin = await getPlugin();
+  const cleanSignature = signature.replace(/\s+/g, "");
+
+  async function verify(encodedContent: string): Promise<void> {
+    const signedData = await plugin.CreateObjectAsync("CAdESCOM.CadesSignedData");
+    await signedData.propset_ContentEncoding(plugin.CADESCOM_BASE64_TO_BINARY);
+    await signedData.propset_Content(encodedContent);
+    await signedData.VerifyCades(cleanSignature, plugin.CADESCOM_CADES_BES, true);
+  }
+
+  try {
+    await verify(utf8ToBase64(challenge));
+    return {
+      matchedEncoding: "utf8",
+      message: "КриптоПро подтвердил подпись именно этой строки в UTF-8. Это не проверяет права в ЧЗ.",
+    };
+  } catch (utf8Error) {
+    // Browser demo pages sometimes sign UCS-2/UTF-16LE by default,
+    // whereas our native ERP signing path explicitly signs UTF-8 bytes.
+    const bytes = new Uint8Array(challenge.length * 2);
+    for (let i = 0; i < challenge.length; i += 1) {
+      const code = challenge.charCodeAt(i);
+      bytes[i * 2] = code & 0xff;
+      bytes[i * 2 + 1] = code >>> 8;
+    }
+
+    try {
+      await verify(bytesToBase64(bytes));
+      return {
+        matchedEncoding: "utf16le",
+        message: "Подпись действительна для UTF-16LE, но НЕ совпадает с UTF-8 исходной строки. Проверьте кодировку на странице КриптоПро перед авторизацией.",
+      };
+    } catch (utf16Error) {
+      const getReason = (cause: unknown) => {
+        const pluginError = window.cadesplugin?.getLastError;
+        const raw = typeof pluginError === "function"
+          ? String(pluginError(cause))
+          : cause instanceof Error ? cause.message : String(cause);
+        return raw.slice(0, 240);
+      };
+      return {
+        matchedEncoding: null,
+        message: `КриптоПро не подтвердил подпись для этой строки ни в UTF-8, ни в UTF-16LE. UTF-8: ${getReason(utf8Error)}; UTF-16LE: ${getReason(utf16Error)}. Проверьте исходную строку и сертификат.`,
+      };
+    }
+  }
+}
