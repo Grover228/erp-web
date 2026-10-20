@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
-import { getCryptoProCertificates, signChallengeWithCryptoPro, verifyDetachedSignatureWithCryptoPro, type CryptoProCertificateInfo, type CryptoProDetachedVerification } from "../integrations/cryptopro";
+import { getCryptoProCertificates, signChallengeWithCryptoPro, verifyDetachedSignatureWithCryptoPro, verifyAttachedSignatureWithCryptoPro, type CryptoProCertificateInfo, type CryptoProDetachedVerification } from "../integrations/cryptopro";
 import { checkChzSignature } from "../integrations/chzSignatureCheck";
 
 type Challenge = {
@@ -275,6 +275,9 @@ export default function ChestnyZnakPage() {
       if (!gisChallenge) throw new Error("Сначала получите данные для авторизации ГИС МТ.");
       const signatureValue = String(signatureOverride || gisSignature).trim();
       if (!signatureValue) throw new Error("Не получена подпись УКЭП для ГИС МТ.");
+      const structure = checkChzSignature(signatureValue);
+      if (!structure.ok) throw new Error(`Подпись ГИС МТ не отправлена: ${structure.details}`);
+      if (structure.mode !== "attached") throw new Error("Для авторизации ГИС МТ нужна присоединённая подпись. Снимите галочку «Отделённая подпись» в КриптоПро.");
 
       const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
         body: {
@@ -423,7 +426,7 @@ export default function ChestnyZnakPage() {
       if (!uuid || !challengeData) throw new Error("Честный ЗНАК не вернул данные для подписи.");
 
       setChallenge({ uuid, data: challengeData, apiVersion });
-      setMessage("Данные для подписи получены. Подпишите строку своей УКЭП и вставьте подпись Base64 ниже.");
+      setMessage("Данные получены. Создайте присоединённую CAdES-BES подпись (снимите галочку «Отделённая подпись» в КриптоПро) и вставьте Base64 ниже.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось получить данные для подписи.");
     } finally {
@@ -502,9 +505,9 @@ export default function ChestnyZnakPage() {
       setSignatureVerification(null);
       const structure = checkChzSignature(checkedSignature);
       if (!structure.ok) throw new Error(structure.details);
-      if (structure.mode !== "detached") throw new Error("Для этого сценария требуется отделённая CMS-подпись.");
-
-      const result = await verifyDetachedSignatureWithCryptoPro(checkedChallenge, checkedSignature);
+      const result = structure.mode === "attached"
+        ? await verifyAttachedSignatureWithCryptoPro(checkedSignature)
+        : await verifyDetachedSignatureWithCryptoPro(checkedChallenge, checkedSignature);
       setSignatureVerification({ challengeData: checkedChallenge, signature: checkedSignature, result });
     } catch (cause) {
       const reason = cause instanceof Error ? cause.message : String(cause);
@@ -534,6 +537,7 @@ export default function ChestnyZnakPage() {
       if (!signatureValue) throw new Error("Не получена подпись УКЭП.");
       const structure = checkChzSignature(signatureValue);
       if (!structure.ok) throw new Error(`Подпись не отправлена в ЧЗ: ${structure.details}`);
+      if (structure.mode !== "attached") throw new Error("Подпись не отправлена: Честному ЗНАКу нужна присоединённая подпись. Снимите галочку «Отделённая подпись» в КриптоПро и создайте подпись заново.");
 
       const { data, error: invokeError } = await supabase.functions.invoke("chestny-znak-auth", {
         body: {
@@ -652,7 +656,7 @@ export default function ChestnyZnakPage() {
         <div>
           <div style={{ fontWeight: 900, fontSize: 18 }}>3. Подпись УКЭП через КриптоПро</div>
           <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-            Подпись выполняется локально на этом компьютере. Закрытый ключ и PIN Рутокена не передаются в ERP или Supabase — в Честный ЗНАК уходит только готовая CAdES-BES подпись.
+            Подпись выполняется локально на этом компьютере. Закрытый ключ и PIN Рутокена не передаются в ERP или Supabase — в Честный ЗНАК уходит только готовая присоединённая CAdES-BES подпись.
           </div>
         </div>
 
@@ -706,7 +710,7 @@ export default function ChestnyZnakPage() {
         </button>
 
         <details>
-          <summary style={{ cursor: "pointer", color: "#64748b", fontWeight: 800 }}>Ручная подпись Base64 — резервный режим</summary>
+          <summary style={{ cursor: "pointer", color: "#64748b", fontWeight: 800 }}>Ручная присоединённая подпись Base64 — резервный режим</summary>
           <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
             <textarea
               value={signature}
@@ -715,18 +719,22 @@ export default function ChestnyZnakPage() {
               placeholder="Вставьте подпись Base64"
               style={{ ...inputStyle, resize: "vertical", fontFamily: "monospace" }}
             />
+            <div style={{ color: "#92400e", fontSize: 13 }}>
+              В КриптоПро снимите галочку «Отделённая подпись». Тестовый стенд подтвердил успешную авторизацию с присоединённой подписью.
+            </div>
             {signatureCheck && (
-              <div role="status" style={{ fontSize: 12, color: signatureCheck.ok ? "#166534" : "#b91c1c" }}>
+              <div role="status" style={{ fontSize: 12, color: signatureCheck.ok && signatureCheck.mode === "attached" ? "#166534" : "#b91c1c" }}>
                 {signatureCheck.ok ? "Локальная проверка: " : "Ошибка структуры: "}{signatureCheck.details}
+                {signatureCheck.ok && signatureCheck.mode === "detached" && " Для авторизации создайте присоединённую подпись."}
               </div>
             )}
             <button
               type="button"
               onClick={() => void verifySignatureLocally()}
-              disabled={loading || !challenge || !signatureCheck?.ok || signatureCheck.mode !== "detached"}
+              disabled={loading || !challenge || !signatureCheck?.ok}
               style={{
                 justifySelf: "start", border: "1px solid #0f766e", borderRadius: 10, padding: "10px 14px",
-                background: loading || !challenge || !signatureCheck?.ok || signatureCheck.mode !== "detached" ? "#cbd5e1" : "#f0fdfa",
+                background: loading || !challenge || !signatureCheck?.ok ? "#cbd5e1" : "#f0fdfa",
                 color: "#115e59", fontWeight: 900, cursor: loading ? "wait" : "pointer",
               }}
             >
@@ -735,7 +743,7 @@ export default function ChestnyZnakPage() {
             {signatureVerification && signatureVerification.challengeData === challenge?.data && signatureVerification.signature === signature && (
               <div role="status" style={{
                 border: "1px solid #cbd5e1", borderRadius: 10, padding: 12,
-                color: signatureVerification.result.matchedEncoding === "utf8" ? "#166534" : "#92400e",
+                color: signatureVerification.result.matchedEncoding === "utf8" || signatureVerification.result.matchedEncoding === "attached" ? "#166534" : "#92400e",
                 fontSize: 13, whiteSpace: "pre-wrap",
               }}>
                 <b>Результат криптографической проверки:</b> {signatureVerification.result.message}
@@ -744,7 +752,7 @@ export default function ChestnyZnakPage() {
             <button
               type="button"
               onClick={() => void signIn()}
-              disabled={loading || !challenge || !signature.trim() || !configurationReady || signatureCheck?.ok === false}
+              disabled={loading || !challenge || !signature.trim() || !configurationReady || signatureCheck?.ok !== true || signatureCheck.mode !== "attached"}
               style={{ justifySelf: "start", border: 0, borderRadius: 10, padding: "10px 14px", background: loading || !challenge || !signature.trim() || !configurationReady ? "#94a3b8" : "#0f172a", color: "#fff", fontWeight: 900 }}
             >
               Авторизоваться с ручной подписью
