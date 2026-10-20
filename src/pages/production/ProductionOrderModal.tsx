@@ -55,6 +55,7 @@ type ProductionOrderModalProps = {
   onClose: () => void;
   onOpenQrHistory: (order: ProductionOrder) => void;
   onPrintBatchQr: (batch: ProductionBatch) => void;
+  onPrintChzLabels: (batch: ProductionBatch) => Promise<string | null>;
   onDeleteOrder: (order: ProductionOrder) => void;
   onStartOperation: (
     order: ProductionOrder,
@@ -98,6 +99,7 @@ export default function ProductionOrderModal({
   onClose,
   onOpenQrHistory,
   onPrintBatchQr,
+  onPrintChzLabels,
   onDeleteOrder,
   onStartOperation,
   onOpenFinishOperation,
@@ -119,6 +121,9 @@ export default function ProductionOrderModal({
 
   const [activeTab, setActiveTab] = useState<OrderModalTab>("overview");
   const [chzLoading, setChzLoading] = useState(false);
+  const [chzBatchPrintingId, setChzBatchPrintingId] = useState<string | null>(null);
+  const [chzBatchPrintMessage, setChzBatchPrintMessage] = useState("");
+  const [chzBatchPrintError, setChzBatchPrintError] = useState("");
   const [chzError, setChzError] = useState("");
   const [chzMessage, setChzMessage] = useState("");
   const [chzOrder, setChzOrder] = useState<any>(null);
@@ -618,6 +623,23 @@ ${labels.map((label) => `
   const printedBatchIds = new Set(qrPrintLogs.map((log) => log.batch_id));
   const printedBatchesCount = printedBatchIds.size;
   const lastPrintAt = qrPrintLogs[0]?.printed_at || null;
+
+
+  async function printChzForBatch(batch: ProductionBatch) {
+    setChzBatchPrintingId(batch.id);
+    setChzBatchPrintMessage("");
+    setChzBatchPrintError("");
+    try {
+      const result = await onPrintChzLabels(batch);
+      if (result) setChzBatchPrintMessage(result);
+    } catch (cause) {
+      setChzBatchPrintError(
+        cause instanceof Error ? cause.message : "Не удалось напечатать этикетки ЧЗ.",
+      );
+    } finally {
+      setChzBatchPrintingId(null);
+    }
+  }
 
   function getBatchPrintInfo(batchId: string) {
     const logs = qrPrintLogs.filter((log) => log.batch_id === batchId);
@@ -1307,6 +1329,16 @@ ${labels.map((label) => `
                 </div>
               </div>
             </div>
+            {chzBatchPrintMessage && (
+              <div role="status" style={{ marginBottom: 8, padding: 10, borderRadius: 9, background: "#f0fdf4", color: "#166534", fontSize: 13 }}>
+                {chzBatchPrintMessage}
+              </div>
+            )}
+            {chzBatchPrintError && (
+              <div role="alert" style={{ marginBottom: 8, padding: 10, borderRadius: 9, background: "#fef2f2", color: "#b91c1c", fontSize: 13 }}>
+                {chzBatchPrintError}
+              </div>
+            )}
 
             {jobBatches.length === 0 ? (
               <div style={emptySmallStyle}>
@@ -1325,17 +1357,43 @@ ${labels.map((label) => `
 
                   return (
                     <div key={batch.id} style={batchRowStyle}>
-                      <div style={{ minWidth: 0 }}>
+                      <div style={{ minWidth: 0, flex: "1 1 240px" }}>
                         <div style={batchTitleStyle}>{batch.batch_number}</div>
                         <div style={batchMetaStyle}>
                           {getStatusLabel(batch.status)} · {batchTotal} шт ·
                           годно на текущей операции {batchCompleted} · остаток{" "}
                           {batchLeft}
                         </div>
+                        {(chzOrder?.id || batch.chz_gtin) && (
+                          <div style={{ marginTop: 6, color: "#166534", fontSize: 12, fontWeight: 750 }}>
+                            ЧЗ: закреплено {Number(batch.chz_codes_allocated || 0)} из {batchTotal} кодов
+                            {" · "}
+                            {batch.chz_labels_printed_at
+                              ? `Этикетки печатались ${formatDateTime(batch.chz_labels_printed_at)}`
+                              : "Этикетки не печатались"}
+                          </div>
+                        )}
                       </div>
 
                       <div style={batchActionsStyle}>
                         <span style={qrCreatedBadgeStyle}>QR создан</span>
+                        {(chzOrder?.id || batch.chz_gtin) && (
+                          <button
+                            type="button"
+                            onClick={() => void printChzForBatch(batch)}
+                            disabled={actionLoading || chzBatchPrintingId !== null}
+                            style={{
+                              ...printBatchButtonStyle,
+                              background: "#f0fdf4",
+                              borderColor: "#86efac",
+                              color: "#166534",
+                              opacity: actionLoading || chzBatchPrintingId !== null ? 0.6 : 1,
+                            }}
+                            title="Напечатать только коды Честного ЗНАКа, закреплённые за этой пачкой"
+                          >
+                            {chzBatchPrintingId === batch.id ? "Печать ЧЗ…" : `Этикетки ЧЗ · ${batchTotal} шт`}
+                          </button>
+                        )}
                         {(() => {
                           const printInfo = getBatchPrintInfo(batch.id);
                           return (
