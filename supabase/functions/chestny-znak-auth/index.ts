@@ -454,7 +454,7 @@ Deno.serve(async (req: Request) => {
     if (action === "challenge" || action === "gis_challenge") {
       const errors: string[] = [];
 
-      for (const apiVersion of ["v3", "v4"] as const) {
+      for (const apiVersion of ["v4", "v3"] as const) {
         try {
           const response = await fetch(`${TRUE_API_BASES[apiVersion]}/auth/key`, {
             method: "GET",
