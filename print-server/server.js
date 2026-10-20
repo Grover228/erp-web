@@ -27,6 +27,8 @@ app.get("/", (req, res) => {
     mode: "TSPL RAW PRINT SERVER CP1251",
     printer: PRINTER_NAME,
     queueWorker: PRINTER_AGENT_TOKEN ? "enabled" : "disabled",
+    agentProtocol: 2,
+    supportsChzLabels: true,
   });
 });
 
@@ -254,6 +256,8 @@ async function queueRequest(action, extra = {}) {
     },
     body: JSON.stringify({
       action,
+      supportsChzLabels: true,
+      agentProtocol: 2,
       ...extra,
     }),
   });
@@ -282,10 +286,14 @@ async function processQueueOnce() {
 
     try {
       const payload = job.payload || {};
-      const tspl =
-        job.job_type === "chz_labels"
-          ? buildChzLabelsTspl(payload.labels || [])
-          : buildTspl(payload);
+      let tspl;
+      if (job.job_type === "chz_labels") {
+        tspl = buildChzLabelsTspl(payload.labels || []);
+      } else if (job.job_type === "qr" || job.job_type === "test") {
+        tspl = buildTspl(payload);
+      } else {
+        throw new Error("Unsupported print job type: " + String(job.job_type));
+      }
       await writeToPrinter(tspl);
       await queueRequest("complete", { jobId: job.id });
 
