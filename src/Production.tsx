@@ -1245,7 +1245,17 @@ export default function Production({
         .select("id, status")
         .single();
 
-      if (queueError) throw queueError;
+      if (queueError) {
+        const details = [queueError.message, queueError.details, queueError.hint]
+          .filter((value): value is string => typeof value === "string" && Boolean(value))
+          .join(" · ");
+        const hint = queueError.code === "23514"
+          ? " Тип задания печати не разрешён настройкой базы данных."
+          : "";
+        throw new Error(
+          `Не удалось создать задание печати ЧЗ (код ${queueError.code || "неизвестен"}): ${details || "неизвестная ошибка"}.${hint}`,
+        );
+      }
       if (!job?.id) throw new Error("Не удалось создать задание печати этикеток");
 
       const result = await waitForPrintJob(job.id, Math.max(12000, labels.length * 900));
