@@ -102,25 +102,18 @@ function splitHumanCode(value) {
  * Symbols occupy x=218..449, y=270..310, safely below the barcode.
  */
 function buildCareSymbolsTspl() {
+  // Three care symbols centered below the product barcode (203-dpi TSPL).
   return [
-    // Gentle wash 30 C
-    "DIAGONAL 221,277,224,300,2", "DIAGONAL 250,277,247,300,2",
-    "BAR 221,276,29,2", "BAR 224,299,23,2", "BAR 226,307,19,2",
-    'TEXT 225,284,"1",0,1,1,"30"',
-    // Do not bleach: crossed triangle
-    "DIAGONAL 258,302,274,273,2", "DIAGONAL 274,273,290,302,2",
-    "BAR 258,302,32,2", "DIAGONAL 259,275,289,306,2", "DIAGONAL 289,275,259,306,2",
-    // No tumble drying: crossed circle in square
-    "BOX 295,274,324,303,2", "CIRCLE 299,278,21,2",
-    "DIAGONAL 296,275,323,302,2", "DIAGONAL 323,275,296,302,2",
-    // Iron, one dot (low heat)
-    "DIAGONAL 337,281,363,281,2", "DIAGONAL 363,281,367,301,2",
-    "BAR 335,301,32,2", "CIRCLE 348,289,5,2",
-    // Dry flat
-    "BOX 374,274,403,303,2", "BAR 379,287,19,2",
-    // Do not wring: crossed twisted loop
-    "CIRCLE 414,279,24,2", "DIAGONAL 413,275,444,306,2",
-    "DIAGONAL 444,275,413,306,2",
+    // Gentle wash at 30 C.
+    "DIAGONAL 280,277,283,300,2", "DIAGONAL 309,277,306,300,2",
+    "BAR 280,276,29,2", "BAR 283,299,23,2", "BAR 285,307,19,2",
+    'TEXT 284,284,"1",0,1,1,"30"',
+    // Do not bleach.
+    "DIAGONAL 323,302,339,273,2", "DIAGONAL 339,273,355,302,2",
+    "BAR 323,302,32,2", "DIAGONAL 324,275,354,306,2", "DIAGONAL 354,275,324,306,2",
+    // Do not tumble dry.
+    "BOX 370,274,399,303,2", "CIRCLE 374,278,21,2",
+    "DIAGONAL 371,275,398,302,2", "DIAGONAL 398,275,371,302,2",
   ].join("\n");
 }
 
