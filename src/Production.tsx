@@ -1130,7 +1130,7 @@ export default function Production({
     return null;
   }
 
-  async function printChzLabelsForBatch(batchNumber: string) {
+  async function printChzLabelsForBatch(batchNumber: string): Promise<string | null> {
     try {
       setActionLoading(true);
       setMessage("");
@@ -1144,24 +1144,63 @@ export default function Production({
         throw new Error(`Пачка ${batchNumber} не найдена`);
       }
 
+      const required = Number(batch.quantity || 0);
+      if (!Number.isSafeInteger(required) || required <= 0) {
+        throw new Error("Некорректное количество изделий в пачке.");
+      }
+
+      // A print job already claimed by the agent must not be submitted again.
+      const { data: pendingJobs, error: pendingError } = await supabase
+        .from("print_jobs")
+        .select("id,status")
+        .eq("job_type", "chz_labels")
+        .contains("payload", { batchId: batch.id })
+        .in("status", ["pending", "claimed"])
+        .limit(1);
+      if (pendingError) throw pendingError;
+      if (pendingJobs?.length) {
+        throw new Error("Этикетки ЧЗ этой пачки уже находятся в очереди печати.");
+      }
+
       const { data: labelRows, error: labelsError } = await supabase.rpc(
         "get_chz_batch_label_payloads",
         { p_batch_id: batch.id },
       );
-
       if (labelsError) throw labelsError;
 
-      const rows = Array.isArray(labelRows) ? labelRows : [];
-      if (rows.length === 0) {
-        throw new Error("У этой пачки пока нет закреплённых кодов Честного ЗНАКа");
+      let rows = Array.isArray(labelRows) ? labelRows : [];
+      if (rows.length < required) {
+        // Assign only missing codes from the shared GTIN pool, if available.
+        // The DB function locks selected codes and preserves existing allocations.
+        const { error: allocateError } = await supabase.rpc(
+          "allocate_chz_codes_to_batch",
+          { p_batch_id: batch.id, p_quantity: required },
+        );
+        if (allocateError) throw allocateError;
+        const { data: refreshed, error: refreshedError } = await supabase.rpc(
+          "get_chz_batch_label_payloads",
+          { p_batch_id: batch.id },
+        );
+        if (refreshedError) throw refreshedError;
+        rows = Array.isArray(refreshed) ? refreshed : [];
+      }
+      if (rows.length !== required) {
+        throw new Error(
+          "В пачке закреплено " + rows.length + " из " + required +
+          " кодов ЧЗ. Печать неполного набора остановлена.",
+        );
+      }
+      const gtins = new Set(rows.map((row: any) => String(row.gtin || "")));
+      if (gtins.size !== 1 || gtins.has("")) {
+        throw new Error("В пачке найдены коды разных GTIN. Печать остановлена.");
       }
 
       const alreadyPrinted = rows.filter((row: any) => row.printed_at).length;
-      if (alreadyPrinted > 0) {
+      if (alreadyPrinted > 0 || batch.chz_labels_printed_at) {
         const confirmed = window.confirm(
           `У этой пачки уже печаталось этикеток: ${alreadyPrinted}. Повторно будут напечатаны те же самые коды, новые коды не выделяются. Продолжить?`,
         );
-        if (!confirmed) return;
+        if (!confirmed) return null;
       }
 
       const {
@@ -1216,22 +1255,22 @@ export default function Production({
       }
 
       if (result?.status === "printed") {
-        setMessage(
-          `Напечатано товарных этикеток ЧЗ: ${labels.length}. Пачка ${batchNumber}. Использованы те же закреплённые коды.`,
-        );
+        const printedMessage = `Напечатано товарных этикеток ЧЗ: ${labels.length}. Пачка ${batchNumber}. Использованы те же закреплённые коды.`;
+        setMessage(printedMessage);
         await loadProductionOrders();
-        return;
+        return printedMessage;
       }
 
-      setMessage(
-        `Этикетки ЧЗ для пачки ${batchNumber} поставлены в очередь: ${labels.length} шт.`,
-      );
+      const queuedMessage = `Этикетки ЧЗ для пачки ${batchNumber} поставлены в очередь: ${labels.length} шт. Это ещё не подтверждение печати.`;
+      setMessage(queuedMessage);
+      await loadProductionOrders();
+      return queuedMessage;
     } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Ошибка печати этикеток Честного ЗНАКа",
-      );
+      const message = error instanceof Error
+        ? error.message
+        : "Ошибка печати этикеток Честного ЗНАКа";
+      setError(message);
+      throw new Error(message);
     } finally {
       setActionLoading(false);
     }
@@ -2585,7 +2624,7 @@ export default function Production({
                   <button
                     type="button"
                     disabled={actionLoading}
-                    onClick={() => void printChzLabelsForBatch(generatedQr.batchNumber)}
+                    onClick={() => void printChzLabelsForBatch(generatedQr.batchNumber).catch(() => undefined)}
                     style={{
                       marginTop: 10,
                       border: 0,
@@ -2686,6 +2725,7 @@ export default function Production({
           }}
           onOpenQrHistory={openQrHistory}
           onPrintBatchQr={printBatchQr}
+          onPrintChzLabels={(batch) => printChzLabelsForBatch(batch.batch_number)}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2725,6 +2765,7 @@ export default function Production({
           }}
           onOpenQrHistory={openQrHistory}
           onPrintBatchQr={printBatchQr}
+          onPrintChzLabels={(batch) => printChzLabelsForBatch(batch.batch_number)}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
