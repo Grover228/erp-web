@@ -471,7 +471,9 @@ Deno.serve(async (req: Request) => {
 
           return json({ uuid, data, apiVersion });
         } catch (cause) {
-          errors.push(`${apiVersion}: ${cause instanceof Error ? cause.message : "ошибка запроса"}`);
+          const reason = cause instanceof Error ? cause.message : "ошибка запроса";
+          console.warn("chz_auth_challenge_fallback", JSON.stringify({ apiVersion, reason }));
+          errors.push(`${apiVersion}: ${reason}`);
         }
       }
 
