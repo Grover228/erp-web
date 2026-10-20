@@ -508,6 +508,16 @@ Deno.serve(async (req: Request) => {
         },
       );
 
+      console.info("chz_suz_signin_diagnostic", JSON.stringify({
+        apiVersion,
+        endpoint: "/auth/simpleSignIn/{omsConnection}",
+        omsConnectionProvided: Boolean(omsConnection),
+        innProvided: Boolean(inn),
+        httpStatus: response.status,
+        contentType: response.headers.get("content-type") || "missing",
+        upstreamRequestId: response.headers.get("x-request-id") || response.headers.get("x-correlation-id") || null,
+      }));
+
       const payload = await parseJsonResponse(response);
       const token = String(payload?.token || "");
       if (!token) throw new Error("Честный ЗНАК не вернул clientToken.");
