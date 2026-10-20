@@ -754,7 +754,7 @@ export default function ProductionPlanningPage() {
       setError("");
       setMessage("");
 
-      const { orderNumber } = await createProductionOrder({
+      const { orderId, orderNumber } = await createProductionOrder({
         product: launchItem.product,
         techCard,
         quantity,
@@ -762,8 +762,43 @@ export default function ProductionPlanningPage() {
         productionPlanItemId: launchItem.id,
       });
 
+      let chzNote = "";
+      try {
+        const { data: mapping, error: mappingError } = await supabase.functions.invoke(
+          "chestny-znak-auth",
+          { body: { action: "production_chz_info", productId: launchItem.product_id } },
+        );
+        if (mappingError) throw mappingError;
+        if (mapping?.error) throw new Error(String(mapping.error));
+
+        if (mapping?.mapped && mapping?.mapping?.gtin) {
+          const { data, error: draftError } = await supabase.functions.invoke(
+            "chestny-znak-auth",
+            {
+              body: {
+                action: "prepare_production_code_order",
+                productionOrderId: orderId,
+              },
+            },
+          );
+          if (draftError) throw draftError;
+          if (data?.error) throw new Error(String(data.error));
+          if (!data?.prepared || !data?.codeOrder?.id || !data?.item?.id) {
+            throw new Error("Сервер не подтвердил создание черновика ЧЗ.");
+          }
+          chzNote = ` Черновик ЧЗ подготовлен: ${quantity} кодов, GTIN ${String(mapping.mapping.gtin)}. В СУЗ ничего не отправлено.`;
+        } else {
+          chzNote = " Изделие не связано с GTIN: черновик ЧЗ не создавался.";
+        }
+      } catch (chzError) {
+        chzNote = " Черновик ЧЗ не подготовлен; его можно создать в карточке заказа.";
+        setError(
+          `Производственный заказ ${orderNumber} создан, но не удалось подготовить ЧЗ: ${chzError instanceof Error ? chzError.message : "неизвестная ошибка"}`,
+        );
+      }
+
       setMessage(
-        `Производственный заказ ${orderNumber} создан из плана ${selectedSeason.code}. Материалы зарезервированы.`,
+        `Производственный заказ ${orderNumber} создан из плана ${selectedSeason.code}. Материалы зарезервированы.${chzNote}`,
       );
       setLaunchItem(null);
       setLaunchQuantity("");
