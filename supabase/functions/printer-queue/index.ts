@@ -75,13 +75,23 @@ Deno.serve(async (req: Request) => {
 
     const body = await req.json().catch(() => ({}));
     const action = String(body?.action || "claim") as QueueAction;
+    // Old Windows agents treat unknown job types as QR labels and may report
+    // successful printing even though no Data Matrix was printed.
+    const supportsChzLabels =
+      body?.supportsChzLabels === true && Number(body?.agentProtocol) >= 2;
 
     if (action === "claim") {
-      const { data: pending, error: pendingError } = await admin
+      let pendingQuery = admin
         .from("print_jobs")
         .select("*")
         .eq("printer_code", agent.code)
-        .eq("status", "pending")
+        .eq("status", "pending");
+      // Leave CHZ jobs in the queue until a current agent explicitly
+      // declares support. QR and test jobs still print on older agents.
+      if (!supportsChzLabels) {
+        pendingQuery = pendingQuery.neq("job_type", "chz_labels");
+      }
+      const { data: pending, error: pendingError } = await pendingQuery
         .order("created_at", { ascending: true })
         .limit(1)
         .maybeSingle();
@@ -122,6 +132,12 @@ Deno.serve(async (req: Request) => {
     if (!job) return json({ ok: false, error: "Print job not found" }, 404);
 
     if (action === "complete") {
+      if (job.job_type === "chz_labels" && !supportsChzLabels) {
+        return json({
+          ok: false,
+          error: "Старая служба печати не подтверждает поддержку Честного ЗНАКа. Обновите print-server.",
+        }, 409);
+      }
       if (job.status === "printed") {
         return json({ ok: true, alreadyPrinted: true });
       }
