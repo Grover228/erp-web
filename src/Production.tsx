@@ -1,3 +1,4 @@
+import { printUnifiedChzLabels } from "./pages/production/chzLabelPrint";
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import QRCode from "qrcode";
@@ -1203,84 +1204,28 @@ export default function Production({
         if (!confirmed) return null;
       }
 
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
-      if (!user) throw new Error("Для печати нужно войти в ERP");
-
       const labels = rows.map((row: any) => ({
-        codeId: String(row.code_id || ""),
         code: String(row.code || ""),
-        gtin: String(row.gtin || ""),
         brand: String(row.brand || "СТРИТСТРИМ"),
         productName: String(row.label_name || row.product_name || "Изделие"),
         color: String(row.color_name || ""),
         size: String(row.size_name || ""),
         composition: String(row.composition || ""),
         barcode: String(row.barcode || ""),
-        article: String(row.article || ""),
       }));
-
-      if (labels.some((label: any) => !label.codeId || !label.code)) {
-        throw new Error("В пачке найден код ЧЗ без идентификатора или содержимого");
+      if (labels.some((label) => !label.code)) throw new Error("Есть пустые коды ЧЗ.");
+      const first = labels[0];
+      if (labels.some((label) => label.brand !== first.brand || label.productName !== first.productName || label.color !== first.color || label.size !== first.size || label.composition !== first.composition || label.barcode !== first.barcode)) {
+        throw new Error("В пачке разные данные этикеток. Печать остановлена.");
       }
-
-      const { data: job, error: queueError } = await supabase
-        .from("print_jobs")
-        .insert({
-          printer_code: "xprinter-main",
-          job_type: "chz_labels",
-          payload: {
-            printerName: "Xprinter XP-365B",
-            batchNumber,
-            batchId: batch.id,
-            productionOrderId: batch.production_order_id,
-            codeIds: labels.map((label: any) => label.codeId),
-            labels,
-          },
-        })
-        .select("id, status")
-        .single();
-
-      if (queueError) {
-        const details = [queueError.message, queueError.details, queueError.hint]
-          .filter((value): value is string => typeof value === "string" && Boolean(value))
-          .join(" · ");
-        const hint = queueError.code === "23514"
-          ? " Тип задания печати не разрешён настройкой базы данных."
-          : "";
-        throw new Error(
-          `Не удалось создать задание печати ЧЗ (код ${queueError.code || "неизвестен"}): ${details || "неизвестная ошибка"}.${hint}`,
-        );
-      }
-      if (!job?.id) throw new Error("Не удалось создать задание печати этикеток");
-
-      const result = await waitForPrintJob(job.id, Math.max(12000, labels.length * 900));
-
-      if (result?.status === "failed") {
-        throw new Error(result.error || "Принтер не смог выполнить печать этикеток");
-      }
-
-      if (result?.status === "printed") {
-        const printedMessage = `Напечатано товарных этикеток ЧЗ: ${labels.length}. Пачка ${batchNumber}. Использованы те же закреплённые коды.`;
-        setMessage(printedMessage);
-        await loadProductionOrders();
-        return printedMessage;
-      }
-
-      const queuedMessage = `Этикетки ЧЗ для пачки ${batchNumber} поставлены в очередь: ${labels.length} шт. Это ещё не подтверждение печати.`;
-      setMessage(queuedMessage);
-      await loadProductionOrders();
-      return queuedMessage;
-    } catch (error) {
-      const message = error instanceof Error
-        ? error.message
-        : "Ошибка печати этикеток Честного ЗНАКа";
+      const count = printUnifiedChzLabels(labels.map((label) => label.code), first, batchNumber);
+      const message = `Открыто окно печати ${count} этикеток ЧЗ для пачки ${batchNumber}. Коды закреплены за пачкой.`;
+      setMessage(message);
+      return message;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Ошибка подготовки этикеток ЧЗ";
       setError(message);
-      throw new Error(message);
+      throw cause;
     } finally {
       setActionLoading(false);
     }
