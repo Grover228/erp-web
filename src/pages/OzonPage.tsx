@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
+import OzonFbsOrders from "./OzonFbsOrders";
 
-type Tab = "overview" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "transfer";
+type Tab = "overview" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "fbs" | "transfer";
 
 type Operation = {
   id: string;
@@ -1861,6 +1862,7 @@ export default function OzonPage() {
     { id: "matching", label: "Сопоставление", icon: "🔗" },
     { id: "promotions", label: "Акции", icon: "🏷️" },
     { id: "fbo", label: "Поставки FBO", icon: "🚚" },
+    { id: "fbs", label: "Заказы FBS", icon: "📦" },
     { id: "transfer", label: "Перенос (тест)", icon: "🧪" },
   ];
 
@@ -3495,6 +3497,7 @@ export default function OzonPage() {
       {activeTab === "matching" && <Matching />}
       {activeTab === "promotions" && <Promotions />}
       {activeTab === "fbo" && <FboSupply />}
+      {activeTab === "fbs" && <OzonFbsOrders />}
       {activeTab === "transfer" && <TransferTest />}
     </div>
   );
