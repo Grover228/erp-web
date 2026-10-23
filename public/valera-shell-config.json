@@ -1,0 +1,12 @@
+{
+  "schema_version": 4,
+  "assistant_url": "https://streetstream.ru/?valera=1&source=android&profile=work",
+  "wake_target": "chatgpt_direct",
+  "open_pwa_on_wake": false,
+  "speak_on_wake": false,
+  "chatgpt_package": "com.openai.chatgpt",
+  "chatgpt_voice_activity": "com.openai.voice.assistant.AssistantActivity",
+  "chatgpt_voice_fallback_url": "https://chat.com/?mode=voice",
+  "config_note": "Valera 0.7 launches ChatGPT Voice directly. ChatGPT must remain the Android default assistant. PWA fallback is disabled.",
+  "updated_at": "2026-10-01"
+}

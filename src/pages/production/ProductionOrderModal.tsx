@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { printUnifiedChzLabels } from "./chzLabelPrint";
+import { useEffect, useRef, useState } from "react";
+import { supabase } from "../../supabase";
 import type {
   Job,
   ProductionBatch,
@@ -6,6 +8,31 @@ import type {
   ProductionOrder,
   ProductionOrderOperation,
 } from "../../Production";
+
+async function getInvokeErrorMessage(invokeError: any) {
+  const context = invokeError?.context;
+  if (context && typeof context.json === "function") {
+    try {
+      const payload = await context.json();
+      const message =
+        payload?.error ||
+        payload?.error_message ||
+        payload?.description ||
+        payload?.message;
+      if (message) return String(message);
+    } catch {
+      // Fallback to the Supabase Functions error below.
+    }
+  }
+
+  return String(invokeError?.message || "Edge Function returned an error");
+}
+
+declare global {
+  interface Window {
+    bwipjs?: any;
+  }
+}
 
 type ProductionOrderModalProps = {
   job: Job;
@@ -29,6 +56,7 @@ type ProductionOrderModalProps = {
   onClose: () => void;
   onOpenQrHistory: (order: ProductionOrder) => void;
   onPrintBatchQr: (batch: ProductionBatch) => void;
+  onPrintChzLabels: (batch: ProductionBatch) => Promise<string | null>;
   onDeleteOrder: (order: ProductionOrder) => void;
   onStartOperation: (
     order: ProductionOrder,
@@ -72,6 +100,7 @@ export default function ProductionOrderModal({
   onClose,
   onOpenQrHistory,
   onPrintBatchQr,
+  onPrintChzLabels,
   onDeleteOrder,
   onStartOperation,
   onOpenFinishOperation,
@@ -92,6 +121,285 @@ export default function ProductionOrderModal({
     totalFactQuantity > 0 ? totalFactDurationSeconds / totalFactQuantity : 0;
 
   const [activeTab, setActiveTab] = useState<OrderModalTab>("overview");
+  const [chzLoading, setChzLoading] = useState(false);
+  const [chzBatchPrintingId, setChzBatchPrintingId] = useState<string | null>(null);
+  const [chzBatchPrintMessage, setChzBatchPrintMessage] = useState("");
+  const [chzBatchPrintError, setChzBatchPrintError] = useState("");
+  const [chzError, setChzError] = useState("");
+  const [chzMessage, setChzMessage] = useState("");
+  const [chzOrder, setChzOrder] = useState<any>(null);
+  const [chzItem, setChzItem] = useState<any>(null);
+  const [suzPayloadString, setSuzPayloadString] = useState("");
+  const [suzSignature, setSuzSignature] = useState("");
+  const [receivedSuzCodes, setReceivedSuzCodes] = useState<string[]>([]);
+  const [receivedSuzBlockId, setReceivedSuzBlockId] = useState("");
+  const [labelProductData, setLabelProductData] = useState<{
+    brand: string;
+    productName: string;
+    color: string;
+    size: string;
+    composition: string;
+    barcode: string;
+    article: string;
+  } | null>(null);
+  const [labelDataLoading, setLabelDataLoading] = useState(false);
+
+  async function loadChzOrderStatus() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "production_code_order_status",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+
+      setChzOrder(data?.codeOrder || null);
+      setChzItem(data?.codeItem || null);
+
+      const markingCodes = Array.isArray(data?.markingCodes) ? data.markingCodes : [];
+      const restoredCodes = markingCodes
+        .map((row: any) => String(row?.code || ""))
+        .filter(Boolean);
+      setReceivedSuzCodes(restoredCodes);
+      setReceivedSuzBlockId(
+        String(markingCodes.find((row: any) => row?.block_id)?.block_id || ""),
+      );
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось загрузить статус ЧЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadChzOrderStatus();
+  }, [sourceOrder?.id]);
+
+  useEffect(() => {
+    if (!sourceOrder?.product_id) {
+      setLabelProductData(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadLabelProductData() {
+      try {
+        setLabelDataLoading(true);
+
+        const { data: product, error: productError } = await supabase
+          .from("products")
+          .select("name,article,barcode,brand,label_name,color_name,size_name,composition")
+          .eq("id", sourceOrder!.product_id)
+          .maybeSingle();
+
+        if (productError) throw productError;
+        if (cancelled) return;
+
+        const row: any = product || {};
+
+        setLabelProductData({
+          brand: String(row.brand || "СТРИТСТРИМ").trim(),
+          productName: String(row.label_name || row.name || "Изделие").trim(),
+          color: String(row.color_name || "").trim(),
+          size: String(row.size_name || "").trim(),
+          composition: String(row.composition || "").trim(),
+          barcode: String(row.barcode || "").trim(),
+          article: String(row.article || "").trim(),
+        });
+      } catch (cause) {
+        if (!cancelled) {
+          setChzError(
+            cause instanceof Error
+              ? `Не удалось подготовить данные этикетки: ${cause.message}`
+              : "Не удалось подготовить данные этикетки.",
+          );
+        }
+      } finally {
+        if (!cancelled) setLabelDataLoading(false);
+      }
+    }
+
+    void loadLabelProductData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sourceOrder?.product_id]);
+
+  async function prepareMissingChzDraft() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "prepare_production_code_order",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+      if (!data?.prepared || !data?.codeOrder?.id || !data?.item?.id) {
+        throw new Error("Сервер не подтвердил создание черновика ЧЗ.");
+      }
+
+      await loadChzOrderStatus();
+      setChzMessage("Черновик ЧЗ создан и связан с производственным заказом. В СУЗ ничего не отправлено.");
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось подготовить черновик ЧЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  async function prepareSuzSubmission() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+      setSuzSignature("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "prepare_suz_order_submission",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+
+      setSuzPayloadString(String(data?.payloadString || ""));
+      setChzMessage("Тело заказа СУЗ подготовлено. Подпишите эту строку откреплённой CAdES-BES подписью и вставьте Base64.");
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось подготовить заказ СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  async function submitSuzOrder() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "submit_suz_order",
+          productionOrderId: sourceOrder.id,
+          payloadString: suzPayloadString,
+          signature: suzSignature.trim(),
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+
+      setChzMessage(
+        `Заказ реально отправлен в СУЗ. orderId: ${String(data?.orderId || "—")}, статус: ${String(data?.orderStatus || data?.status || "submitted")}.`,
+      );
+      setSuzSignature("");
+      await loadChzOrderStatus();
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось отправить заказ в СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  async function fetchSuzCodes() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "fetch_suz_codes",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+
+      const codes = Array.isArray(data?.codes)
+        ? data.codes.map((code: unknown) => String(code || "")).filter(Boolean)
+        : [];
+
+      setReceivedSuzCodes(codes);
+      setReceivedSuzBlockId(data?.blockId ? String(data.blockId) : "");
+      setChzMessage(
+        codes.length > 0
+          ? `Получено кодов из СУЗ: ${codes.length}. Всего получено по заказу: ${Number(data?.totalReceived || codes.length)}.`
+          : String(data?.message || "СУЗ пока не вернул готовые коды."),
+      );
+
+      await loadChzOrderStatus();
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось получить коды из СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
+
+  function printUnifiedLabels() {
+    try {
+      const count = printUnifiedChzLabels(receivedSuzCodes, labelProductData, sourceOrder?.order_number || "");
+      setChzMessage(`Подготовлено к печати единых этикеток 58×40: ${count} шт.`);
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось сформировать этикетки 58×40.");
+    }
+  }
+
+  async function refreshSuzStatus() {
+    if (!sourceOrder?.id) return;
+
+    try {
+      setChzLoading(true);
+      setChzError("");
+      setChzMessage("");
+
+      const { data, error } = await supabase.functions.invoke("chestny-znak-auth", {
+        body: {
+          action: "refresh_suz_order_status",
+          productionOrderId: sourceOrder.id,
+        },
+      });
+
+      if (error) throw new Error(await getInvokeErrorMessage(error));
+      if (data?.error) throw new Error(String(data.error));
+
+      setChzMessage(
+        `Статус СУЗ обновлён: ${String(data?.status || "—")}. Получено кодов: ${Number(data?.received || 0)}.`,
+      );
+      await loadChzOrderStatus();
+    } catch (cause) {
+      setChzError(cause instanceof Error ? cause.message : "Не удалось обновить статус СУЗ.");
+    } finally {
+      setChzLoading(false);
+    }
+  }
 
   const completedQuantity = Math.max(
     0,
@@ -131,6 +439,23 @@ export default function ProductionOrderModal({
   const printedBatchIds = new Set(qrPrintLogs.map((log) => log.batch_id));
   const printedBatchesCount = printedBatchIds.size;
   const lastPrintAt = qrPrintLogs[0]?.printed_at || null;
+
+
+  async function printChzForBatch(batch: ProductionBatch) {
+    setChzBatchPrintingId(batch.id);
+    setChzBatchPrintMessage("");
+    setChzBatchPrintError("");
+    try {
+      const result = await onPrintChzLabels(batch);
+      if (result) setChzBatchPrintMessage(result);
+    } catch (cause) {
+      setChzBatchPrintError(
+        cause instanceof Error ? cause.message : "Не удалось напечатать этикетки ЧЗ.",
+      );
+    } finally {
+      setChzBatchPrintingId(null);
+    }
+  }
 
   function getBatchPrintInfo(batchId: string) {
     const logs = qrPrintLogs.filter((log) => log.batch_id === batchId);
@@ -407,6 +732,258 @@ export default function ProductionOrderModal({
               </div>
             </div>
 
+            <div style={sectionCardStyle}>
+              <div style={sectionHeaderStyle}>
+                <div>
+                  <div style={sectionTitleStyle}>Честный ЗНАК</div>
+                  <div style={sectionHintStyle}>
+                    Заказ кодов связан именно с этим производственным заданием.
+                  </div>
+                </div>
+                {chzOrder?.status && (
+                  <span style={statusBadgeStyle(chzOrder.status)}>
+                    {String(chzOrder.status)}
+                  </span>
+                )}
+              </div>
+
+              {chzLoading && !chzOrder ? (
+                <div style={emptySmallStyle}>Проверяю связанный заказ ЧЗ…</div>
+              ) : chzOrder && chzItem ? (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={overviewRowsStyle}>
+                    <OverviewRow label="GTIN" value={String(chzItem.gtin || "—")} />
+                    <OverviewRow label="Запрошено кодов" value={`${Number(chzItem.requested_quantity || 0)} шт`} />
+                    <OverviewRow label="Получено кодов" value={`${Number(chzItem.received_quantity || 0)} шт`} />
+                    <OverviewRow label="orderId СУЗ" value={String(chzOrder.external_order_id || "ещё не отправлен")} />
+                  </div>
+
+                  {!chzOrder.external_order_id && !suzPayloadString && (
+                    <button
+                      type="button"
+                      onClick={() => void prepareSuzSubmission()}
+                      disabled={chzLoading}
+                      style={primaryBlueButtonStyle}
+                    >
+                      {chzLoading ? "Подготовка…" : "Подготовить реальную отправку в СУЗ"}
+                    </button>
+                  )}
+
+                  {!chzOrder.external_order_id && suzPayloadString && (
+                    <div style={{ display: "grid", gap: 9 }}>
+                      <div style={{ color: "#475569", fontSize: 12, fontWeight: 800 }}>
+                        Строка JSON для подписи — подписать без изменений
+                      </div>
+                      <textarea
+                        readOnly
+                        value={suzPayloadString}
+                        rows={6}
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid #cbd5e1", borderRadius: 10, padding: 10, fontFamily: "monospace", fontSize: 12, resize: "vertical" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(suzPayloadString)}
+                        style={secondaryBlueButtonStyle()}
+                      >
+                        Копировать JSON для подписи
+                      </button>
+                      <textarea
+                        value={suzSignature}
+                        onChange={(event) => setSuzSignature(event.target.value)}
+                        rows={5}
+                        placeholder="Вставьте откреплённую подпись Base64"
+                        style={{ width: "100%", boxSizing: "border-box", border: "1px solid #cbd5e1", borderRadius: 10, padding: 10, fontFamily: "monospace", fontSize: 12, resize: "vertical" }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void submitSuzOrder()}
+                        disabled={chzLoading || !suzSignature.trim()}
+                        style={{
+                          ...primaryBlueButtonStyle,
+                          opacity: chzLoading || !suzSignature.trim() ? 0.55 : 1,
+                        }}
+                      >
+                        {chzLoading ? "Отправка…" : `Отправить ${Number(chzItem.requested_quantity || 0)} кодов в СУЗ`}
+                      </button>
+                    </div>
+                  )}
+
+                  {chzOrder.external_order_id && (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={() => void refreshSuzStatus()}
+                        disabled={chzLoading}
+                        style={secondaryBlueButtonStyle()}
+                      >
+                        {chzLoading ? "Проверяю…" : "Обновить статус заказа СУЗ"}
+                      </button>
+
+                      {receivedSuzCodes.length < Number(chzItem.requested_quantity || 0) && (
+                        <button
+                          type="button"
+                          onClick={() => void fetchSuzCodes()}
+                          disabled={chzLoading}
+                          style={primaryBlueButtonStyle}
+                        >
+                          {chzLoading
+                            ? "Получение…"
+                            : Number(chzItem.received_quantity || 0) >=
+                                Number(chzItem.requested_quantity || 0)
+                              ? `Восстановить ${Math.max(
+                                  0,
+                                  Number(chzItem.requested_quantity || 0) -
+                                    receivedSuzCodes.length,
+                                )} кодов из СУЗ`
+                              : `Получить ${Math.max(
+                                  0,
+                                  Number(chzItem.requested_quantity || 0) -
+                                    receivedSuzCodes.length,
+                                )} кодов из СУЗ`}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {receivedSuzCodes.length > 0 && (
+                    <div style={{ display: "grid", gap: 8 }}>
+                      <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a" }}>
+                        Полученные DataMatrix-коды
+                      </div>
+                      {receivedSuzBlockId && (
+                        <div style={{ color: "#64748b", fontSize: 12 }}>
+                          blockId: <span style={{ fontFamily: "monospace" }}>{receivedSuzBlockId}</span>
+                        </div>
+                      )}
+                      <textarea
+                        readOnly
+                        value={receivedSuzCodes.join("\n")}
+                        rows={Math.min(10, Math.max(4, receivedSuzCodes.length))}
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 10,
+                          padding: 10,
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          resize: "vertical",
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void navigator.clipboard.writeText(receivedSuzCodes.join("\n"))}
+                        style={secondaryBlueButtonStyle()}
+                      >
+                        Копировать полученные коды
+                      </button>
+
+                      <div
+                        style={{
+                          border: "1px solid #bbf7d0",
+                          background: "#f0fdf4",
+                          borderRadius: 12,
+                          padding: 12,
+                          display: "grid",
+                          gap: 9,
+                        }}
+                      >
+                        <div style={{ fontSize: 14, fontWeight: 900, color: "#166534" }}>
+                          Единая этикетка 58×40 мм
+                        </div>
+                        <div style={{ color: "#475569", fontSize: 12, lineHeight: 1.45 }}>
+                          Бренд · изделие · цвет · размер · состав · Data Matrix ЧЗ · штрихкод товара.
+                        </div>
+                        {labelProductData && (
+                          <div style={{ color: "#334155", fontSize: 12, lineHeight: 1.45 }}>
+                            <b>{labelProductData.brand}</b> · {labelProductData.productName}
+                            {labelProductData.color ? ` · ${labelProductData.color}` : ""}
+                            {labelProductData.size ? ` · размер ${labelProductData.size}` : ""}
+                            {labelProductData.composition ? ` · ${labelProductData.composition}` : ""}
+                            {labelProductData.barcode ? ` · ШК ${labelProductData.barcode}` : " · ШК не заполнен"}
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={printUnifiedLabels}
+                          disabled={chzLoading || labelDataLoading || !labelProductData}
+                          style={{
+                            ...primaryBlueButtonStyle,
+                            width: "100%",
+                            maxWidth: "100%",
+                            whiteSpace: "normal",
+                            textAlign: "center",
+                            lineHeight: 1.2,
+                            padding: "12px 10px",
+                            background: chzLoading || labelDataLoading || !labelProductData ? "#94a3b8" : "#16a34a",
+                            opacity: chzLoading || labelDataLoading || !labelProductData ? 0.65 : 1,
+                          }}
+                        >
+                          {labelDataLoading
+                            ? "Подготавливаю данные…"
+                            : `Печать ${receivedSuzCodes.length} этикеток 58×40`}
+                        </button>
+                      </div>
+
+                      <div style={{ display: "grid", gap: 10 }}>
+                        <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a" }}>
+                          Предпросмотр DataMatrix
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                            gap: 10,
+                          }}
+                        >
+                          {receivedSuzCodes.map((code, index) => (
+                            <DataMatrixPreview
+                              key={`${receivedSuzBlockId || "block"}-${index}`}
+                              code={code}
+                              index={index + 1}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {chzMessage && (
+                    <div style={{ padding: 10, borderRadius: 10, background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1d4ed8", fontSize: 13 }}>
+                      {chzMessage}
+                    </div>
+                  )}
+                  {chzError && (
+                    <div style={{ padding: 10, borderRadius: 10, background: "#fef2f2", border: "1px solid #fecaca", color: "#b91c1c", fontSize: 13 }}>
+                      {chzError}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  <div style={emptySmallStyle}>
+                    Связанный черновик ЧЗ для этого задания не найден.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void prepareMissingChzDraft()}
+                    disabled={chzLoading || !sourceOrder?.id}
+                    style={{ ...primaryBlueButtonStyle, justifySelf: "start" }}
+                  >
+                    Подготовить черновик ЧЗ для этого заказа
+                  </button>
+                  <div style={{ color: "#64748b", fontSize: 12 }}>
+                    По GTIN изделия и количеству производственного заказа. В СУЗ коды пока не заказываются.
+                  </div>
+                  {chzError && (
+                    <div role="alert" style={{ padding: 10, borderRadius: 10, background: "#fef2f2", color: "#b91c1c" }}>
+                      {chzError}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <div style={quickActionsStyle}>
               <button
                 type="button"
@@ -568,6 +1145,16 @@ export default function ProductionOrderModal({
                 </div>
               </div>
             </div>
+            {chzBatchPrintMessage && (
+              <div role="status" style={{ marginBottom: 8, padding: 10, borderRadius: 9, background: "#f0fdf4", color: "#166534", fontSize: 13 }}>
+                {chzBatchPrintMessage}
+              </div>
+            )}
+            {chzBatchPrintError && (
+              <div role="alert" style={{ marginBottom: 8, padding: 10, borderRadius: 9, background: "#fef2f2", color: "#b91c1c", fontSize: 13 }}>
+                {chzBatchPrintError}
+              </div>
+            )}
 
             {jobBatches.length === 0 ? (
               <div style={emptySmallStyle}>
@@ -586,17 +1173,43 @@ export default function ProductionOrderModal({
 
                   return (
                     <div key={batch.id} style={batchRowStyle}>
-                      <div style={{ minWidth: 0 }}>
+                      <div style={{ minWidth: 0, flex: "1 1 240px" }}>
                         <div style={batchTitleStyle}>{batch.batch_number}</div>
                         <div style={batchMetaStyle}>
                           {getStatusLabel(batch.status)} · {batchTotal} шт ·
                           годно на текущей операции {batchCompleted} · остаток{" "}
                           {batchLeft}
                         </div>
+                        {(chzOrder?.id || batch.chz_gtin) && (
+                          <div style={{ marginTop: 6, color: "#166534", fontSize: 12, fontWeight: 750 }}>
+                            ЧЗ: закреплено {Number(batch.chz_codes_allocated || 0)} из {batchTotal} кодов
+                            {" · "}
+                            {batch.chz_labels_printed_at
+                              ? `Этикетки печатались ${formatDateTime(batch.chz_labels_printed_at)}`
+                              : "Этикетки не печатались"}
+                          </div>
+                        )}
                       </div>
 
                       <div style={batchActionsStyle}>
                         <span style={qrCreatedBadgeStyle}>QR создан</span>
+                        {(chzOrder?.id || batch.chz_gtin) && (
+                          <button
+                            type="button"
+                            onClick={() => void printChzForBatch(batch)}
+                            disabled={actionLoading || chzBatchPrintingId !== null}
+                            style={{
+                              ...printBatchButtonStyle,
+                              background: "#f0fdf4",
+                              borderColor: "#86efac",
+                              color: "#166534",
+                              opacity: actionLoading || chzBatchPrintingId !== null ? 0.6 : 1,
+                            }}
+                            title="Напечатать только коды Честного ЗНАКа, закреплённые за этой пачкой"
+                          >
+                            {chzBatchPrintingId === batch.id ? "Печать ЧЗ…" : `Этикетки ЧЗ · ${batchTotal} шт`}
+                          </button>
+                        )}
                         {(() => {
                           const printInfo = getBatchPrintInfo(batch.id);
                           return (
@@ -1320,6 +1933,94 @@ const overviewRowsStyle: React.CSSProperties = {
   gap: 0,
   marginTop: 8,
 };
+
+function DataMatrixPreview({
+  code,
+  index,
+}: {
+  code: string;
+  index: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [renderError, setRenderError] = useState("");
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    try {
+      const bwipjs = window.bwipjs;
+      if (!bwipjs?.toCanvas) {
+        throw new Error("Модуль DataMatrix ещё не загрузился.");
+      }
+
+      const gs1Text =
+        "^FNC1" +
+        String(code || "")
+          .replace(/\^/g, "^^")
+          .replace(/\x1d/g, "^FNC1");
+
+      bwipjs.toCanvas(canvas, {
+        bcid: "datamatrix",
+        text: gs1Text,
+        parsefnc: true,
+        scale: 4,
+        padding: 6,
+        backgroundcolor: "FFFFFF",
+      });
+      setRenderError("");
+    } catch (cause) {
+      setRenderError(
+        cause instanceof Error ? cause.message : "Не удалось построить DataMatrix.",
+      );
+    }
+  }, [code]);
+
+  return (
+    <div
+      style={{
+        border: "1px solid #dbeafe",
+        borderRadius: 12,
+        padding: 10,
+        background: "#ffffff",
+        display: "grid",
+        gap: 8,
+        justifyItems: "center",
+      }}
+    >
+      <div style={{ width: "100%", color: "#475569", fontSize: 12, fontWeight: 850 }}>
+        Код {index}
+      </div>
+      {renderError ? (
+        <div style={{ color: "#b91c1c", fontSize: 12 }}>{renderError}</div>
+      ) : (
+        <canvas
+          ref={canvasRef}
+          style={{
+            width: 150,
+            height: 150,
+            imageRendering: "pixelated",
+            maxWidth: "100%",
+          }}
+        />
+      )}
+      <div
+        title={code}
+        style={{
+          width: "100%",
+          color: "#64748b",
+          fontSize: 10,
+          fontFamily: "monospace",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {code}
+      </div>
+    </div>
+  );
+}
 
 function OverviewRow({ label, value }: { label: string; value: string }) {
   return (

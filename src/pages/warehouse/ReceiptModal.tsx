@@ -14,6 +14,9 @@ export type SupplierReceipt = {
   status: string;
   comment: string | null;
   total_amount: number;
+  delivery_cost?: number | null;
+  delivery_distribution?: "amount" | "quantity" | null;
+  landed_total_amount?: number | null;
   created_at: string | null;
 };
 
@@ -27,6 +30,9 @@ export type SupplierReceiptItem = {
   quantity: number;
   price: number;
   amount: number;
+  allocated_delivery_cost?: number | null;
+  landed_unit_cost?: number | null;
+  landed_amount?: number | null;
   materials?: {
     name: string | null;
     article: string | null;
@@ -98,6 +104,10 @@ export default function ReceiptModal({
   const [receiptDate, setReceiptDate] = useState(receipt.receipt_date || "");
   const [supplierName, setSupplierName] = useState(receipt.supplier_name || "");
   const [comment, setComment] = useState(receipt.comment || "");
+  const [deliveryCost, setDeliveryCost] = useState(String(receipt.delivery_cost || 0));
+  const [deliveryDistribution, setDeliveryDistribution] = useState<"amount" | "quantity">(
+    receipt.delivery_distribution === "quantity" ? "quantity" : "amount",
+  );
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -114,6 +124,10 @@ export default function ReceiptModal({
     setReceiptDate(receipt.receipt_date || "");
     setSupplierName(receipt.supplier_name || "");
     setComment(receipt.comment || "");
+    setDeliveryCost(String(receipt.delivery_cost || 0));
+    setDeliveryDistribution(
+      receipt.delivery_distribution === "quantity" ? "quantity" : "amount",
+    );
     loadItems();
   }, [receipt.id]);
 
@@ -157,6 +171,10 @@ export default function ReceiptModal({
     setReceiptDate(currentReceipt.receipt_date || "");
     setSupplierName(currentReceipt.supplier_name || "");
     setComment(currentReceipt.comment || "");
+    setDeliveryCost(String(currentReceipt.delivery_cost || 0));
+    setDeliveryDistribution(
+      currentReceipt.delivery_distribution === "quantity" ? "quantity" : "amount",
+    );
     setDraftItems(items.map(receiptItemToDraft));
     setIsEditing(true);
     setError("");
@@ -183,12 +201,59 @@ export default function ReceiptModal({
     return draftItems.reduce((sum, item) => sum + getDraftItemAmount(item), 0);
   }
 
+  function getDeliveryCostValue() {
+    const value = Number(String(deliveryCost || "0").replace(",", "."));
+    return Number.isFinite(value) && value > 0 ? value : 0;
+  }
+
+  function calculateLandedCosts<T extends { quantity: number; price: number }>(
+    sourceItems: T[],
+    delivery: number,
+    distribution: "amount" | "quantity",
+  ) {
+    const rows = sourceItems.map((item) => {
+      const quantity = Number(item.quantity || 0);
+      const price = Number(item.price || 0);
+      return { item, quantity, price, baseAmount: quantity * price };
+    });
+
+    const denominator =
+      distribution === "quantity"
+        ? rows.reduce((sum, row) => sum + Math.max(0, row.quantity), 0)
+        : rows.reduce((sum, row) => sum + Math.max(0, row.baseAmount), 0);
+
+    let allocatedSoFar = 0;
+
+    return rows.map((row, index) => {
+      const isLast = index === rows.length - 1;
+      const basis = distribution === "quantity" ? Math.max(0, row.quantity) : Math.max(0, row.baseAmount);
+      const rawAllocation = denominator > 0 ? delivery * (basis / denominator) : 0;
+      const allocatedDelivery =
+        isLast
+          ? Math.max(0, Math.round((delivery - allocatedSoFar) * 100) / 100)
+          : Math.max(0, Math.round(rawAllocation * 100) / 100);
+
+      allocatedSoFar += allocatedDelivery;
+
+      const landedAmount = row.baseAmount + allocatedDelivery;
+      const landedUnitCost = row.quantity > 0 ? landedAmount / row.quantity : row.price;
+
+      return {
+        ...row,
+        allocatedDelivery,
+        landedAmount,
+        landedUnitCost,
+      };
+    });
+  }
+
   async function saveChanges() {
     try {
       setSaving(true);
       setError("");
 
       const totalAmount = getDraftTotalAmount();
+      const deliveryCostValue = getDeliveryCostValue();
 
       const { error: receiptError } = await supabase
         .from("supplier_receipts")
@@ -197,6 +262,9 @@ export default function ReceiptModal({
           supplier_name: supplierName.trim() || null,
           comment: comment.trim() || null,
           total_amount: totalAmount,
+          delivery_cost: deliveryCostValue,
+          delivery_distribution: deliveryDistribution,
+          landed_total_amount: totalAmount + deliveryCostValue,
           updated_at: new Date().toISOString(),
         })
         .eq("id", receipt.id);
@@ -215,6 +283,16 @@ export default function ReceiptModal({
         if (itemError) throw itemError;
       }
 
+      setCurrentReceipt((prev) => ({
+        ...prev,
+        receipt_date: receiptDate,
+        supplier_name: supplierName.trim() || null,
+        comment: comment.trim() || null,
+        total_amount: totalAmount,
+        delivery_cost: deliveryCostValue,
+        delivery_distribution: deliveryDistribution,
+        landed_total_amount: totalAmount + deliveryCostValue,
+      }));
       setIsEditing(false);
       await loadItems();
       onSaved();
@@ -278,6 +356,41 @@ export default function ReceiptModal({
       }
 
       const now = new Date().toISOString();
+      const delivery = Number(currentReceipt.delivery_cost || 0);
+      const distribution =
+        currentReceipt.delivery_distribution === "quantity" ? "quantity" : "amount";
+      const landedRows = calculateLandedCosts(receiptItems, delivery, distribution);
+
+      for (const row of landedRows) {
+        const item = row.item as SupplierReceiptItem;
+
+        const { error: costError } = await supabase
+          .from("supplier_receipt_items")
+          .update({
+            allocated_delivery_cost: row.allocatedDelivery,
+            landed_unit_cost: Number(row.landedUnitCost.toFixed(4)),
+            landed_amount: Number(row.landedAmount.toFixed(2)),
+          })
+          .eq("id", item.id);
+
+        if (costError) throw costError;
+
+        const landedUnitCost = Number(row.landedUnitCost.toFixed(4));
+
+        if (item.item_type === "material" && item.material_id) {
+          const { error } = await supabase.from("materials").update({ default_price: landedUnitCost }).eq("id", item.material_id);
+          if (error) throw error;
+        } else if (item.item_type === "consumable" && item.consumable_id) {
+          const { error } = await supabase.from("consumables").update({ default_price: landedUnitCost }).eq("id", item.consumable_id);
+          if (error) throw error;
+        } else if (item.item_type === "product" && item.product_id) {
+          const { error } = await supabase.from("products").update({ default_price: landedUnitCost }).eq("id", item.product_id);
+          if (error) throw error;
+        } else if (item.item_type === "resale_product" && item.item_id) {
+          const { error } = await supabase.from("items").update({ default_price: landedUnitCost }).eq("id", item.item_id);
+          if (error) throw error;
+        }
+      }
 
       const { error: deleteMovementsError } = await supabase
         .from("stock_movements")
@@ -318,6 +431,8 @@ export default function ReceiptModal({
         .from("supplier_receipts")
         .update({
           status: "posted",
+          landed_total_amount:
+            Number(currentReceipt.total_amount || 0) + Number(currentReceipt.delivery_cost || 0),
           updated_at: now,
         })
         .eq("id", currentReceipt.id);
@@ -327,6 +442,8 @@ export default function ReceiptModal({
       setCurrentReceipt((prev) => ({
         ...prev,
         status: "posted",
+        landed_total_amount:
+          Number(prev.total_amount || 0) + Number(prev.delivery_cost || 0),
       }));
 
       onSaved();
@@ -580,11 +697,11 @@ export default function ReceiptModal({
                         </label>
 
                         <label style={labelStyle}>
-                          <span style={labelTextStyle}>Цена</span>
+                          <span style={labelTextStyle}>Цена товара</span>
                           <input
                             type="number"
                             min="0"
-                            step="0.01"
+                            step="0.0001"
                             value={draftItem.price}
                             onChange={(event) =>
                               updateDraftItem(draftItem.id, {
@@ -615,8 +732,46 @@ export default function ReceiptModal({
               )}
 
               <div style={totalStyle}>
-                Итого:{" "}
+                Товары:{" "}
                 {getDraftTotalAmount().toLocaleString("ru-RU", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{" "}
+                ₽
+              </div>
+
+              <div style={grid2Style}>
+                <label style={labelStyle}>
+                  <span style={labelTextStyle}>Доставка и доп. расходы</span>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={deliveryCost}
+                    onChange={(event) => setDeliveryCost(event.target.value)}
+                    placeholder="0,00"
+                    style={inputStyle}
+                  />
+                </label>
+
+                <label style={labelStyle}>
+                  <span style={labelTextStyle}>Распределить доставку</span>
+                  <select
+                    value={deliveryDistribution}
+                    onChange={(event) =>
+                      setDeliveryDistribution(event.target.value === "quantity" ? "quantity" : "amount")
+                    }
+                    style={inputStyle}
+                  >
+                    <option value="amount">Пропорционально стоимости товаров</option>
+                    <option value="quantity">Пропорционально количеству</option>
+                  </select>
+                </label>
+              </div>
+
+              <div style={totalStyle}>
+                Фактическая стоимость партии:{" "}
+                {(getDraftTotalAmount() + getDeliveryCostValue()).toLocaleString("ru-RU", {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}{" "}
@@ -666,9 +821,34 @@ export default function ReceiptModal({
               </div>
 
               <div style={modalInfoCardStyle}>
-                <div style={modalInfoLabelStyle}>Сумма</div>
+                <div style={modalInfoLabelStyle}>Товары</div>
                 <div style={modalInfoValueStyle}>
                   {Number(currentReceipt.total_amount || 0).toLocaleString("ru-RU", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{" "}
+                  ₽
+                </div>
+              </div>
+
+              <div style={modalInfoCardStyle}>
+                <div style={modalInfoLabelStyle}>Доставка</div>
+                <div style={modalInfoValueStyle}>
+                  {Number(currentReceipt.delivery_cost || 0).toLocaleString("ru-RU", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{" "}
+                  ₽
+                </div>
+              </div>
+
+              <div style={modalInfoCardStyle}>
+                <div style={modalInfoLabelStyle}>Фактическая стоимость партии</div>
+                <div style={modalInfoValueStyle}>
+                  {Number(
+                    currentReceipt.landed_total_amount ||
+                      Number(currentReceipt.total_amount || 0) + Number(currentReceipt.delivery_cost || 0),
+                  ).toLocaleString("ru-RU", {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}{" "}
@@ -679,9 +859,9 @@ export default function ReceiptModal({
 
             {currentReceipt.status !== "posted" && (
               <div style={statusHintStyle}>
-                Чтобы приёмка увеличила складские остатки, нажми кнопку
-                <strong> «Провести приёмку»</strong>. Можно также оставить
-                документ черновиком и провести позже.
+                Укажи фактическую стоимость доставки и дополнительных расходов, затем нажми
+                <strong> «Провести приёмку»</strong>. ERP распределит доставку по позициям,
+                рассчитает фактическую себестоимость и только после этого увеличит складские остатки.
               </div>
             )}
 
@@ -706,8 +886,10 @@ export default function ReceiptModal({
                         <th style={thStyle}>Артикул</th>
                         <th style={thStyle}>Цвет</th>
                         <th style={thStyle}>Кол-во</th>
-                        <th style={thStyle}>Цена</th>
-                        <th style={thStyle}>Сумма</th>
+                        <th style={thStyle}>Цена товара</th>
+                        <th style={thStyle}>Доставка</th>
+                        <th style={thStyle}>Себестоимость/ед.</th>
+                        <th style={thStyle}>Итого</th>
                       </tr>
                     </thead>
 
@@ -730,12 +912,26 @@ export default function ReceiptModal({
                           <td style={tdStyle}>
                             {Number(item.price || 0).toLocaleString("ru-RU", {
                               minimumFractionDigits: 2,
+                              maximumFractionDigits: 4,
+                            })}{" "}
+                            ₽
+                          </td>
+                          <td style={tdStyle}>
+                            {Number(item.allocated_delivery_cost || 0).toLocaleString("ru-RU", {
+                              minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}{" "}
                             ₽
                           </td>
                           <td style={tdStyle}>
-                            {Number(item.amount || 0).toLocaleString("ru-RU", {
+                            {Number(item.landed_unit_cost || item.price || 0).toLocaleString("ru-RU", {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 4,
+                            })}{" "}
+                            ₽
+                          </td>
+                          <td style={tdStyle}>
+                            {Number(item.landed_amount || item.amount || 0).toLocaleString("ru-RU", {
                               minimumFractionDigits: 2,
                               maximumFractionDigits: 2,
                             })}{" "}

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { printUnifiedChzLabels } from "./pages/production/chzLabelPrint";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
@@ -7,27 +8,20 @@ import ProductionCreateOrderModal from "./pages/production/ProductionCreateOrder
 import ProductionJobsList from "./pages/production/ProductionJobsList";
 import ProductionActiveBatches from "./pages/production/ProductionActiveBatches";
 import ProductionFinishOperationModal from "./pages/production/ProductionFinishOperationModal";
+import ProductionPlanningPage from "./pages/ProductionPlanningPage";
 import type {
   ActiveBatchItem,
-  ConsumablePrice,
   GeneratedQr,
   Job,
-  MaterialPrice,
   ProductItem,
   ProductionBatch,
-  ProductionConsumableRequirement,
-  ProductionMaterialRequirement,
   ProductionOperationLog,
   ProductionOrder,
   ProductionOrderOperation,
-  ProductionStockCheckResult,
   ProductionTab,
   ShiftStats,
   StockAvailableRow,
-  TechCardConsumable,
   TechCardItem,
-  TechCardMaterial,
-  TechCardOperation,
 } from "./pages/production/productionTypes";
 export type {
   Job,
@@ -51,6 +45,7 @@ import {
   getStatusLabel,
   getStockKey,
 } from "./pages/production/productionUtils";
+import { createProductionOrder } from "./pages/production/createProductionOrder";
 import {
   Field,
   InfoBox,
@@ -155,6 +150,7 @@ export default function Production({
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const finishingBatchRef = useRef(false);
   const [deletingOrderId, setDeletingOrderId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -166,6 +162,13 @@ export default function Production({
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
+  const [chzOrderEnabled, setChzOrderEnabled] = useState(true);
+  const [chzMappingLoading, setChzMappingLoading] = useState(false);
+  const [chzMapping, setChzMapping] = useState<{
+    gtin: string;
+    good_name?: string | null;
+    good_status?: string | null;
+  } | null>(null);
 
   const [finishOperation, setFinishOperation] =
     useState<ProductionOrderOperation | null>(null);
@@ -186,6 +189,12 @@ export default function Production({
   const [defectError, setDefectError] = useState("");
 
   const [generatedQr, setGeneratedQr] = useState<GeneratedQr | null>(null);
+  const [generatedBatchChz, setGeneratedBatchChz] = useState<{
+    gtin: string | null;
+    allocated: number;
+    required: number;
+    warning?: string;
+  } | null>(null);
   const [qrHistoryOrder, setQrHistoryOrder] =
     useState<ProductionOrder | null>(null);
   const [qrHistoryItems, setQrHistoryItems] = useState<GeneratedQr[]>([]);
@@ -523,6 +532,12 @@ export default function Production({
         }
 
         if (allAccounted) {
+          const goodQuantity = orderBatches.reduce(
+            (sum, batch) => sum + Number(batch.completed_quantity || 0),
+            0,
+          );
+          await assertProductionOrderStockReceived(order.id, goodQuantity);
+
           const { error: closeOrderError } = await supabase
             .from("production_orders")
             .update({ status: "done" })
@@ -554,12 +569,67 @@ export default function Production({
     }
   }
 
+  useEffect(() => {
+    if (!isCreateOpen || !selectedProductId) {
+      setChzMapping(null);
+      setChzMappingLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadChzMapping() {
+      try {
+        setChzMappingLoading(true);
+        const { data, error: invokeError } = await supabase.functions.invoke(
+          "chestny-znak-auth",
+          {
+            body: {
+              action: "production_chz_info",
+              productId: selectedProductId,
+            },
+          },
+        );
+
+        if (invokeError) throw invokeError;
+        if (data?.error) throw new Error(String(data.error));
+        if (cancelled) return;
+
+        const mapping = data?.mapping;
+        if (data?.mapped && mapping?.gtin) {
+          setChzMapping({
+            gtin: String(mapping.gtin),
+            good_name: mapping.good_name ? String(mapping.good_name) : null,
+            good_status: mapping.good_status ? String(mapping.good_status) : null,
+          });
+          setChzOrderEnabled(true);
+        } else {
+          setChzMapping(null);
+          setChzOrderEnabled(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setChzMapping(null);
+          setChzOrderEnabled(false);
+        }
+      } finally {
+        if (!cancelled) setChzMappingLoading(false);
+      }
+    }
+
+    void loadChzMapping();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateOpen, selectedProductId]);
+
   async function handleCreateProductionOrder(e: React.FormEvent) {
     e.preventDefault();
 
     const product = products.find((item) => item.id === selectedProductId);
     const techCard = techCards.find(
-      (item) => item.product_id === selectedProductId
+      (item) => item.product_id === selectedProductId,
     );
 
     if (!product) {
@@ -582,321 +652,41 @@ export default function Production({
       setError("");
       setMessage("");
 
-      const orderQuantity = Number(quantity);
-      const orderNumber = `PR-${String(Date.now()).slice(-6)}`;
+      const { orderId, orderNumber } = await createProductionOrder({
+        product,
+        techCard,
+        quantity: Number(quantity),
+        comment,
+      });
 
-      const [
-        techMaterialsResult,
-        techConsumablesResult,
-        techOperationsResult,
-      ] = await Promise.all([
-        supabase
-          .from("tech_card_materials")
-          .select("*")
-          .eq("tech_card_id", techCard.id),
-
-        supabase
-          .from("tech_card_consumables")
-          .select("*")
-          .eq("tech_card_id", techCard.id),
-
-        supabase
-          .from("tech_card_operations")
-          .select("*")
-          .eq("tech_card_id", techCard.id)
-          .order("sort_order", { ascending: true }),
-      ]);
-
-      if (techMaterialsResult.error) throw techMaterialsResult.error;
-      if (techConsumablesResult.error) throw techConsumablesResult.error;
-      if (techOperationsResult.error) throw techOperationsResult.error;
-
-      const techMaterials = (techMaterialsResult.data as TechCardMaterial[]) || [];
-      const techConsumables =
-        (techConsumablesResult.data as TechCardConsumable[]) || [];
-      const techOperations =
-        (techOperationsResult.data as TechCardOperation[]) || [];
-
-      const { data: stockCheckData, error: stockCheckError } =
-        await supabase.rpc("check_production_stock", {
-          p_tech_card_id: techCard.id,
-          p_order_quantity: orderQuantity,
-        });
-
-      if (stockCheckError) throw stockCheckError;
-
-      const stockShortages = (
-        (stockCheckData as ProductionStockCheckResult[]) || []
-      ).filter((item) => Number(item.missing_quantity || 0) > 0);
-
-      if (stockShortages.length > 0) {
-        throw new Error(
-          `Недостаточно остатков для запуска производства: ${stockShortages
-            .map(
-              (item) =>
-                `${item.item_name}: нужно ${formatQuantity(
-                  Number(item.required_quantity || 0),
-                )}, доступно ${formatQuantity(
-                  Number(item.available_quantity || 0),
-                )}`,
-            )
-            .join("; ")}`,
-        );
-      }
-
-      const materialIds = techMaterials.map((item) => item.material_id);
-      const consumableIds = techConsumables.map((item) => item.consumable_id);
-
-      const [materialsPricesResult, consumablesPricesResult] =
-        await Promise.all([
-          materialIds.length > 0
-            ? supabase
-                .from("materials")
-                .select("id, name, default_price, production_units_per_purchase_unit")
-                .in("id", materialIds)
-            : Promise.resolve({ data: [], error: null }),
-
-          consumableIds.length > 0
-            ? supabase
-                .from("consumables")
-                .select("id, name, default_price")
-                .in("id", consumableIds)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
-
-      if (materialsPricesResult.error) throw materialsPricesResult.error;
-      if (consumablesPricesResult.error) throw consumablesPricesResult.error;
-
-      const materialPrices = (materialsPricesResult.data as MaterialPrice[]) || [];
-      const consumablePrices =
-        (consumablesPricesResult.data as ConsumablePrice[]) || [];
-
-      const materialPriceMap = new Map(
-        materialPrices.map((item) => [item.id, Number(item.default_price || 0)])
-      );
-
-      const consumablePriceMap = new Map(
-        consumablePrices.map((item) => [
-          item.id,
-          Number(item.default_price || 0),
-        ])
-      );
-
-      const materialInfoMap = new Map(
-        materialPrices.map((item) => [item.id, item]),
-      );
-
-      const consumableInfoMap = new Map(
-        consumablePrices.map((item) => [item.id, item]),
-      );
-
-      const materialStockRequirements: ProductionMaterialRequirement[] =
-        techMaterials.map((item) => {
-          const materialInfo = materialInfoMap.get(item.material_id);
-          const requiredProductionQuantity =
-            Number(item.quantity || 0) * orderQuantity;
-          const requiredStockQuantity = convertProductionUnitsToStockUnits(
-            requiredProductionQuantity,
-            materialInfo?.production_units_per_purchase_unit,
+      let chzSuffix = "";
+      if (chzOrderEnabled && chzMapping?.gtin) {
+        try {
+          const { data, error: invokeError } = await supabase.functions.invoke(
+            "chestny-znak-auth",
+            {
+              body: {
+                action: "prepare_production_code_order",
+                productionOrderId: orderId,
+              },
+            },
           );
+          if (invokeError) throw invokeError;
+          if (data?.error) throw new Error(String(data.error));
 
-          return {
-            item_type: "material",
-            material_id: item.material_id,
-            quantity: requiredStockQuantity,
-            name: materialInfo?.name || "Материал",
-          };
-        });
-
-      const consumableStockRequirements: ProductionConsumableRequirement[] =
-        techConsumables.map((item) => {
-          const consumableInfo = consumableInfoMap.get(item.consumable_id);
-
-          return {
-            item_type: "consumable",
-            consumable_id: item.consumable_id,
-            quantity: Number(item.quantity || 0) * orderQuantity,
-            name: consumableInfo?.name || "Расходник",
-          };
-        });
-
-      const plannedMaterialsCost = techMaterials.reduce((sum, item) => {
-        const price = materialPriceMap.get(item.material_id) || 0;
-        const materialInfo = materialInfoMap.get(item.material_id);
-        const productionUnitsPerPurchaseUnit = Number(
-          materialInfo?.production_units_per_purchase_unit || 0,
-        );
-        const totalProductionQuantity =
-          Number(item.quantity || 0) * orderQuantity;
-        const totalPurchaseQuantity =
-          productionUnitsPerPurchaseUnit > 0
-            ? totalProductionQuantity / productionUnitsPerPurchaseUnit
-            : totalProductionQuantity;
-
-        return sum + totalPurchaseQuantity * price;
-      }, 0);
-
-      const plannedConsumablesCost = techConsumables.reduce((sum, item) => {
-        const price = consumablePriceMap.get(item.consumable_id) || 0;
-        return sum + Number(item.quantity || 0) * orderQuantity * price;
-      }, 0);
-
-      const plannedOperationsCost = techOperations.reduce((sum, item) => {
-        return sum + Number(item.price || 0) * orderQuantity;
-      }, 0);
-
-      const plannedTimeMin = techOperations.reduce((sum, item) => {
-        return sum + Number(item.planned_time_min || 0) * orderQuantity;
-      }, 0);
-
-      const plannedTotalCost =
-        plannedMaterialsCost + plannedConsumablesCost + plannedOperationsCost;
-
-      const { data: createdOrder, error: createOrderError } = await supabase
-        .from("production_orders")
-        .insert({
-          product_id: product.id,
-          tech_card_id: techCard.id,
-          order_number: orderNumber,
-          quantity: orderQuantity,
-          status: "draft",
-          comment: comment.trim() || null,
-          planned_materials_cost: plannedMaterialsCost,
-          planned_consumables_cost: plannedConsumablesCost,
-          planned_operations_cost: plannedOperationsCost,
-          planned_total_cost: plannedTotalCost,
-          planned_time_min: plannedTimeMin,
-        })
-        .select()
-        .single();
-
-      if (createOrderError) throw createOrderError;
-
-      const orderId = createdOrder.id as string;
-
-      const orderMaterials = techMaterials.map((item) => {
-        const price = materialPriceMap.get(item.material_id) || 0;
-        const totalQuantity = Number(item.quantity || 0) * orderQuantity;
-
-        return {
-          production_order_id: orderId,
-          material_id: item.material_id,
-          quantity_per_unit: item.quantity,
-          total_quantity: totalQuantity,
-          planned_price: price,
-          planned_total:
-            (Number(item.quantity || 0) * orderQuantity) /
-              Number(
-                materialInfoMap.get(item.material_id)
-                  ?.production_units_per_purchase_unit || 1,
-              ) *
-              price,
-          comment: item.comment,
-        };
-      });
-
-      const orderConsumables = techConsumables.map((item) => {
-        const price = consumablePriceMap.get(item.consumable_id) || 0;
-        const totalQuantity = Number(item.quantity || 0) * orderQuantity;
-
-        return {
-          production_order_id: orderId,
-          consumable_id: item.consumable_id,
-          quantity_per_unit: item.quantity,
-          total_quantity: totalQuantity,
-          planned_price: price,
-          planned_total: totalQuantity * price,
-          comment: item.comment,
-        };
-      });
-
-      const orderOperations = techOperations.map((item) => {
-        const timePerUnit = Number(item.planned_time_min || 0);
-        const pricePerUnit = Number(item.price || 0);
-
-        return {
-          production_order_id: orderId,
-          operation_name: item.operation_name,
-          sort_order: item.sort_order,
-          planned_time_min_per_unit: timePerUnit,
-          planned_total_time_min: timePerUnit * orderQuantity,
-          price_per_unit: pricePerUnit,
-          planned_total_price: pricePerUnit * orderQuantity,
-          status: "pending",
-          completed_quantity: 0,
-          comment: item.comment,
-        };
-      });
-
-      if (orderMaterials.length > 0) {
-        const { error } = await supabase
-          .from("production_order_materials")
-          .insert(orderMaterials);
-
-        if (error) throw error;
+          chzSuffix = ` Заказ ЧЗ подготовлен: GTIN ${chzMapping.gtin}, ${Number(quantity)} кодов.`;
+        } catch (chzError) {
+          setError(
+            `Производственный заказ ${orderNumber} создан, но заказ ЧЗ не подготовлен: ${
+              chzError instanceof Error ? chzError.message : "неизвестная ошибка"
+            }`,
+          );
+        }
       }
 
-      if (orderConsumables.length > 0) {
-        const { error } = await supabase
-          .from("production_order_consumables")
-          .insert(orderConsumables);
-
-        if (error) throw error;
-      }
-
-      if (orderOperations.length > 0) {
-        const { error } = await supabase
-          .from("production_order_operations")
-          .insert(orderOperations);
-
-        if (error) throw error;
-      }
-
-      const stockReservationRows = [
-        ...materialStockRequirements.map((item) => ({
-          source_document_type: "production_order",
-          source_document_id: orderId,
-          production_order_id: orderId,
-          item_type: "material",
-          material_id: item.material_id,
-          product_id: null,
-          consumable_id: null,
-          quantity: item.quantity,
-          status: "active",
-          created_at: new Date().toISOString(),
-        })),
-        ...consumableStockRequirements.map((item) => ({
-          source_document_type: "production_order",
-          source_document_id: orderId,
-          production_order_id: orderId,
-          item_type: "consumable",
-          material_id: null,
-          product_id: null,
-          consumable_id: item.consumable_id,
-          quantity: item.quantity,
-          status: "active",
-          created_at: new Date().toISOString(),
-        })),
-      ].filter((item) => Number(item.quantity || 0) > 0);
-
-      if (stockReservationRows.length > 0) {
-        const { error: reservationError } = await supabase
-          .from("stock_reservations")
-          .insert(stockReservationRows);
-
-        if (reservationError) throw reservationError;
-
-        const { error: reserveOrderError } = await supabase
-          .from("production_orders")
-          .update({
-            materials_reserved_at: new Date().toISOString(),
-          })
-          .eq("id", orderId);
-
-        if (reserveOrderError) throw reserveOrderError;
-      }
-
-      setMessage(`Производственный заказ ${orderNumber} создан. Материалы зарезервированы.`);
+      setMessage(
+        `Производственный заказ ${orderNumber} создан. Материалы зарезервированы.${chzSuffix}`,
+      );
       setIsCreateOpen(false);
       setQuantity("");
       setComment("");
@@ -907,7 +697,7 @@ export default function Production({
       setError(
         error instanceof Error
           ? error.message
-          : "Не удалось создать производственный заказ"
+          : "Не удалось создать производственный заказ",
       );
     } finally {
       setCreating(false);
@@ -1109,6 +899,7 @@ export default function Production({
     setError("");
     setMessage("");
     setGeneratedQr(null);
+    setGeneratedBatchChz(null);
   }
 
   function openFinishBatch(item: ActiveBatchItem) {
@@ -1317,31 +1108,134 @@ export default function Production({
     }
   }
 
+  async function waitForPrintJob(jobId: string, timeoutMs = 12000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const { data, error: jobError } = await supabase
+        .from("print_jobs")
+        .select("status, error")
+        .eq("id", jobId)
+        .single();
+
+      if (jobError) throw jobError;
+
+      if (data.status === "printed" || data.status === "failed") {
+        return data as { status: "printed" | "failed"; error: string | null };
+      }
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 600);
+      });
+    }
+
+    return null;
+  }
+
+  async function printChzLabelsForBatch(batchNumber: string): Promise<string | null> {
+    try {
+      setActionLoading(true);
+      setMessage("");
+      setError("");
+
+      const batch =
+        batches.find((itemBatch) => itemBatch.batch_number === batchNumber) ||
+        null;
+
+      if (!batch) {
+        throw new Error(`Пачка ${batchNumber} не найдена`);
+      }
+
+      const required = Number(batch.quantity || 0);
+      if (!Number.isSafeInteger(required) || required <= 0) {
+        throw new Error("Некорректное количество изделий в пачке.");
+      }
+
+      // A print job already claimed by the agent must not be submitted again.
+      const { data: pendingJobs, error: pendingError } = await supabase
+        .from("print_jobs")
+        .select("id,status")
+        .eq("job_type", "chz_labels")
+        .contains("payload", { batchId: batch.id })
+        .in("status", ["pending", "claimed"])
+        .limit(1);
+      if (pendingError) throw pendingError;
+      if (pendingJobs?.length) {
+        throw new Error("Этикетки ЧЗ этой пачки уже находятся в очереди печати.");
+      }
+
+      const { data: labelRows, error: labelsError } = await supabase.rpc(
+        "get_chz_batch_label_payloads",
+        { p_batch_id: batch.id },
+      );
+      if (labelsError) throw labelsError;
+
+      let rows = Array.isArray(labelRows) ? labelRows : [];
+      if (rows.length < required) {
+        // Assign only missing codes from the shared GTIN pool, if available.
+        // The DB function locks selected codes and preserves existing allocations.
+        const { error: allocateError } = await supabase.rpc(
+          "allocate_chz_codes_to_batch",
+          { p_batch_id: batch.id, p_quantity: required },
+        );
+        if (allocateError) throw allocateError;
+        const { data: refreshed, error: refreshedError } = await supabase.rpc(
+          "get_chz_batch_label_payloads",
+          { p_batch_id: batch.id },
+        );
+        if (refreshedError) throw refreshedError;
+        rows = Array.isArray(refreshed) ? refreshed : [];
+      }
+      if (rows.length !== required) {
+        throw new Error(
+          "В пачке закреплено " + rows.length + " из " + required +
+          " кодов ЧЗ. Печать неполного набора остановлена.",
+        );
+      }
+      const gtins = new Set(rows.map((row: any) => String(row.gtin || "")));
+      if (gtins.size !== 1 || gtins.has("")) {
+        throw new Error("В пачке найдены коды разных GTIN. Печать остановлена.");
+      }
+
+      const alreadyPrinted = rows.filter((row: any) => row.printed_at).length;
+      if (alreadyPrinted > 0 || batch.chz_labels_printed_at) {
+        const confirmed = window.confirm(
+          `У этой пачки уже печаталось этикеток: ${alreadyPrinted}. Повторно будут напечатаны те же самые коды, новые коды не выделяются. Продолжить?`,
+        );
+        if (!confirmed) return null;
+      }
+
+      const labels = rows.map((row: any) => ({
+        code: String(row.code || ""),
+        brand: String(row.brand || "СТРИТСТРИМ"),
+        productName: String(row.label_name || row.product_name || "Изделие"),
+        color: String(row.color_name || ""),
+        size: String(row.size_name || ""),
+        composition: String(row.composition || ""),
+        barcode: String(row.barcode || ""),
+      }));
+      if (labels.some((label) => !label.code)) throw new Error("Есть пустые коды ЧЗ.");
+      const first = labels[0];
+      if (labels.some((label) => label.brand !== first.brand || label.productName !== first.productName || label.color !== first.color || label.size !== first.size || label.composition !== first.composition || label.barcode !== first.barcode)) {
+        throw new Error("В пачке разные данные этикеток. Печать остановлена.");
+      }
+      const count = printUnifiedChzLabels(labels.map((label) => label.code), first, batchNumber);
+      const message = `Открыто окно печати ${count} этикеток ЧЗ для пачки ${batchNumber}. Коды закреплены за пачкой.`;
+      setMessage(message);
+      return message;
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Ошибка подготовки этикеток ЧЗ";
+      setError(message);
+      throw cause;
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function printQrLabel(item: GeneratedQr) {
     try {
       setMessage("");
       setError("");
-
-      const response = await fetch("http://localhost:3001/print-qr", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          printerName: "Xprinter XP-365B",
-          batchNumber: item.batchNumber,
-          productName: item.payload.product_name,
-          article: item.payload.product_article || "",
-          quantity: item.payload.quantity,
-          qrDataUrl: item.dataUrl,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Ошибка печати QR");
-      }
 
       const batch =
         batches.find((itemBatch) => itemBatch.batch_number === item.batchNumber) ||
@@ -1349,7 +1243,7 @@ export default function Production({
 
       if (!batch) {
         throw new Error(
-          `QR отправлен на принтер, но пачка ${item.batchNumber} не найдена для записи журнала печати`,
+          `Пачка ${item.batchNumber} не найдена, задание на печать не создано`,
         );
       }
 
@@ -1359,26 +1253,45 @@ export default function Production({
       } = await supabase.auth.getUser();
 
       if (userError) throw userError;
+      if (!user) throw new Error("Для печати нужно войти в ERP");
 
-      const { error: printLogError } = await supabase
-        .from("production_qr_print_logs")
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
         .insert({
-          batch_id: batch.id,
-          production_order_id: batch.production_order_id,
-          printed_by: user?.id || null,
-          printer_name: "Xprinter XP-365B",
-          batch_number: batch.batch_number,
-          quantity: Number(batch.quantity || 0),
-        });
+          printer_code: "xprinter-main",
+          job_type: "qr",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber: item.batchNumber,
+            productName: item.payload.product_name,
+            article: item.payload.product_article || "",
+            quantity: item.payload.quantity,
+            qrDataUrl: item.dataUrl,
+            batchId: batch.id,
+            productionOrderId: batch.production_order_id,
+          },
+        })
+        .select("id, status")
+        .single();
 
-      if (printLogError) {
-        throw new Error(
-          `QR напечатан, но не удалось записать факт печати: ${printLogError.message}`,
-        );
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать задание печати");
+
+      const result = await waitForPrintJob(job.id);
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Принтер не смог выполнить задание");
       }
 
-      setMessage(`QR пачки ${item.batchNumber} отправлен на печать и записан в журнал`);
-      await loadProductionOrders();
+      if (result?.status === "printed") {
+        setMessage(`QR пачки ${item.batchNumber} напечатан и записан в журнал`);
+        await loadProductionOrders();
+        return;
+      }
+
+      setMessage(
+        `QR пачки ${item.batchNumber} поставлен в очередь. Ноутбук распечатает его автоматически`,
+      );
     } catch (error) {
       setError(
         error instanceof Error
@@ -1414,39 +1327,49 @@ export default function Production({
 
   async function handleTestPrint() {
     try {
-    setMessage("");
-    setError("");
+      setMessage("");
+      setError("");
 
-    const response = await fetch("http://localhost:3001/print-test", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        printerName: "Xprinter XP-365B",
-        batchNumber: "PK-TEST-001",
-        productName: "Шапка бини",
-        article: "bini-black-52",
-        quantity: 15,
-        operation: "Стачивание",
-      }),
-    });
+      const { data: job, error: queueError } = await supabase
+        .from("print_jobs")
+        .insert({
+          printer_code: "xprinter-main",
+          job_type: "test",
+          payload: {
+            printerName: "Xprinter XP-365B",
+            batchNumber: "PK-TEST-001",
+            productName: "Шапка бини",
+            article: "bini-black-52",
+            quantity: 15,
+            operation: "Стачивание",
+          },
+        })
+        .select("id, status")
+        .single();
 
-    const result = await response.json();
+      if (queueError) throw queueError;
+      if (!job?.id) throw new Error("Не удалось создать тестовое задание печати");
 
-    if (!response.ok) {
-      throw new Error(result.error || "Ошибка печати");
+      const result = await waitForPrintJob(job.id);
+
+      if (result?.status === "failed") {
+        throw new Error(result.error || "Ошибка тестовой печати");
+      }
+
+      if (result?.status === "printed") {
+        setMessage("Тестовая этикетка напечатана");
+        return;
+      }
+
+      setMessage("Тестовая этикетка поставлена в очередь печати");
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Ошибка тестовой печати"
+      );
     }
-
-    setMessage("Тестовая этикетка отправлена на принтер");
-  } catch (error) {
-    setError(
-      error instanceof Error
-        ? error.message
-        : "Ошибка тестовой печати"
-    );
   }
-}
   async function makeQrFromPayload(payload: GeneratedQr["payload"]) {
     const qrDataUrl = await QRCode.toDataURL(JSON.stringify(payload), {
       width: 600,
@@ -1503,20 +1426,6 @@ export default function Production({
     }
   }
 
-
-  async function finalizeProductionOrderStock(orderId: string) {
-    /*
-      Финализация производства вынесена в БД, чтобы исключить двойное проведение.
-      Это важно для телефона/планшета: браузер может повторить запрос или быстро
-      обновить экран, но SQL-функция держит lock по заказу и не создаёт второй
-      комплект складских движений.
-    */
-    const { error } = await supabase.rpc("finalize_production_order_stock_safe", {
-      p_order_id: orderId,
-    });
-
-    if (error) throw error;
-  }
 
   async function finalizeProductionBatchStock(
     order: ProductionOrder,
@@ -1641,6 +1550,30 @@ export default function Production({
     if (movementsError) throw movementsError;
   }
 
+  async function assertProductionOrderStockReceived(
+    orderId: string,
+    goodQuantity: number,
+  ) {
+    const { data: receipts, error: receiptsError } = await supabase
+      .from("stock_movements")
+      .select("quantity")
+      .eq("production_order_id", orderId)
+      .eq("movement_type", "production_receipt")
+      .eq("item_type", "product");
+
+    if (receiptsError) throw receiptsError;
+
+    const receivedQuantity = (receipts || []).reduce(
+      (sum, movement) => sum + Number(movement.quantity || 0),
+      0,
+    );
+    if (receivedQuantity !== goodQuantity) {
+      throw new Error(
+        `Заказ не закрыт: на склад поступило ${receivedQuantity} из ${goodQuantity} годных изделий. Проверь движения по завершённым QR-пачкам.`,
+      );
+    }
+  }
+
   async function isProductionOrderFullyDone(orderId: string, orderQuantity: number) {
     const { data: freshOperations, error: freshOperationsError } = await supabase
       .from("production_order_operations")
@@ -1658,35 +1591,6 @@ export default function Production({
             Number(item.completed_quantity || 0) >= Number(orderQuantity || 0),
         )
     );
-  }
-
-  async function finalizeFinishedOrdersFromLoadedData(
-    loadedOrders: ProductionOrder[],
-    loadedOperations: ProductionOrderOperation[],
-  ) {
-    const ordersToFinalize = loadedOrders.filter((order) => {
-      if (["done", "cancelled", "archived"].includes(order.status)) return false;
-
-      const orderOperations = loadedOperations.filter(
-        (operation) => operation.production_order_id === order.id,
-      );
-
-      return (
-        orderOperations.length > 0 &&
-        orderOperations.every(
-          (operation) =>
-            Number(operation.completed_quantity || 0) >= Number(order.quantity || 0),
-        )
-      );
-    });
-
-    if (ordersToFinalize.length === 0) return false;
-
-    for (const order of ordersToFinalize) {
-      await finalizeProductionOrderStock(order.id);
-    }
-
-    return true;
   }
 
   async function handleFinishOperation(e: React.FormEvent) {
@@ -1855,6 +1759,8 @@ export default function Production({
         но складской приход создаётся только по QR-пачкам после последней операции.
       */
 
+      let chzAllocationNote = "";
+
       if (finishOperation.sort_order === 1) {
         const batchNumber = `PK-${String(Date.now()).slice(-6)}`;
 
@@ -1869,7 +1775,7 @@ export default function Production({
 
         const qrItem = await makeQrFromPayload(payload);
 
-        const { error: batchError } = await supabase
+        const { data: createdBatch, error: batchError } = await supabase
           .from("production_batches")
           .insert({
             production_order_id: order.id,
@@ -1885,15 +1791,59 @@ export default function Production({
             color_name: payload.color_name,
             qr_payload: payload,
             comment: finishComment.trim() || null,
-          });
+          })
+          .select("id,batch_number,quantity,chz_gtin,chz_codes_allocated")
+          .single();
 
         if (batchError) throw batchError;
+        if (!createdBatch?.id) {
+          throw new Error("Пачка создана без идентификатора. Коды ЧЗ не могут быть закреплены.");
+        }
+
+        try {
+          const { data: allocatedCodes, error: allocationError } = await supabase.rpc(
+            "allocate_chz_codes_to_batch",
+            {
+              p_batch_id: createdBatch.id,
+              p_quantity: addedQuantity,
+            },
+          );
+
+          if (allocationError) throw allocationError;
+
+          const allocatedRows = Array.isArray(allocatedCodes) ? allocatedCodes : [];
+          const gtin = allocatedRows[0]?.gtin ? String(allocatedRows[0].gtin) : null;
+
+          if (allocatedRows.length > 0) {
+            setGeneratedBatchChz({
+              gtin,
+              allocated: allocatedRows.length,
+              required: addedQuantity,
+            });
+            chzAllocationNote = ` Коды ЧЗ закреплены за пачкой: ${allocatedRows.length} шт.`;
+          } else {
+            setGeneratedBatchChz(null);
+          }
+        } catch (allocationCause) {
+          const allocationMessage =
+            allocationCause instanceof Error
+              ? allocationCause.message
+              : "не удалось выделить коды ЧЗ";
+
+          setGeneratedBatchChz({
+            gtin: null,
+            allocated: 0,
+            required: addedQuantity,
+            warning: allocationMessage,
+          });
+          chzAllocationNote = ` Пачка создана, но коды ЧЗ не выделены: ${allocationMessage}`;
+        }
 
         setGeneratedQr(qrItem);
       }
 
       setMessage(
-        `Операция сохранена. Выполнено: ${addedQuantity} шт. Заработано: ${formatMoney(earned)}.`
+        `Операция сохранена. Выполнено: ${addedQuantity} шт. Заработано: ${formatMoney(earned)}.${chzAllocationNote}`
       );
       setFinishOperation(null);
       setFinishQuantity("");
@@ -1913,7 +1863,8 @@ export default function Production({
   async function handleFinishBatch(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!finishBatchItem) return;
+    if (finishingBatchRef.current || !finishBatchItem) return;
+    finishingBatchRef.current = true;
 
     const { batch, order, operation } = finishBatchItem;
 
@@ -1954,6 +1905,21 @@ export default function Production({
       setFinishBatchError("");
       setError("");
       setMessage("");
+
+      // Reject stale QR forms before changing operation totals or payroll logs.
+      const { data: currentBatch, error: currentBatchError } = await supabase
+        .from("production_batches")
+        .select("status, completed_quantity, current_operation_order")
+        .eq("id", batch.id)
+        .single();
+      if (currentBatchError) throw currentBatchError;
+      if (
+        currentBatch.status !== batch.status ||
+        Number(currentBatch.completed_quantity || 0) !== batchCompleted ||
+        Number(currentBatch.current_operation_order || 0) !== Number(batch.current_operation_order || 0)
+      ) {
+        throw new Error("Пачка уже изменена другим действием. Обнови данные перед завершением.");
+      }
 
       const {
         data: { user },
@@ -1996,162 +1962,29 @@ export default function Production({
       const operationNextStatus =
         newOperationCompleted >= operationTarget ? "done" : "pending";
 
-      const { error: operationError } = await supabase
-        .from("production_order_operations")
-        .update({
-          status: operationNextStatus,
-          completed_quantity: newOperationCompleted,
-          completed_at:
-            operationNextStatus === "done" ? finishedAt : operation.completed_at,
-        })
-        .eq("id", operation.id);
-
-      if (operationError) throw operationError;
+      // One RPC commits the operation, batch, payroll log and stock together.
+      // A stale scan or stock error rolls the entire transaction back.
+      const { error: completionError } = await supabase.rpc(
+        "complete_production_batch_operation",
+        {
+          p_batch_id: batch.id,
+          p_operation_id: operation.id,
+          p_quantity: finishQuantityNumber,
+          p_expected_completed: batchCompleted,
+          p_expected_operation_order: Number(batch.current_operation_order || 0),
+          p_comment: finishBatchComment.trim() || null,
+        },
+      );
+      if (completionError) throw completionError;
 
       const nextOperation = orderOperations.find(
         (item) => item.sort_order > Number(batch.current_operation_order || 0)
       );
-
-      let nextBatchData: Record<string, unknown> = {};
-      let nextBatchStatusMessage = "";
-
-      /*
-        ВАЖНО ДЛЯ QR-СЦЕНАРИЯ
-        Если сотрудник закрыл не всю пачку, пачка НЕ должна оставаться in_progress.
-        Она должна перейти в статус partial, чтобы при повторном сканировании QR
-        система предложила продолжить работу над остатком.
-
-        Пример:
-        quantity = 15
-        completed_quantity было 0
-        сотрудник сделал 10
-
-        После сохранения в production_batches должно быть:
-        status = partial
-        completed_quantity = 10
-        current_operation_order = текущая операция
-      */
-
-      if (isBatchOperationDone && nextOperation) {
-        nextBatchData = {
-          status: "waiting",
-          completed_quantity: 0,
-          current_operation_order: nextOperation.sort_order,
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: null,
-        };
-
-        nextBatchStatusMessage = `Пачка полностью закрыта на текущей операции и передана на операцию ${nextOperation.sort_order}. ${nextOperation.operation_name}.`;
-      } else if (isBatchOperationDone && !nextOperation) {
-        nextBatchData = {
-          status: "done",
-          completed_quantity: batchQuantity,
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: finishedAt,
-        };
-
-        nextBatchStatusMessage = "Пачка полностью завершена.";
-      } else {
-        nextBatchData = {
-          status: "partial",
-          completed_quantity: newBatchCompleted,
-          current_operation_order: Number(batch.current_operation_order || operation.sort_order),
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: null,
-        };
-
-        nextBatchStatusMessage = `Пачка выполнена частично. Осталось: ${Math.max(
-          0,
-          batchQuantity - newBatchCompleted
-        )} шт.`;
-      }
-
-      const { data: updatedBatch, error: batchError } = await supabase
-        .from("production_batches")
-        .update(nextBatchData)
-        .eq("id", batch.id)
-        .select("id, batch_number, quantity, completed_quantity, status, current_operation_order")
-        .maybeSingle();
-
-      if (batchError) throw batchError;
-
-      if (!updatedBatch) {
-        throw new Error(
-          "Пачка не обновилась в базе. Проверь RLS/права доступа к production_batches."
-        );
-      }
-
-      const { error: logError } = await supabase
-        .from("production_operation_logs")
-        .insert({
-          production_order_id: order.id,
-          production_order_operation_id: operation.id,
-          user_id: user?.id || null,
-          operation_name: operation.operation_name,
-          quantity: finishQuantityNumber,
-          price_per_unit: pricePerUnit,
-          earned_amount: earned,
-          started_at: startedAt,
-          finished_at: finishedAt,
-          duration_seconds: durationSeconds,
-          comment: finishBatchComment.trim() || null,
-        });
-
-      if (logError) throw logError;
-
-      const refreshedOperations = orderOperations.map((item) =>
-        item.id === operation.id
-          ? {
-              ...item,
-              status: operationNextStatus,
-              completed_quantity: newOperationCompleted,
-            }
-          : item
-      );
-
-      const allOperationsDone = refreshedOperations.every(
-        (item) =>
-          Number(item.completed_quantity || 0) >= Number(order.quantity || 0)
-      );
-
-      const orderBatches = batches.filter(
-        (item) => item.production_order_id === order.id
-      );
-
-      const refreshedBatches = orderBatches.map((item) =>
-        item.id === batch.id
-          ? {
-              ...item,
-              ...nextBatchData,
-            }
-          : item
-      );
-
-      const allBatchesDone =
-        refreshedBatches.length > 0 &&
-        refreshedBatches.every((item) => item.status === "done");
-
-      if (isBatchOperationDone && !nextOperation) {
-        await finalizeProductionBatchStock(order, batch, batchQuantity);
-      }
-
-      if (allBatchesDone) {
-        const { error: doneOrderError } = await supabase
-          .from("production_orders")
-          .update({
-            status: "done",
-            finished_goods_received_at: new Date().toISOString(),
-          })
-          .eq("id", order.id);
-
-        if (doneOrderError) throw doneOrderError;
-      }
+      const nextBatchStatusMessage = isBatchOperationDone
+        ? nextOperation
+          ? `Пачка передана на операцию ${nextOperation.sort_order}. ${nextOperation.operation_name}.`
+          : "Пачка полностью завершена."
+        : `Пачка выполнена частично. Осталось: ${Math.max(0, batchQuantity - newBatchCompleted)} шт.`;
 
       setMessage(
         `Пачка ${batch.batch_number} сохранена. Сделано: ${finishQuantityNumber} шт. Заработано: ${formatMoney(earned)} ${nextBatchStatusMessage}`
@@ -2167,6 +2000,7 @@ export default function Production({
         error instanceof Error ? error.message : "Не удалось завершить пачку"
       );
     } finally {
+      finishingBatchRef.current = false;
       setActionLoading(false);
     }
   }
@@ -2492,12 +2326,22 @@ export default function Production({
           История
         </button>
 
+        <div
+          style={{
+            width: 1,
+            alignSelf: "stretch",
+            background: "#dbeafe",
+            margin: "0 2px",
+          }}
+        />
+
         <button
-          onClick={() => setTab("techcards")}
-          style={tabButtonStyle(tab === "techcards")}
+          onClick={() => setTab("plan")}
+          style={tabButtonStyle(tab === "plan")}
         >
-          Техкарты
+          Общий план
         </button>
+
       </div>
 
       {(message || error) && (
@@ -2516,6 +2360,10 @@ export default function Production({
         </div>
       )}
 
+      {tab === "plan" ? (
+        <ProductionPlanningPage />
+      ) : (
+        <>
       {generatedQr && (
         <div
           style={{
@@ -2533,6 +2381,61 @@ export default function Production({
           </div>
 
           <QrCard item={generatedQr} onPrint={printQrLabel} />
+
+          {generatedBatchChz && (
+            <div
+              style={{
+                border: generatedBatchChz.warning
+                  ? "1px solid #fecaca"
+                  : "1px solid #86efac",
+                background: generatedBatchChz.warning ? "#fef2f2" : "#f0fdf4",
+                borderRadius: 12,
+                padding: 12,
+                color: generatedBatchChz.warning ? "#991b1b" : "#166534",
+                fontWeight: 700,
+              }}
+            >
+              {generatedBatchChz.warning ? (
+                <>
+                  Пачка создана, но коды Честного ЗНАКа пока не выделены.
+                  <div style={{ marginTop: 5, fontSize: 13, fontWeight: 600 }}>
+                    {generatedBatchChz.warning}
+                  </div>
+                </>
+              ) : (
+                <>
+                  Честный ЗНАК: закреплено {generatedBatchChz.allocated} из{" "}
+                  {generatedBatchChz.required} кодов
+                  {generatedBatchChz.gtin ? ` · GTIN ${generatedBatchChz.gtin}` : ""}.
+                  <div style={{ marginTop: 5, fontSize: 13, fontWeight: 600 }}>
+                    Эти коды принадлежат именно этой QR-пачке и не будут повторно
+                    выданы другой пачке.
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={actionLoading}
+                    onClick={() => void printChzLabelsForBatch(generatedQr.batchNumber).catch(() => undefined)}
+                    style={{
+                      marginTop: 10,
+                      border: 0,
+                      borderRadius: 10,
+                      padding: "10px 14px",
+                      background: "#166534",
+                      color: "#fff",
+                      fontWeight: 850,
+                      cursor: actionLoading ? "wait" : "pointer",
+                      opacity: actionLoading ? 0.7 : 1,
+                    }}
+                  >
+                    {actionLoading
+                      ? "Отправляю на печать…"
+                      : `Печатать товарные этикетки · ${generatedBatchChz.allocated} шт.`}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -2613,6 +2516,7 @@ export default function Production({
           }}
           onOpenQrHistory={openQrHistory}
           onPrintBatchQr={printBatchQr}
+          onPrintChzLabels={(batch) => printChzLabelsForBatch(batch.batch_number)}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2652,6 +2556,7 @@ export default function Production({
           }}
           onOpenQrHistory={openQrHistory}
           onPrintBatchQr={printBatchQr}
+          onPrintChzLabels={(batch) => printChzLabelsForBatch(batch.batch_number)}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2708,6 +2613,8 @@ export default function Production({
           ))}
         </div>
       )}
+        </>
+      )}
 
       {isCreateOpen && (
         <ProductionCreateOrderModal
@@ -2717,11 +2624,15 @@ export default function Production({
           quantity={quantity}
           comment={comment}
           creating={creating}
+          chzOrderEnabled={chzOrderEnabled}
+          chzMappingLoading={chzMappingLoading}
+          chzMapping={chzMapping}
           onClose={() => setIsCreateOpen(false)}
           onSubmit={handleCreateProductionOrder}
           onProductChange={setSelectedProductId}
           onQuantityChange={setQuantity}
           onCommentChange={setComment}
+          onChzOrderEnabledChange={setChzOrderEnabled}
         />
       )}
 

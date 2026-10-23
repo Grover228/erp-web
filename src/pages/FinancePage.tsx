@@ -76,6 +76,7 @@ type TransactionUpdatePayload = {
 
 type ModalType = "account" | "income" | "expense" | "category" | null;
 type FinanceTab = "operations" | "categories";
+type FinancePeriod = "month" | "quarter" | "year";
 
 const accountTypes = [
   { value: "cash", label: "Наличные" },
@@ -133,6 +134,8 @@ export default function FinancePage() {
   const [categoryMessage, setCategoryMessage] = useState("");
   const [modalType, setModalType] = useState<ModalType>(null);
   const [activeTab, setActiveTab] = useState<FinanceTab>("operations");
+  const [period, setPeriod] = useState<FinancePeriod>("month");
+  const [periodAnchor, setPeriodAnchor] = useState(todayDate().slice(0, 7));
   const [selectedTransaction, setSelectedTransaction] =
     useState<FinanceTransaction | null>(null);
   const [linkedPaymentId, setLinkedPaymentId] = useState<string | null>(null);
@@ -613,67 +616,228 @@ export default function FinancePage() {
     });
   }, [categories, transactions]);
 
+
+  const periodRange = useMemo(() => {
+    const [yearValue, monthValue] = periodAnchor.split("-").map(Number);
+    const anchor = new Date(yearValue, Math.max(0, monthValue - 1), 1);
+
+    let start = new Date(anchor);
+    let end = new Date(anchor);
+
+    if (period === "month") {
+      end = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1);
+    } else if (period === "quarter") {
+      const quarterMonth = Math.floor(anchor.getMonth() / 3) * 3;
+      start = new Date(anchor.getFullYear(), quarterMonth, 1);
+      end = new Date(anchor.getFullYear(), quarterMonth + 3, 1);
+    } else {
+      start = new Date(anchor.getFullYear(), 0, 1);
+      end = new Date(anchor.getFullYear() + 1, 0, 1);
+    }
+
+    return { start, end };
+  }, [period, periodAnchor]);
+
+  const periodTransactions = useMemo(() => {
+    return transactions.filter((transaction) => {
+      const date = new Date(`${transaction.operation_date}T00:00:00`);
+      return date >= periodRange.start && date < periodRange.end;
+    });
+  }, [transactions, periodRange]);
+
+  const periodIncome = useMemo(
+    () =>
+      periodTransactions
+        .filter((item) => item.type === "income")
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    [periodTransactions]
+  );
+
+  const periodExpense = useMemo(
+    () =>
+      periodTransactions
+        .filter((item) => item.type === "expense")
+        .reduce((sum, item) => sum + Number(item.amount || 0), 0),
+    [periodTransactions]
+  );
+
+  const periodNet = periodIncome - periodExpense;
+
+  const chartData = useMemo(() => {
+    const endKey = periodRange.end.getTime();
+    const netAfterPeriod = transactions.reduce((sum, item) => {
+      const date = new Date(`${item.operation_date}T00:00:00`).getTime();
+      if (date < endKey) return sum;
+      const amount = Number(item.amount || 0);
+      return sum + (item.type === "income" ? amount : item.type === "expense" ? -amount : 0);
+    }, 0);
+
+    const periodEndingBalance = totalBalance - netAfterPeriod;
+    const openingBalance = periodEndingBalance - periodNet;
+    const grouped = new Map<string, { income: number; expense: number }>();
+
+    [...periodTransactions]
+      .sort((a, b) => a.operation_date.localeCompare(b.operation_date))
+      .forEach((item) => {
+        const current = grouped.get(item.operation_date) || { income: 0, expense: 0 };
+        const amount = Number(item.amount || 0);
+        if (item.type === "income") current.income += amount;
+        if (item.type === "expense") current.expense += amount;
+        grouped.set(item.operation_date, current);
+      });
+
+    let balance = openingBalance;
+    const points = [...grouped.entries()].map(([date, values]) => {
+      balance += values.income - values.expense;
+      return { date, ...values, balance };
+    });
+
+    return { openingBalance, endingBalance: periodEndingBalance, points };
+  }, [transactions, periodTransactions, periodRange, totalBalance, periodNet]);
+
+  const periodLabel = useMemo(() => {
+    const formatter = new Intl.DateTimeFormat("ru-RU", {
+      month: "long",
+      year: "numeric",
+    });
+
+    if (period === "month") return formatter.format(periodRange.start);
+
+    if (period === "quarter") {
+      const quarter = Math.floor(periodRange.start.getMonth() / 3) + 1;
+      return `${quarter} квартал ${periodRange.start.getFullYear()}`;
+    }
+
+    return String(periodRange.start.getFullYear());
+  }, [period, periodRange]);
+
+  function formatOperationDate(value: string) {
+    const date = new Date(`${value}T00:00:00`);
+    if (Number.isNaN(date.getTime())) return value;
+
+    return new Intl.DateTimeFormat("ru-RU", {
+      day: "2-digit",
+      month: "short",
+    }).format(date);
+  }
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
-      <div style={cardStyle}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: 16,
-            flexWrap: "wrap",
-            alignItems: "flex-start",
-          }}
-        >
-          <div style={{ minWidth: 240, flex: "1 1 420px" }}>
-            <div style={{ fontSize: 24, fontWeight: 800, color: "#0f172a" }}>
-              Счета
+      <div style={heroCardStyle}>
+        <div style={financeToolbarStyle}>
+          <div>
+            <div style={{ fontSize: 26, fontWeight: 900, color: "#0f172a" }}>
+              Финансы
             </div>
-            <div style={{ marginTop: 6, color: "#64748b", lineHeight: 1.5 }}>
-              Базовая точка учета денежных средств. Позже сюда привяжем оплаты поставщикам.
+            <div style={{ color: "#64748b", marginTop: 5 }}>
+              Деньги, счета и движение средств в одном месте
             </div>
           </div>
 
-          <div style={balanceCardStyle}>
-            <div style={{ color: "#64748b", fontSize: 13, fontWeight: 700 }}>
-              Общий баланс
+          <div style={toolbarActionsStyle}>
+            <input
+              type="month"
+              value={periodAnchor}
+              onChange={(event) => setPeriodAnchor(event.target.value)}
+              style={monthInputStyle}
+            />
+            <button type="button" onClick={() => openModal("income")} disabled={accounts.length === 0} style={incomeButtonStyle}>
+              + Поступление
+            </button>
+            <button type="button" onClick={() => openModal("expense")} disabled={accounts.length === 0} style={expenseButtonStyle}>
+              − Расход
+            </button>
+            <button
+              type="button"
+              disabled
+              title="Переводы между счетами добавим следующим этапом"
+              style={transferButtonStyle}
+            >
+              ⇄ Между счетами
+            </button>
+          </div>
+        </div>
+
+        <div style={balanceHeroStyle}>
+          <div>
+            <div style={eyebrowStyle}>Общий остаток</div>
+            <div style={bigBalanceStyle}>{toMoney(totalBalance, "RUB")}</div>
+            <div style={{ marginTop: 8, color: periodNet >= 0 ? "#15803d" : "#b91c1c", fontWeight: 800 }}>
+              {periodNet >= 0 ? "+" : ""}
+              {toMoney(periodNet)} за {periodLabel}
             </div>
-            <div style={{ marginTop: 4, color: "#1d4ed8", fontSize: 22, fontWeight: 900 }}>
-              {toMoney(totalBalance, "RUB")}
+          </div>
+
+          <div style={summaryPillsStyle}>
+            <div style={summaryPillStyle("#ecfdf5", "#047857")}>
+              <span>Поступления</span>
+              <strong>+ {toMoney(periodIncome)}</strong>
+            </div>
+            <div style={summaryPillStyle("#fef2f2", "#b91c1c")}>
+              <span>Расходы</span>
+              <strong>− {toMoney(periodExpense)}</strong>
+            </div>
+            <div style={summaryPillStyle("#eff6ff", "#1d4ed8")}>
+              <span>Разница</span>
+              <strong>{periodNet >= 0 ? "+" : ""}{toMoney(periodNet)}</strong>
             </div>
           </div>
         </div>
 
-        <div
-          style={{
-            marginTop: 18,
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 10,
-          }}
-        >
-          <button type="button" onClick={() => openModal("account")} style={primaryButtonStyle}>
-            Добавить счет
-          </button>
-          <button
-            type="button"
-            onClick={() => openModal("income")}
-            disabled={accounts.length === 0}
-            style={primaryButtonStyle}
-          >
-            Пополнить счет
-          </button>
-          <button
-            type="button"
-            onClick={() => openModal("expense")}
-            disabled={accounts.length === 0}
-            style={dangerButtonStyle}
-          >
-            Расход
+        <div style={accountsStripStyle}>
+          {accounts.map((account) => (
+            <div key={account.id} style={accountMiniCardStyle}>
+              <div style={{ color: "#64748b", fontSize: 12, fontWeight: 800 }}>
+                {accountTypes.find((item) => item.value === account.type)?.label || account.type}
+              </div>
+              <div style={{ color: "#0f172a", fontSize: 15, fontWeight: 900, marginTop: 4 }}>
+                {account.name}
+              </div>
+              <div style={{ color: "#1d4ed8", fontSize: 18, fontWeight: 900, marginTop: 10 }}>
+                {toMoney(account.current_balance, account.currency)}
+              </div>
+            </div>
+          ))}
+
+          <button type="button" onClick={() => openModal("account")} style={addAccountCardStyle}>
+            <span style={{ fontSize: 22 }}>+</span>
+            <span>Добавить счёт</span>
           </button>
         </div>
 
         {error && !modalType && <ErrorBox message={error} />}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={sectionHeaderCompactStyle}>
+          <div>
+            <div style={sectionTitleLargeStyle}>Движение денег</div>
+            <div style={sectionSubtitleStyle}>Остаток, поступления и расходы за выбранный период</div>
+          </div>
+
+          <div style={periodTabsStyle}>
+            {([
+              ["month", "Месяц"],
+              ["quarter", "Квартал"],
+              ["year", "Год"],
+            ] as [FinancePeriod, string][]).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setPeriod(value)}
+                style={period === value ? periodTabActiveStyle : periodTabStyle}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <FinanceOverviewChart
+          points={chartData.points}
+          openingBalance={chartData.openingBalance}
+          endingBalance={chartData.endingBalance}
+        />
       </div>
 
       <div style={cardStyle}>
@@ -696,136 +860,71 @@ export default function FinancePage() {
       </div>
 
       {activeTab === "operations" && (
-        <>
-          <div style={cardStyle}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: "#0f172a", marginBottom: 14 }}>
-              Текущие счета
+        <div style={cardStyle}>
+          <div style={sectionHeaderCompactStyle}>
+            <div>
+              <div style={sectionTitleLargeStyle}>История операций</div>
+              <div style={sectionSubtitleStyle}>
+                Нажми на строку, чтобы открыть карточку операции и связанный документ
+              </div>
             </div>
-
-            {loading ? (
-              <div style={{ color: "#64748b", fontWeight: 700 }}>Загрузка счетов...</div>
-            ) : accounts.length === 0 ? (
-              <div style={{ color: "#64748b", lineHeight: 1.6 }}>
-                Счетов пока нет. Создай первый счет, например “Касса”.
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {accounts.map((account) => (
-                  <div key={account.id} style={accountRowStyle}>
-                    <div>
-                      <div style={{ color: "#0f172a", fontWeight: 900, fontSize: 17 }}>
-                        {account.name}
-                      </div>
-                      <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                        {accountTypes.find((type) => type.value === account.type)?.label || account.type} · {account.currency}
-                      </div>
-                      {account.comment && (
-                        <div style={{ color: "#64748b", fontSize: 13, marginTop: 6 }}>
-                          {account.comment}
-                        </div>
-                      )}
-                    </div>
-
-                    <div style={{ color: "#16a34a", fontSize: 20, fontWeight: 900 }}>
-                      {toMoney(account.current_balance, account.currency)}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <div style={{ color: "#64748b", fontSize: 13, fontWeight: 800 }}>
+              {periodTransactions.length} операций
+            </div>
           </div>
 
-          <div style={cardStyle}>
-            <div
-              style={{
-                fontSize: 20,
-                fontWeight: 800,
-                color: "#0f172a",
-                marginBottom: 14,
-              }}
-            >
-              Журнал операций
-            </div>
+          {periodTransactions.length === 0 ? (
+            <div style={emptyOperationsStyle}>За выбранный период операций нет.</div>
+          ) : (
+            <div style={operationsTableWrapStyle}>
+              <table style={operationsTableStyle}>
+                <thead>
+                  <tr>
+                    <th style={operationsThStyle}>Дата</th>
+                    <th style={operationsThStyle}>Операция</th>
+                    <th style={operationsThStyle}>Статья</th>
+                    <th style={operationsThStyle}>Счёт</th>
+                    <th style={{ ...operationsThStyle, textAlign: "right" }}>Сумма</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {periodTransactions.map((transaction) => {
+                    const account = accounts.find((item) => item.id === transaction.account_id);
+                    const isIncome = transaction.type === "income";
 
-            {transactions.length === 0 ? (
-              <div style={{ color: "#64748b" }}>
-                Операций пока нет
-              </div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {transactions.map((transaction) => {
-                  const account = accounts.find(
-                    (item) => item.id === transaction.account_id
-                  );
-
-                  const isIncome = transaction.type === "income";
-
-                  return (
-                    <button
-                      key={transaction.id}
-                      type="button"
-                      onClick={() => setSelectedTransaction(transaction)}
-                      style={{
-                        width: "100%",
-                        border: "1px solid #e2e8f0",
-                        borderRadius: 14,
-                        padding: 14,
-                        display: "flex",
-                        justifyContent: "space-between",
-                        gap: 12,
-                        flexWrap: "wrap",
-                        alignItems: "center",
-                        background: "#ffffff",
-                        cursor: "pointer",
-                        textAlign: "left",
-                      }}
-                    >
-                      <div style={{ display: "grid", gap: 4 }}>
-                        <div
-                          style={{
-                            fontWeight: 800,
-                            color: "#0f172a",
-                          }}
-                        >
-                          {isIncome ? "Приход" : "Расход"}
-                        </div>
-
-                        <div style={{ color: "#2563eb", fontSize: 14, fontWeight: 800 }}>
-                          {getCategoryName(transaction.category_id)}
-                        </div>
-
-                        <div style={{ color: "#64748b", fontSize: 14 }}>
-                          {account?.name || "Счет удален"}
-                        </div>
-
-                        <div style={{ color: "#64748b", fontSize: 13 }}>
-                          {transaction.operation_date}
-                        </div>
-
-                        {transaction.description && (
-                          <div style={{ color: "#475569", fontSize: 14 }}>
-                            {transaction.description}
-                          </div>
-                        )}
-                      </div>
-
-                      <div
-                        style={{
-                          color: isIncome ? "#16a34a" : "#dc2626",
-                          fontSize: 20,
-                          fontWeight: 900,
-                        }}
+                    return (
+                      <tr
+                        key={transaction.id}
+                        onClick={() => setSelectedTransaction(transaction)}
+                        style={operationTrStyle}
+                        title="Открыть карточку операции"
                       >
-                        {isIncome ? "+" : "-"}
-                        {toMoney(transaction.amount)}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </>
+                        <td style={operationsTdStyle}>{formatOperationDate(transaction.operation_date)}</td>
+                        <td style={operationsTdStyle}>
+                          <div style={{ color: "#0f172a", fontWeight: 900 }}>
+                            {transaction.description || (isIncome ? "Поступление" : "Расход")}
+                          </div>
+                          <div style={{ color: "#94a3b8", fontSize: 12, marginTop: 3 }}>
+                            {transaction.source_document_type ? "Есть связанный документ" : isIncome ? "Приход" : "Расход"}
+                          </div>
+                        </td>
+                        <td style={operationsTdStyle}>
+                          <span style={categoryBadgeStyle}>{getCategoryName(transaction.category_id)}</span>
+                        </td>
+                        <td style={operationsTdStyle}>{account?.name || "Счёт удалён"}</td>
+                        <td style={{ ...operationsTdStyle, textAlign: "right" }}>
+                          <span style={{ color: isIncome ? "#15803d" : "#dc2626", fontWeight: 900, fontSize: 16 }}>
+                            {isIncome ? "+" : "−"} {toMoney(transaction.amount, account?.currency || "RUB")}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
       {activeTab === "categories" && (
@@ -1077,6 +1176,113 @@ export default function FinancePage() {
   );
 }
 
+
+function FinanceOverviewChart({
+  points,
+  openingBalance,
+  endingBalance,
+}: {
+  points: { date: string; income: number; expense: number; balance: number }[];
+  openingBalance: number;
+  endingBalance: number;
+}) {
+  const width = 1000;
+  const height = 280;
+  const paddingX = 42;
+  const paddingTop = 24;
+  const paddingBottom = 42;
+  const values = [openingBalance, endingBalance, ...points.map((item) => item.balance)];
+  const minValue = Math.min(0, ...values);
+  const maxValue = Math.max(1, ...values);
+  const range = Math.max(1, maxValue - minValue);
+  const usableHeight = height - paddingTop - paddingBottom;
+
+  const chartPoints = [
+    { date: "", income: 0, expense: 0, balance: openingBalance },
+    ...points,
+  ];
+
+  const xForIndex = (index: number) => {
+    if (chartPoints.length <= 1) return width / 2;
+    return paddingX + (index / (chartPoints.length - 1)) * (width - paddingX * 2);
+  };
+
+  const yForValue = (value: number) =>
+    paddingTop + ((maxValue - value) / range) * usableHeight;
+
+  const polyline = chartPoints
+    .map((item, index) => `${xForIndex(index)},${yForValue(item.balance)}`)
+    .join(" ");
+
+  const maxFlow = Math.max(
+    1,
+    ...points.map((item) => Math.max(item.income, item.expense))
+  );
+
+  return (
+    <div style={chartWrapStyle}>
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", minHeight: 260, display: "block" }}>
+        {[0, 0.25, 0.5, 0.75, 1].map((step) => {
+          const y = paddingTop + step * usableHeight;
+          return (
+            <line
+              key={step}
+              x1={paddingX}
+              y1={y}
+              x2={width - paddingX}
+              y2={y}
+              stroke="#e2e8f0"
+              strokeWidth="1"
+            />
+          );
+        })}
+
+        {points.map((item, index) => {
+          const x = xForIndex(index + 1);
+          const incomeHeight = (item.income / maxFlow) * 72;
+          const expenseHeight = (item.expense / maxFlow) * 72;
+          const zeroY = height - paddingBottom;
+
+          return (
+            <g key={item.date}>
+              <rect x={x - 9} y={zeroY - incomeHeight} width="7" height={incomeHeight} rx="2" fill="#22c55e" opacity="0.75" />
+              <rect x={x + 2} y={zeroY - expenseHeight} width="7" height={expenseHeight} rx="2" fill="#ef4444" opacity="0.75" />
+            </g>
+          );
+        })}
+
+        <polyline
+          points={polyline}
+          fill="none"
+          stroke="#2563eb"
+          strokeWidth="4"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+
+        {chartPoints.map((item, index) => (
+          <circle
+            key={`${item.date}-${index}`}
+            cx={xForIndex(index)}
+            cy={yForValue(item.balance)}
+            r={index === chartPoints.length - 1 ? 6 : 4}
+            fill="#2563eb"
+          />
+        ))}
+      </svg>
+
+      <div style={chartLegendStyle}>
+        <span><i style={{ ...legendDotStyle, background: "#2563eb" }} /> Остаток</span>
+        <span><i style={{ ...legendDotStyle, background: "#22c55e" }} /> Поступления</span>
+        <span><i style={{ ...legendDotStyle, background: "#ef4444" }} /> Расходы</span>
+        <span style={{ marginLeft: "auto", color: "#334155", fontWeight: 900 }}>
+          На конец периода: {toMoney(endingBalance)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function CategoryColumn({
   title,
   type,
@@ -1217,6 +1423,272 @@ function Modal({
 function ErrorBox({ message }: { message: string }) {
   return <div style={errorBoxStyle}>{message}</div>;
 }
+
+const heroCardStyle: React.CSSProperties = {
+  background: "#ffffff",
+  borderRadius: 22,
+  padding: 22,
+  border: "1px solid #dbe4f0",
+  boxShadow: "0 12px 28px rgba(15, 23, 42, 0.07)",
+};
+
+const financeToolbarStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 14,
+  flexWrap: "wrap",
+};
+
+const toolbarActionsStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+};
+
+const monthInputStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 11,
+  padding: "10px 12px",
+  background: "#ffffff",
+  color: "#0f172a",
+  fontWeight: 800,
+};
+
+const incomeButtonStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: 11,
+  padding: "11px 14px",
+  background: "#16a34a",
+  color: "#ffffff",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const expenseButtonStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: 11,
+  padding: "11px 14px",
+  background: "#ef4444",
+  color: "#ffffff",
+  cursor: "pointer",
+  fontWeight: 900,
+};
+
+const transferButtonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: 11,
+  padding: "10px 14px",
+  background: "#f8fafc",
+  color: "#64748b",
+  cursor: "not-allowed",
+  fontWeight: 900,
+};
+
+const balanceHeroStyle: React.CSSProperties = {
+  marginTop: 18,
+  padding: 20,
+  borderRadius: 18,
+  background: "linear-gradient(135deg, #f8fbff 0%, #eff6ff 100%)",
+  border: "1px solid #dbeafe",
+  display: "flex",
+  justifyContent: "space-between",
+  gap: 20,
+  alignItems: "center",
+  flexWrap: "wrap",
+};
+
+const eyebrowStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 13,
+  fontWeight: 900,
+  textTransform: "uppercase",
+  letterSpacing: "0.04em",
+};
+
+const bigBalanceStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: "clamp(30px, 5vw, 46px)",
+  fontWeight: 950,
+  marginTop: 5,
+  letterSpacing: "-0.03em",
+};
+
+const summaryPillsStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(145px, 1fr))",
+  gap: 10,
+  flex: "1 1 520px",
+};
+
+function summaryPillStyle(background: string, color: string): React.CSSProperties {
+  return {
+    background,
+    color,
+    borderRadius: 14,
+    padding: 14,
+    display: "grid",
+    gap: 5,
+    minWidth: 0,
+  };
+}
+
+const accountsStripStyle: React.CSSProperties = {
+  marginTop: 14,
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+  gap: 10,
+};
+
+const accountMiniCardStyle: React.CSSProperties = {
+  border: "1px solid #e2e8f0",
+  borderRadius: 16,
+  padding: 14,
+  background: "#ffffff",
+};
+
+const addAccountCardStyle: React.CSSProperties = {
+  border: "1px dashed #93c5fd",
+  borderRadius: 16,
+  padding: 14,
+  background: "#f8fbff",
+  color: "#2563eb",
+  cursor: "pointer",
+  fontWeight: 900,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  minHeight: 88,
+};
+
+const sectionHeaderCompactStyle: React.CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: 14,
+  flexWrap: "wrap",
+  marginBottom: 14,
+};
+
+const sectionTitleLargeStyle: React.CSSProperties = {
+  color: "#0f172a",
+  fontSize: 21,
+  fontWeight: 900,
+};
+
+const sectionSubtitleStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 13,
+  marginTop: 4,
+};
+
+const periodTabsStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 6,
+  padding: 4,
+  borderRadius: 12,
+  background: "#f1f5f9",
+};
+
+const periodTabStyle: React.CSSProperties = {
+  border: "none",
+  borderRadius: 9,
+  padding: "8px 11px",
+  background: "transparent",
+  color: "#64748b",
+  cursor: "pointer",
+  fontWeight: 800,
+};
+
+const periodTabActiveStyle: React.CSSProperties = {
+  ...periodTabStyle,
+  background: "#ffffff",
+  color: "#2563eb",
+  boxShadow: "0 3px 10px rgba(15, 23, 42, 0.08)",
+};
+
+const chartWrapStyle: React.CSSProperties = {
+  border: "1px solid #eef2f7",
+  borderRadius: 16,
+  padding: 10,
+  overflow: "hidden",
+  background: "#ffffff",
+};
+
+const chartLegendStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 16,
+  alignItems: "center",
+  flexWrap: "wrap",
+  padding: "4px 8px 6px",
+  color: "#64748b",
+  fontSize: 13,
+  fontWeight: 800,
+};
+
+const legendDotStyle: React.CSSProperties = {
+  width: 9,
+  height: 9,
+  borderRadius: 99,
+  display: "inline-block",
+  marginRight: 5,
+};
+
+const operationsTableWrapStyle: React.CSSProperties = {
+  overflowX: "auto",
+  border: "1px solid #e2e8f0",
+  borderRadius: 14,
+};
+
+const operationsTableStyle: React.CSSProperties = {
+  width: "100%",
+  borderCollapse: "collapse",
+  minWidth: 760,
+};
+
+const operationsThStyle: React.CSSProperties = {
+  padding: "11px 12px",
+  color: "#64748b",
+  fontSize: 12,
+  fontWeight: 900,
+  textAlign: "left",
+  background: "#f8fafc",
+  borderBottom: "1px solid #e2e8f0",
+};
+
+const operationsTdStyle: React.CSSProperties = {
+  padding: "12px",
+  borderBottom: "1px solid #eef2f7",
+  color: "#334155",
+  fontSize: 13,
+  verticalAlign: "middle",
+};
+
+const operationTrStyle: React.CSSProperties = {
+  cursor: "pointer",
+  background: "#ffffff",
+};
+
+const categoryBadgeStyle: React.CSSProperties = {
+  display: "inline-flex",
+  padding: "5px 8px",
+  borderRadius: 999,
+  background: "#eff6ff",
+  color: "#1d4ed8",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const emptyOperationsStyle: React.CSSProperties = {
+  border: "1px dashed #cbd5e1",
+  borderRadius: 14,
+  padding: 20,
+  textAlign: "center",
+  color: "#64748b",
+  fontWeight: 700,
+};
 
 const cardStyle: React.CSSProperties = {
   background: "#ffffff",

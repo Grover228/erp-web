@@ -8,6 +8,8 @@ import ProcurementStatusesPage from "./pages/ProcurementStatusesPage";
 import WarehouseStatusesPage from "./pages/WarehouseStatusesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
 import FinancePage from "./pages/FinancePage";
+import OzonPage from "./pages/OzonPage";
+import ChestnyZnakPage from "./pages/ChestnyZnakPage";
 import WarehousePage from "./pages/WarehousePage";
 import StatusesDirectory from "./directories/StatusesDirectory";
 import VariantsDirectory from "./directories/VariantsDirectory";
@@ -20,13 +22,19 @@ import ResaleProductsDirectory from "./directories/ResaleProductsDirectory";
 import AssetsDirectory from "./directories/AssetsDirectory";
 import { supabase } from "./supabase";
 import CounterpartiesDirectory from "./directories/CounterpartiesDirectory";
+import ValeraPage from "./valera/ValeraPage";
+import { readValeraLaunchContext } from "./valera/bridge";
 
 type Screen =
   | "dashboard"
   | "production"
+  | "production-planning"
   | "warehouse"
   | "finance"
+  | "ozon"
+  | "chestny-znak"
   | "scanner"
+  | "valera"
   | "employee-home"
   | "directories"
   | "directory-employees"
@@ -62,13 +70,65 @@ type Employee = {
   can_view_dashboard?: boolean | null;
 };
 
+const SCREEN_STORAGE_KEY = "erp:last-screen";
+const APP_BUILD = "2026.10.23-80";
+
+function isScreen(value: string | null): value is Screen {
+  return value === "dashboard" ||
+    value === "production" ||
+    value === "production-planning" ||
+    value === "warehouse" ||
+    value === "finance" ||
+    value === "ozon" ||
+    value === "chestny-znak" ||
+    value === "scanner" ||
+    value === "valera" ||
+    value === "employee-home" ||
+    value === "directories" ||
+    value === "directory-employees" ||
+    value === "directory-suppliers" ||
+    value === "directory-counterparties" ||
+    value === "directory-products" ||
+    value === "directory-resale-products" ||
+    value === "directory-assets" ||
+    value === "directory-materials" ||
+    value === "directory-consumables" ||
+    value === "directory-operations" ||
+    value === "directory-variants" ||
+    value === "directory-units" ||
+    value === "directory-statuses" ||
+    value === "procurement-statuses" ||
+    value === "warehouse-statuses";
+}
+
 function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [employeesOpen, setEmployeesOpen] = useState(true);
-  const [currentScreen, setCurrentScreen] = useState<Screen>("dashboard");
+  const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
+    const launch = readValeraLaunchContext();
+
+    if (typeof window !== "undefined") {
+      const saved = window.localStorage.getItem(SCREEN_STORAGE_KEY);
+
+      if (launch.requested && launch.source === "android") {
+        return "valera";
+      }
+
+      if (isScreen(saved)) {
+        return saved;
+      }
+
+      if (launch.requested) {
+        return "valera";
+      }
+    }
+
+    return "dashboard";
+  });
   const [productionInitialTab, setProductionInitialTab] =
     useState<ProductionTab>("jobs");
+  const [ozonVisited, setOzonVisited] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
 
   const [session, setSession] = useState<any>(null);
@@ -85,6 +145,12 @@ function App() {
   const [currentEmployeeLoading, setCurrentEmployeeLoading] = useState(false);
 
   const userMenuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (currentScreen === "ozon") {
+      setOzonVisited(true);
+    }
+  }, [currentScreen]);
 
   const alerts = [
     "Пачка №124 зависла",
@@ -108,6 +174,8 @@ function App() {
     isAdmin || isManager || currentEmployee?.can_use_scanner !== false;
   const canViewWarehouse = isAdmin || isManager;
   const canViewFinance = isAdmin;
+  const canViewOzon = isAdmin;
+  const canViewChestnyZnak = isAdmin;
 
   const menuItems = [
     canViewDashboard && { key: "dashboard" as Screen, label: "Дашборд 📊" },
@@ -117,25 +185,34 @@ function App() {
     },
     canViewWarehouse && { key: "warehouse" as Screen, label: "Склад 📦" },
     canViewFinance && { key: "finance" as Screen, label: "Финансы 💰" },
+    canViewOzon && { key: "ozon" as Screen, label: "Ozon 🟦" },
+    canViewChestnyZnak && { key: "chestny-znak" as Screen, label: "Честный ЗНАК 🟨" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
     canManageDirectories && {
       key: "directories" as Screen,
       label: "Справочники 📚",
     },
-    canUseScanner && { key: "scanner" as Screen, label: "Сканер QR 🔍" },
   ].filter(Boolean) as { key: Screen; label: string }[];
 
   const pageTitle =
-    currentScreen === "employee-home"
+    currentScreen === "valera"
+      ? "Валера"
+      : currentScreen === "employee-home"
       ? "Моя смена"
       : currentScreen === "dashboard"
       ? "Дашборд"
       : currentScreen === "production"
       ? "Производство"
+      : currentScreen === "production-planning"
+      ? "План производства"
       : currentScreen === "warehouse"
       ? "Склад"
       : currentScreen === "finance"
       ? "Финансы"
+      : currentScreen === "ozon"
+      ? "Ozon"
+      : currentScreen === "chestny-znak"
+      ? "Честный ЗНАК"
       : currentScreen === "directories"
       ? "Справочники"
       : currentScreen === "directory-employees"
@@ -169,16 +246,24 @@ function App() {
       : "Сканер QR";
 
   const pageSubtitle =
-    currentScreen === "employee-home"
+    currentScreen === "valera"
+      ? "Голосовой помощник, навыки и маршрутизация команд"
+      : currentScreen === "employee-home"
       ? "Рабочий экран сотрудника"
       : currentScreen === "dashboard"
       ? "Главный экран ERP"
       : currentScreen === "production"
       ? "Управление производством"
+      : currentScreen === "production-planning"
+      ? "Сезонный план, прогресс и календарь производства"
       : currentScreen === "warehouse"
       ? "Закупки, поступления, остатки и отгрузки"
       : currentScreen === "finance"
       ? "Счета, платежи и движение средств"
+      : currentScreen === "ozon"
+      ? "Начисления, удержания, себестоимость и прибыль"
+      : currentScreen === "chestny-znak"
+      ? "Маркировка, СУЗ и коды идентификации"
       : currentScreen === "directories"
       ? "Выбор нужного справочника"
       : currentScreen === "directory-employees"
@@ -213,6 +298,27 @@ function App() {
 
   const userEmail = session?.user?.email || "";
   const userInitial = userEmail ? userEmail[0].toUpperCase() : "U";
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(SCREEN_STORAGE_KEY, currentScreen);
+
+      if (currentScreen !== "valera") {
+        const url = new URL(window.location.href);
+        const hadValeraFlag =
+          url.searchParams.get("valera") === "1" ||
+          url.searchParams.get("assistant") === "valera" ||
+          url.hash === "#valera";
+
+        if (hadValeraFlag) {
+          url.searchParams.delete("valera");
+          url.searchParams.delete("assistant");
+          if (url.hash === "#valera") url.hash = "";
+          window.history.replaceState(null, "", url.toString());
+        }
+      }
+    }
+  }, [currentScreen]);
 
   useEffect(() => {
     document.body.style.overflow = menuOpen ? "hidden" : "auto";
@@ -274,6 +380,7 @@ function App() {
     if (!session || currentEmployeeLoading) return;
     if (!currentEmployee) return;
 
+    if (currentScreen === "valera") return;
     if (currentScreen === "employee-home") return;
 
     if (currentScreen === "scanner") {
@@ -286,7 +393,11 @@ function App() {
       return;
     }
 
-    if (currentScreen === "production" && !canManageProduction) {
+    if (
+      (currentScreen === "production" ||
+        currentScreen === "production-planning") &&
+      !canManageProduction
+    ) {
       setCurrentScreen("employee-home");
       return;
     }
@@ -297,6 +408,16 @@ function App() {
     }
 
     if (currentScreen === "finance" && !canViewFinance) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
+    if (currentScreen === "ozon" && !canViewOzon) {
+      setCurrentScreen("employee-home");
+      return;
+    }
+
+    if (currentScreen === "chestny-znak" && !canViewChestnyZnak) {
       setCurrentScreen("employee-home");
       return;
     }
@@ -331,6 +452,8 @@ function App() {
     canManageProduction,
     canViewWarehouse,
     canViewFinance,
+    canViewOzon,
+    canViewChestnyZnak,
     canManageDirectories,
   ]);
 
@@ -504,7 +627,16 @@ function App() {
       return;
     }
 
-    if (currentScreen === "warehouse" || currentScreen === "finance") {
+    if (currentScreen === "production-planning") {
+      setCurrentScreen(getDefaultScreen());
+      return;
+    }
+
+    if (
+      currentScreen === "warehouse" ||
+      currentScreen === "finance" ||
+      currentScreen === "ozon"
+    ) {
       setCurrentScreen(getDefaultScreen());
       return;
     }
@@ -682,6 +814,24 @@ function App() {
       );
     }
 
+    if (currentScreen === "valera") {
+      return (
+        <ValeraPage
+          userName={currentEmployee.full_name}
+          roleCode={currentRoleCode}
+          access={{
+            isAdmin,
+            isManager,
+            canViewDashboard,
+            canManageProduction,
+            canViewWarehouse,
+            canViewFinance,
+            canUseScanner,
+          }}
+        />
+      );
+    }
+
     if (currentScreen === "employee-home") {
       return (
         <EmployeeMobilePage
@@ -713,6 +863,12 @@ function App() {
       return <Production initialTab={productionInitialTab} />;
     }
 
+    if (currentScreen === "production-planning") {
+      if (!canManageProduction) return renderAccessDenied();
+
+      return <Production initialTab="plan" />;
+    }
+
     if (currentScreen === "warehouse") {
       if (!canViewWarehouse) return renderAccessDenied();
 
@@ -723,6 +879,18 @@ function App() {
       if (!canViewFinance) return renderAccessDenied();
 
       return <FinancePage />;
+    }
+
+    if (currentScreen === "ozon") {
+      if (!canViewOzon) return renderAccessDenied();
+
+      return null;
+    }
+
+    if (currentScreen === "chestny-znak") {
+      if (!canViewChestnyZnak) return renderAccessDenied();
+
+      return <ChestnyZnakPage />;
     }
 
     if (currentScreen === "directories") {
@@ -982,9 +1150,13 @@ function App() {
                   (item.key === "dashboard" && currentScreen === "dashboard") ||
                   (item.key === "production" &&
                     currentScreen === "production") ||
+                  (item.key === "production-planning" &&
+                    currentScreen === "production-planning") ||
                   (item.key === "warehouse" &&
                     currentScreen === "warehouse") ||
                   (item.key === "finance" && currentScreen === "finance") ||
+                  (item.key === "ozon" && currentScreen === "ozon") ||
+                  (item.key === "valera" && currentScreen === "valera") ||
                   (item.key === "directories" &&
                     (currentScreen === "directories" ||
                       currentScreen === "directory-employees" ||
@@ -1017,11 +1189,23 @@ function App() {
                           setProductionInitialTab("jobs");
                           setCurrentScreen("production");
                           break;
+                        case "production-planning":
+                          setCurrentScreen("production-planning");
+                          break;
                         case "warehouse":
                           setCurrentScreen("warehouse");
                           break;
                         case "finance":
                           setCurrentScreen("finance");
+                          break;
+                        case "ozon":
+                          setCurrentScreen("ozon");
+                          break;
+                        case "chestny-znak":
+                          setCurrentScreen("chestny-znak");
+                          break;
+                        case "valera":
+                          setCurrentScreen("valera");
                           break;
                         case "directories":
                           setCurrentScreen("directories");
@@ -1192,6 +1376,10 @@ function App() {
 
                   <div
                     style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
                       fontSize: 15,
                       color: "#64748b",
                       marginTop: 4,
@@ -1199,7 +1387,23 @@ function App() {
                       wordBreak: "break-word",
                     }}
                   >
-                    {pageSubtitle}
+                    <span>{pageSubtitle}</span>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        borderRadius: 999,
+                        background: "#eff6ff",
+                        color: "#2563eb",
+                        border: "1px solid #bfdbfe",
+                        padding: "2px 7px",
+                        fontSize: 11,
+                        fontWeight: 800,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      Сборка {APP_BUILD}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1374,15 +1578,31 @@ function App() {
                 </div>
                 <div
                   style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
                     fontSize: 12,
                     color: "#64748b",
                     marginTop: 3,
                     whiteSpace: "nowrap",
                     overflow: "hidden",
-                    textOverflow: "ellipsis",
                   }}
                 >
-                  {pageSubtitle}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{pageSubtitle}</span>
+                  <span
+                    style={{
+                      flexShrink: 0,
+                      borderRadius: 999,
+                      background: "#eff6ff",
+                      color: "#2563eb",
+                      border: "1px solid #bfdbfe",
+                      padding: "1px 5px",
+                      fontSize: 9,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {APP_BUILD}
+                  </span>
                 </div>
               </div>
 
@@ -1446,7 +1666,13 @@ function App() {
             </div>
           )}
 
-          {renderContent()}
+          {canViewOzon && ozonVisited && (
+            <div style={{ display: currentScreen === "ozon" ? "block" : "none" }}>
+              <OzonPage />
+            </div>
+          )}
+
+          {currentScreen !== "ozon" && renderContent()}
         </div>
       </main>
     </div>

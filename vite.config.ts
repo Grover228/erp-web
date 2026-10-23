@@ -7,6 +7,14 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: "autoUpdate",
+      workbox: {
+        cleanupOutdatedCaches: true,
+        clientsClaim: true,
+        skipWaiting: true,
+        navigateFallback: null,
+        globPatterns: ["**/*.{js,css,png,svg,ico,woff2}"],
+        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024,
+      },
       includeAssets: ["pwa-192x192.png", "pwa-512x512.png"],
       manifest: {
         name: "ERP система",

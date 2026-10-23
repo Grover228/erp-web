@@ -1,4 +1,4 @@
-export type ProductionTab = "jobs" | "active" | "history" | "techcards";
+export type ProductionTab = "jobs" | "active" | "history" | "techcards" | "plan";
 
 export type ProductionOrder = {
   id: string;
@@ -72,6 +72,9 @@ export type ProductionBatch = {
   started_at: string | null;
   completed_at: string | null;
   created_at: string | null;
+  chz_gtin?: string | null;
+  chz_codes_allocated?: number | null;
+  chz_labels_printed_at?: string | null;
 };
 
 export type ProductItem = {
