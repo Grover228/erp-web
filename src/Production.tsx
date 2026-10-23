@@ -1,5 +1,5 @@
 import { printUnifiedChzLabels } from "./pages/production/chzLabelPrint";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { supabase } from "./supabase";
@@ -150,6 +150,7 @@ export default function Production({
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const finishingBatchRef = useRef(false);
   const [deletingOrderId, setDeletingOrderId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -1905,7 +1906,8 @@ export default function Production({
   async function handleFinishBatch(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!finishBatchItem) return;
+    if (finishingBatchRef.current || !finishBatchItem) return;
+    finishingBatchRef.current = true;
 
     const { batch, order, operation } = finishBatchItem;
 
@@ -1946,6 +1948,21 @@ export default function Production({
       setFinishBatchError("");
       setError("");
       setMessage("");
+
+      // Reject stale QR forms before changing operation totals or payroll logs.
+      const { data: currentBatch, error: currentBatchError } = await supabase
+        .from("production_batches")
+        .select("status, completed_quantity, current_operation_order")
+        .eq("id", batch.id)
+        .single();
+      if (currentBatchError) throw currentBatchError;
+      if (
+        currentBatch.status !== batch.status ||
+        Number(currentBatch.completed_quantity || 0) !== batchCompleted ||
+        Number(currentBatch.current_operation_order || 0) !== Number(batch.current_operation_order || 0)
+      ) {
+        throw new Error("Пачка уже изменена другим действием. Обнови данные перед завершением.");
+      }
 
       const {
         data: { user },
@@ -2165,6 +2182,7 @@ export default function Production({
         error instanceof Error ? error.message : "Не удалось завершить пачку"
       );
     } finally {
+      finishingBatchRef.current = false;
       setActionLoading(false);
     }
   }
