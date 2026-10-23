@@ -76,6 +76,20 @@ export function printUnifiedChzLabels(receivedSuzCodes: string[], labelProductDa
     if (!receivedSuzCodes.length) throw new Error("Нет кодов ЧЗ для печати.");
     if (!labelProductData) throw new Error("Данные товара для этикетки ещё не загружены.");
 
+    // Never silently print a different layout when a product card is incomplete.
+    const requiredFields: Array<[string, string]> = [
+      ["Бренд", labelProductData.brand],
+      ["Название", labelProductData.productName],
+      ["Цвет", labelProductData.color],
+      ["Размер", labelProductData.size],
+      ["Состав", labelProductData.composition],
+      ["Штрихкод", labelProductData.barcode],
+    ];
+    const missing = requiredFields.filter(([, value]) => !String(value || "").trim()).map(([name]) => name);
+    if (missing.length) {
+      throw new Error(`Печать остановлена: в карточке товара не заполнено: ${missing.join(", ")}.`);
+    }
+
     try {
       const barcodeImage = labelProductData.barcode
         ? renderBarcodeDataUrl(labelProductData.barcode)
