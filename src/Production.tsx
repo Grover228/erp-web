@@ -1962,168 +1962,29 @@ export default function Production({
       const operationNextStatus =
         newOperationCompleted >= operationTarget ? "done" : "pending";
 
-      const { error: operationError } = await supabase
-        .from("production_order_operations")
-        .update({
-          status: operationNextStatus,
-          completed_quantity: newOperationCompleted,
-          completed_at:
-            operationNextStatus === "done" ? finishedAt : operation.completed_at,
-        })
-        .eq("id", operation.id);
-
-      if (operationError) throw operationError;
+      // One RPC commits the operation, batch, payroll log and stock together.
+      // A stale scan or stock error rolls the entire transaction back.
+      const { error: completionError } = await supabase.rpc(
+        "complete_production_batch_operation",
+        {
+          p_batch_id: batch.id,
+          p_operation_id: operation.id,
+          p_quantity: finishQuantityNumber,
+          p_expected_completed: batchCompleted,
+          p_expected_operation_order: Number(batch.current_operation_order || 0),
+          p_comment: finishBatchComment.trim() || null,
+        },
+      );
+      if (completionError) throw completionError;
 
       const nextOperation = orderOperations.find(
         (item) => item.sort_order > Number(batch.current_operation_order || 0)
       );
-
-      let nextBatchData: Record<string, unknown> = {};
-      let nextBatchStatusMessage = "";
-
-      /*
-        ВАЖНО ДЛЯ QR-СЦЕНАРИЯ
-        Если сотрудник закрыл не всю пачку, пачка НЕ должна оставаться in_progress.
-        Она должна перейти в статус partial, чтобы при повторном сканировании QR
-        система предложила продолжить работу над остатком.
-
-        Пример:
-        quantity = 15
-        completed_quantity было 0
-        сотрудник сделал 10
-
-        После сохранения в production_batches должно быть:
-        status = partial
-        completed_quantity = 10
-        current_operation_order = текущая операция
-      */
-
-      if (isBatchOperationDone && nextOperation) {
-        nextBatchData = {
-          status: "waiting",
-          completed_quantity: 0,
-          current_operation_order: nextOperation.sort_order,
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: null,
-        };
-
-        nextBatchStatusMessage = `Пачка полностью закрыта на текущей операции и передана на операцию ${nextOperation.sort_order}. ${nextOperation.operation_name}.`;
-      } else if (isBatchOperationDone && !nextOperation) {
-        nextBatchData = {
-          status: "done",
-          completed_quantity: batchQuantity,
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: finishedAt,
-        };
-
-        nextBatchStatusMessage = "Пачка полностью завершена.";
-      } else {
-        nextBatchData = {
-          status: "partial",
-          completed_quantity: newBatchCompleted,
-          current_operation_order: Number(batch.current_operation_order || operation.sort_order),
-          assigned_user_id: null,
-          assigned_at: null,
-          started_at: null,
-          completed_at: null,
-        };
-
-        nextBatchStatusMessage = `Пачка выполнена частично. Осталось: ${Math.max(
-          0,
-          batchQuantity - newBatchCompleted
-        )} шт.`;
-      }
-
-      const { data: updatedBatch, error: batchError } = await supabase
-        .from("production_batches")
-        .update(nextBatchData)
-        .eq("id", batch.id)
-        .select("id, batch_number, quantity, completed_quantity, status, current_operation_order")
-        .maybeSingle();
-
-      if (batchError) throw batchError;
-
-      if (!updatedBatch) {
-        throw new Error(
-          "Пачка не обновилась в базе. Проверь RLS/права доступа к production_batches."
-        );
-      }
-
-      const { error: logError } = await supabase
-        .from("production_operation_logs")
-        .insert({
-          production_order_id: order.id,
-          production_order_operation_id: operation.id,
-          user_id: user?.id || null,
-          operation_name: operation.operation_name,
-          quantity: finishQuantityNumber,
-          price_per_unit: pricePerUnit,
-          earned_amount: earned,
-          started_at: startedAt,
-          finished_at: finishedAt,
-          duration_seconds: durationSeconds,
-          comment: finishBatchComment.trim() || null,
-        });
-
-      if (logError) throw logError;
-
-      const refreshedOperations = orderOperations.map((item) =>
-        item.id === operation.id
-          ? {
-              ...item,
-              status: operationNextStatus,
-              completed_quantity: newOperationCompleted,
-            }
-          : item
-      );
-
-      const allOperationsDone = refreshedOperations.every(
-        (item) =>
-          Number(item.completed_quantity || 0) >= Number(order.quantity || 0)
-      );
-
-      const orderBatches = batches.filter(
-        (item) => item.production_order_id === order.id
-      );
-
-      const refreshedBatches = orderBatches.map((item) =>
-        item.id === batch.id
-          ? {
-              ...item,
-              ...nextBatchData,
-            }
-          : item
-      );
-
-      const allBatchesDone =
-        refreshedBatches.length > 0 &&
-        refreshedBatches.every((item) => item.status === "done");
-
-      if (isBatchOperationDone && !nextOperation) {
-        await finalizeProductionBatchStock(order, batch, batchQuantity);
-      }
-
-      if (allBatchesDone) {
-        const goodQuantity = refreshedBatches.reduce(
-          (sum, item) => sum + Number(item.completed_quantity || 0),
-          0,
-        );
-        await assertProductionOrderStockReceived(order.id, goodQuantity);
-
-        const { error: doneOrderError } = await supabase
-          .from("production_orders")
-          .update({
-            status: "done",
-            finished_goods_received_at: new Date().toISOString(),
-          })
-          .eq("id", order.id);
-
-        if (doneOrderError) throw doneOrderError;
-      }
+      const nextBatchStatusMessage = isBatchOperationDone
+        ? nextOperation
+          ? `Пачка передана на операцию ${nextOperation.sort_order}. ${nextOperation.operation_name}.`
+          : "Пачка полностью завершена."
+        : `Пачка выполнена частично. Осталось: ${Math.max(0, batchQuantity - newBatchCompleted)} шт.`;
 
       setMessage(
         `Пачка ${batch.batch_number} сохранена. Сделано: ${finishQuantityNumber} шт. Заработано: ${formatMoney(earned)} ${nextBatchStatusMessage}`
