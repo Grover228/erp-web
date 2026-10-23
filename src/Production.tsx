@@ -1427,20 +1427,6 @@ export default function Production({
   }
 
 
-  async function finalizeProductionOrderStock(orderId: string) {
-    /*
-      Финализация производства вынесена в БД, чтобы исключить двойное проведение.
-      Это важно для телефона/планшета: браузер может повторить запрос или быстро
-      обновить экран, но SQL-функция держит lock по заказу и не создаёт второй
-      комплект складских движений.
-    */
-    const { error } = await supabase.rpc("finalize_production_order_stock_safe", {
-      p_order_id: orderId,
-    });
-
-    if (error) throw error;
-  }
-
   async function finalizeProductionBatchStock(
     order: ProductionOrder,
     batch: ProductionBatch,
@@ -1605,35 +1591,6 @@ export default function Production({
             Number(item.completed_quantity || 0) >= Number(orderQuantity || 0),
         )
     );
-  }
-
-  async function finalizeFinishedOrdersFromLoadedData(
-    loadedOrders: ProductionOrder[],
-    loadedOperations: ProductionOrderOperation[],
-  ) {
-    const ordersToFinalize = loadedOrders.filter((order) => {
-      if (["done", "cancelled", "archived"].includes(order.status)) return false;
-
-      const orderOperations = loadedOperations.filter(
-        (operation) => operation.production_order_id === order.id,
-      );
-
-      return (
-        orderOperations.length > 0 &&
-        orderOperations.every(
-          (operation) =>
-            Number(operation.completed_quantity || 0) >= Number(order.quantity || 0),
-        )
-      );
-    });
-
-    if (ordersToFinalize.length === 0) return false;
-
-    for (const order of ordersToFinalize) {
-      await finalizeProductionOrderStock(order.id);
-    }
-
-    return true;
   }
 
   async function handleFinishOperation(e: React.FormEvent) {
