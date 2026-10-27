@@ -296,6 +296,15 @@ Deno.serve(async (req: Request) => {
     }
 
 
+    const skuMappingRows = Array.from(ozonBySku.entries()).map(([sku, article]) => ({
+      sku, article, updated_at: new Date().toISOString(),
+    }));
+    if (skuMappingRows.length) {
+      const { error: saveSkuError } = await admin.from("ozon_sku_mappings")
+        .upsert(skuMappingRows, { onConflict: "sku" });
+      if (saveSkuError) throw saveSkuError;
+    }
+
     const typesResponse = await ozon("/v1/finance/accrual/types", {});
     const typeNameById = new Map(
       (typesResponse?.accrual_types || []).map((row: any) => [
