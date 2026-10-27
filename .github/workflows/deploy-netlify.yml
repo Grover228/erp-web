@@ -1,0 +1,51 @@
+name: Publish ERP to Netlify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "public/**"
+      - "index.html"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/deploy-netlify.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Netlify credentials are configured
+        id: credentials
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+        run: |
+          if [ -n "$NETLIFY_AUTH_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Netlify publishing is skipped. Add NETLIFY_AUTH_TOKEN as a GitHub Actions repository secret to enable automatic publishing."
+          fi
+      - name: Checkout
+        if: steps.credentials.outputs.available == 'true'
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        if: steps.credentials.outputs.available == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Build ERP
+        if: steps.credentials.outputs.available == 'true'
+        run: npm ci && npm run build
+      - name: Publish production build
+        if: steps.credentials.outputs.available == 'true'
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: d650f399-c98d-42cd-81eb-9ea07f823d5d
+        run: npx --yes netlify-cli@23.11.0 deploy --prod --dir=dist --site="$NETLIFY_SITE_ID" --message="ERP $GITHUB_SHA"
