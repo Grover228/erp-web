@@ -23,18 +23,20 @@ Deno.serve(async(req)=>{
   if(!res.ok)throw new Error(path+": HTTP "+res.status+" "+String(data?.message||data?.error||"").slice(0,250));
   return data;
  }
- const result:any={fetchedAt:new Date().toISOString(),period:{from,to},balance:null,cashFlows:[],errors:[]};
+ const result:any={fetchedAt:new Date().toISOString(),period:{from,to},balance:null,cashFlows:[],cashFlowDetails:[],errors:[]};
  try{result.balance=await ozon("/v1/finance/balance",{date_from:from,date_to:to})}catch(e){result.errors.push(String(e))}
  try{
   for(let page=1;page<=20;page++){
    const response=await ozon("/v1/finance/cash-flow-statement/list",{date:{from:from+"T00:00:00.000Z",to:to+"T23:59:59.999Z"},page,page_size:100,with_details:true});
    const rows=response?.result?.cash_flows||[];
    result.cashFlows.push(...rows);
+   const details=response?.result?.details||[];
+   if(Array.isArray(details))result.cashFlowDetails.push(...details);
    if(page>=Number(response?.result?.page_count||response?.page_count||1)||rows.length===0)break;
   }
  }catch(e){result.errors.push(String(e))}
  const {data:snapshot,error:saveError}=await db.from("ozon_finance_snapshots")
-  .insert({date_from:from,date_to:to,balance:result.balance,cash_flows:result.cashFlows,errors:result.errors})
+  .insert({date_from:from,date_to:to,balance:result.balance,cash_flows:result.cashFlows,cash_flow_details:result.cashFlowDetails,errors:result.errors})
   .select("id").single();
  if(saveError)result.errors.push("Ошибка сохранения истории Ozon: "+saveError.message);
  else result.snapshotId=snapshot.id;
