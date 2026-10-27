@@ -1427,127 +1427,16 @@ export default function Production({
   }
 
 
+  // Database RPC owns stock posting; never insert movements from the browser.
   async function finalizeProductionBatchStock(
-    order: ProductionOrder,
+    _order: ProductionOrder,
     batch: ProductionBatch,
-    finishedQuantity: number,
+    _finishedQuantity: number,
   ) {
-    const now = new Date().toISOString();
-    const batchQuantity = Number(finishedQuantity || 0);
-    const orderQuantity = Number(order.quantity || 0);
-
-    if (batchQuantity <= 0) {
-      throw new Error("Количество готовой пачки должно быть больше 0");
-    }
-
-    if (orderQuantity <= 0) {
-      throw new Error("Количество производственного заказа должно быть больше 0");
-    }
-
-    const { data: existingMovements, error: existingMovementsError } =
-      await supabase
-        .from("stock_movements")
-        .select("id")
-        .eq("source_document_type", "production_batch")
-        .eq("source_document_id", batch.id)
-        .limit(1);
-
-    if (existingMovementsError) throw existingMovementsError;
-
-    if ((existingMovements || []).length > 0) {
-      return;
-    }
-
-    const ratio = batchQuantity / orderQuantity;
-
-    const [orderMaterialsResult, orderConsumablesResult] = await Promise.all([
-      supabase
-        .from("production_order_materials")
-        .select(
-          `
-          material_id,
-          total_quantity,
-          materials (
-            id,
-            name,
-            production_units_per_purchase_unit
-          )
-        `,
-        )
-        .eq("production_order_id", order.id),
-
-      supabase
-        .from("production_order_consumables")
-        .select("consumable_id, total_quantity")
-        .eq("production_order_id", order.id),
-    ]);
-
-    if (orderMaterialsResult.error) throw orderMaterialsResult.error;
-    if (orderConsumablesResult.error) throw orderConsumablesResult.error;
-
-    const materialMovementRows = ((orderMaterialsResult.data || []) as any[])
-      .map((row) => {
-        const material = Array.isArray(row.materials)
-          ? row.materials[0]
-          : row.materials;
-
-        const quantity = convertProductionUnitsToStockUnits(
-          Number(row.total_quantity || 0) * ratio,
-          material?.production_units_per_purchase_unit,
-        );
-
-        return {
-          movement_type: "production_write_off",
-          source_document_type: "production_batch",
-          source_document_id: batch.id,
-          production_order_id: order.id,
-          item_type: "material",
-          product_id: null,
-          material_id: row.material_id,
-          consumable_id: null,
-          quantity: -Math.abs(quantity),
-          created_at: now,
-        };
-      })
-      .filter((item) => Number(item.quantity || 0) !== 0);
-
-    const consumableMovementRows = ((orderConsumablesResult.data || []) as any[])
-      .map((row) => ({
-        movement_type: "production_write_off",
-        source_document_type: "production_batch",
-        source_document_id: batch.id,
-        production_order_id: order.id,
-        item_type: "consumable",
-        product_id: null,
-        material_id: null,
-        consumable_id: row.consumable_id,
-        quantity: -Math.abs(Number(row.total_quantity || 0) * ratio),
-        created_at: now,
-      }))
-      .filter((item) => Number(item.quantity || 0) !== 0);
-
-    const finishedProductMovementRow = {
-      movement_type: "production_receipt",
-      source_document_type: "production_batch",
-      source_document_id: batch.id,
-      production_order_id: order.id,
-      item_type: "product",
-      product_id: order.product_id,
-      material_id: null,
-      consumable_id: null,
-      quantity: batchQuantity,
-      created_at: now,
-    };
-
-    const { error: movementsError } = await supabase
-      .from("stock_movements")
-      .insert([
-        ...materialMovementRows,
-        ...consumableMovementRows,
-        finishedProductMovementRow,
-      ]);
-
-    if (movementsError) throw movementsError;
+    const { error } = await supabase.rpc("finalize_production_batch_stock_safe", {
+      p_batch_id: batch.id,
+    });
+    if (error) throw error;
   }
 
   async function assertProductionOrderStockReceived(
