@@ -40,6 +40,15 @@ type ArticleAnalytics = {
   missingCostQty: number;
 };
 
+type ArticleAllocation = {
+  feeSkuOperations: number;
+  allocatedProfit: number;
+  unallocatedProfit: number;
+  unallocatedNet: number;
+  unallocatedGross: number;
+  missingCostQty: number;
+};
+
 type PeriodSummary = {
   gross: number;
   ozon: number;
@@ -310,6 +319,7 @@ export default function OzonPage() {
   const [operations, setOperations] = useState<Operation[]>([]);
   const [runs, setRuns] = useState<SyncRun[]>([]);
   const [articleAnalytics, setArticleAnalytics] = useState<ArticleAnalytics[]>([]);
+  const [articleAllocation, setArticleAllocation] = useState<ArticleAllocation | null>(null);
   const [analyticsSummary, setAnalyticsSummary] = useState<PeriodSummary | null>(null);
   const [feeBreakdown, setFeeBreakdown] = useState<FeeBreakdown[]>([]);
   const [dailyFinance, setDailyFinance] = useState<DailyFinance[]>([]);
@@ -500,6 +510,7 @@ export default function OzonPage() {
       setOperations((operationResult.data as Operation[]) || []);
       setRuns((runResult.data as SyncRun[]) || []);
       setArticleAnalytics((analyticsResult.data?.articles as ArticleAnalytics[]) || []);
+      setArticleAllocation((analyticsResult.data?.allocation as ArticleAllocation) || null);
       setAnalyticsSummary((analyticsResult.data?.summary as PeriodSummary) || null);
       setFeeBreakdown((analyticsResult.data?.feeBreakdown as FeeBreakdown[]) || []);
       setDailyFinance((analyticsResult.data?.dailyFinance as DailyFinance[]) || []);
@@ -2130,6 +2141,14 @@ export default function OzonPage() {
             <div><div style={{ fontWeight: 900, fontSize: 18 }}>Аналитика по артикулам</div><div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>Расчёт по всем {operationCount} операциям выбранного периода.</div></div>
             <div style={{ color: "#64748b", fontSize: 13 }}>Сортировка: по прибыли</div>
           </div>
+          {articleAllocation && (
+            <div style={{ padding: "11px 18px", margin: "0 14px 12px", borderRadius: 10, background: "#fffbeb", color: "#92400e", fontSize: 13 }}>
+              Расходы с привязкой к SKU теперь включают отдельные услуги Ozon ({articleAllocation.feeSkuOperations} операций).
+              <b> Не распределено по артикулам: {money(articleAllocation.unallocatedProfit)}.</b>
+              {articleAllocation.missingCostQty > 0 && <> Не определена себестоимость для {number(articleAllocation.missingCostQty)} проданных единиц.</>}
+              {" "}Прибыль по артикулам — до распределения общих расходов и налогов; общий итог Ozon включает все операции.
+            </div>
+          )}
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1050 }}>
               <thead><tr style={{ background: "#f8fafc", color: "#475569", textAlign: "left" }}>{["Артикул", "Товар", "Продажи", "Возвраты", "Выручка", "Ozon", "Себестоимость", "Прибыль", "Маржа", "Без себест."].map((title) => <th key={title} style={{ padding: 12, fontSize: 12 }}>{title}</th>)}</tr></thead>
