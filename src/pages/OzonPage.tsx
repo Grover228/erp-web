@@ -1906,10 +1906,10 @@ export default function OzonPage() {
           <thead><tr><th align="left">Период</th><th align="right">К перечислению</th><th align="right">Остаток на конец</th></tr></thead>
           <tbody>{flows.map((f:any,i:number)=><tr key={i} style={{borderTop:"1px solid #e2e8f0"}}>
             <td>{String(f.period?.begin||"").slice(0,10)} — {String(f.period?.end||"").slice(0,10)}</td>
-            <td align="right">{typeof f.invoice_transfer==="number"?money(f.invoice_transfer):"—"}</td>
-            <td align="right">{typeof f.end_balance_amount==="number"?money(f.end_balance_amount):"—"}</td>
+            <td align="right">{amount(f.invoice_transfer ?? f.payment ?? f.payments ?? f.total?.payments) !== null ? money(amount(f.invoice_transfer ?? f.payment ?? f.payments ?? f.total?.payments)!) : "Не указано в ответе"}</td>
+            <td align="right">{amount(f.end_balance_amount ?? f.closing_balance ?? f.end_balance ?? f.total?.closing_balance) !== null ? money(amount(f.end_balance_amount ?? f.closing_balance ?? f.end_balance ?? f.total?.closing_balance)!) : "Не указано в ответе"}</td>
           </tr>)}</tbody>
-        </table></div>}
+        </table><details style={{marginTop:12}}><summary style={{cursor:"pointer",color:"#475569"}}>Технические данные периодов (для сверки с Ozon)</summary><pre style={{overflowX:"auto",whiteSpace:"pre-wrap",fontSize:12}}>{JSON.stringify(flows,null,2)}</pre></details></div>}
       </>}
     </section>;
   }
