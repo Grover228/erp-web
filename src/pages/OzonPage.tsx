@@ -1882,6 +1882,24 @@ export default function OzonPage() {
     const [data, setData] = useState<any>(null);
     const [busy, setBusy] = useState(false);
     const [failure, setFailure] = useState("");
+    useEffect(() => {
+      let mounted = true;
+      void supabase.from("ozon_finance_snapshots")
+        .select("fetched_at,date_from,date_to,balance,cash_flows,cash_flow_details,errors")
+        .order("fetched_at", { ascending: false }).limit(1).maybeSingle()
+        .then(({data: saved}) => {
+          if (mounted && saved) setData({
+            fetchedAt: saved.fetched_at,
+            period: {from: saved.date_from, to: saved.date_to},
+            balance: saved.balance,
+            cashFlows: saved.cash_flows,
+            cashFlowDetails: saved.cash_flow_details,
+            errors: saved.errors || [],
+            fromSnapshot: true,
+          });
+        });
+      return () => { mounted = false; };
+    }, []);
     async function refresh() {
       setBusy(true); setFailure("");
       try {
@@ -1893,11 +1911,25 @@ export default function OzonPage() {
       finally { setBusy(false); }
     }
     const total = data?.balance?.result?.total || data?.balance?.total;
-    const amount = (v: any) => typeof v?.value === "number" ? v.value : typeof v === "number" ? v : null;
-    const flows: any[] = data?.cashFlows || [];
+    const amount = (v: any): number | null => {
+      if(typeof v==="number" && Number.isFinite(v))return v;
+      if(typeof v==="string" && v.trim() && Number.isFinite(Number(v)))return Number(v);
+      if(v && typeof v==="object")return amount(v.value ?? v.amount);
+      return null;
+    };
+    const flows: any[] = Array.isArray(data?.cashFlows) ? data.cashFlows : [];
+    const details: any[] = Array.isArray(data?.cashFlowDetails) ? data.cashFlowDetails : [];
+    const detailFor = (flow: any, index: number) => {
+      const period = flow?.period;
+      const samePeriod = details.find((d:any) => d?.period?.begin && d.period?.begin===period?.begin && d.period?.end===period?.end);
+      if(samePeriod)return samePeriod;
+      const sameId = period?.id != null ? details.find((d:any) => d?.period?.id===period.id) : null;
+      return sameId || (details.length===flows.length ? details[index] : null) || {};
+    };
+    const fmt = (value: any) => amount(value)===null ? "—" : money(amount(value)!);
     return <section style={{ ...panelStyle, padding: 20, display: "grid", gap: 16 }}>
       <h2 style={{ margin: 0 }}>Выплаты и взаиморасчёты Ozon</h2>
-      <p style={{ margin: 0, color: "#64748b" }}>Данные напрямую из Seller API. Это не остаток банковского счёта ERP; суммы начислений нельзя повторно прибавлять к выплатам.</p>
+      <p style={{ margin: 0, color: "#64748b" }}>Баланс, начисления и перечисления из Seller API. Начисления не прибавляются повторно к выплатам и к остаткам в банке.</p>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <label>С <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={inputStyle} /></label>
         <label>По <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={inputStyle} /></label>
@@ -1906,21 +1938,28 @@ export default function OzonPage() {
       {failure && <p style={{color:"#b91c1c"}}>{failure}</p>}
       {data && <>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:12}}>
-          <SummaryCard title="Баланс на конец периода" value={amount(total?.closing_balance)===null?"Нет данных":money(amount(total?.closing_balance)!)} />
-          <SummaryCard title="Начислено за период" value={amount(total?.accrued)===null?"Нет данных":money(amount(total?.accrued)!)} />
-          <SummaryCard title="Перечислено за период" value={Array.isArray(total?.payments)?money(total.payments.reduce((sum:number,p:any)=>sum+(amount(p)||0),0)):"Нет данных"} />
+          <SummaryCard title="Баланс на конец периода" value={fmt(total?.closing_balance)} />
+          <SummaryCard title="Начислено за период" value={fmt(total?.accrued)} />
+          <SummaryCard title="Перечислено за период" value={Array.isArray(total?.payments)?money(total.payments.reduce((sum:number,p:any)=>sum+(amount(p)||0),0)):"—"} />
           <SummaryCard title="Периодов выплат" value={String(flows.length)} />
         </div>
-        <div style={{fontSize:13,color:"#64748b"}}>Обновлено: {new Date(data.fetchedAt).toLocaleString("ru-RU")}. Баланс Ozon и уже полученные на банковский счёт деньги не суммируются.</div>
+        <div style={{fontSize:13,color:"#64748b"}}>{data.fromSnapshot ? "Последняя сохранённая сверка" : "Обновлено из Ozon"}: {new Date(data.fetchedAt).toLocaleString("ru-RU")}. Период {data.period?.from} — {data.period?.to}. Баланс Ozon и поступления в банк не суммируются повторно.</div>
         {data.errors?.length>0 && <p style={{color:"#b45309"}}>Часть API-отчётов недоступна: {data.errors.join("; ")}</p>}
-        {flows.length>0 && <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr><th align="left">Период</th><th align="right">К перечислению</th><th align="right">Остаток на конец</th></tr></thead>
-          <tbody>{flows.map((f:any,i:number)=><tr key={i} style={{borderTop:"1px solid #e2e8f0"}}>
-            <td>{String(f.period?.begin||"").slice(0,10)} — {String(f.period?.end||"").slice(0,10)}</td>
-            <td align="right">{amount(f.invoice_transfer ?? f.payment ?? f.payments ?? f.total?.payments) !== null ? money(amount(f.invoice_transfer ?? f.payment ?? f.payments ?? f.total?.payments)!) : "Не указано в ответе"}</td>
-            <td align="right">{amount(f.end_balance_amount ?? f.closing_balance ?? f.end_balance ?? f.total?.closing_balance) !== null ? money(amount(f.end_balance_amount ?? f.closing_balance ?? f.end_balance ?? f.total?.closing_balance)!) : "Не указано в ответе"}</td>
-          </tr>)}</tbody>
-        </table><details style={{marginTop:12}}><summary style={{cursor:"pointer",color:"#475569"}}>Технические данные периодов (для сверки с Ozon)</summary><pre style={{overflowX:"auto",whiteSpace:"pre-wrap",fontSize:12}}>{JSON.stringify(flows,null,2)}</pre></details></div>}
+        {flows.length>0 && <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",minWidth:850}}>
+          <thead><tr style={{background:"#f8fafc"}}><th align="left">Период</th><th align="right">Продажи</th><th align="right">К перечислению</th><th align="right">Выплачено</th><th align="right">Остаток на конец</th></tr></thead>
+          <tbody>{flows.map((f:any,i:number)=>{
+            const d=detailFor(f,i);
+            return <tr key={i} style={{borderTop:"1px solid #e2e8f0"}}>
+              <td>{String(f.period?.begin||"").slice(0,10)} — {String(f.period?.end||"").slice(0,10)}</td>
+              <td align="right">{fmt(f.orders_amount)}</td>
+              <td align="right">{fmt(d.invoice_transfer ?? f.invoice_transfer)}</td>
+              <td align="right">{fmt(d.payments?.payment ?? f.payments?.payment)}</td>
+              <td align="right">{fmt(d.end_balance_amount ?? f.end_balance_amount)}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+        <details style={{marginTop:12}}><summary style={{cursor:"pointer",color:"#475569"}}>Технические данные для проверки расчётных периодов</summary><pre style={{overflowX:"auto",whiteSpace:"pre-wrap",fontSize:12}}>{JSON.stringify({cashFlows:flows,details},null,2)}</pre></details>
+        </div>}
       </>}
     </section>;
   }
