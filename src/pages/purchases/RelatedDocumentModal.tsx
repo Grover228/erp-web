@@ -186,6 +186,29 @@ export default function RelatedDocumentModal({
       throw new Error("В заказе нет позиций для приёмки");
     }
 
+    // Legacy orders can have resale rows without item_id. Never create a
+    // receipt draft from those rows: otherwise it could be posted anonymously.
+    for (const [index, item] of orderItems.entries()) {
+      const targetId =
+        item.item_type === "material"
+          ? item.material_id
+          : item.item_type === "consumable"
+            ? item.consumable_id
+            : item.item_type === "product"
+              ? item.product_id
+              : item.item_type === "resale_product"
+                ? item.item_id
+                : null;
+      if (!targetId) {
+        throw new Error(
+          `Позиция №${index + 1} в заказе не привязана к товару. Исправьте заказ до создания приёмки.`,
+        );
+      }
+      if (!Number.isFinite(Number(item.quantity)) || Number(item.quantity) <= 0) {
+        throw new Error(`Позиция №${index + 1}: количество должно быть положительным.`);
+      }
+    }
+
     const { data: receipt, error: receiptError } = await supabase
       .from("supplier_receipts")
       .insert({
