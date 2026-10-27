@@ -206,51 +206,29 @@ export default function ReceiptModal({
     return Number.isFinite(value) && value > 0 ? value : 0;
   }
 
-  function calculateLandedCosts<T extends { quantity: number; price: number }>(
-    sourceItems: T[],
-    delivery: number,
-    distribution: "amount" | "quantity",
-  ) {
-    const rows = sourceItems.map((item) => {
-      const quantity = Number(item.quantity || 0);
-      const price = Number(item.price || 0);
-      return { item, quantity, price, baseAmount: quantity * price };
-    });
-
-    const denominator =
-      distribution === "quantity"
-        ? rows.reduce((sum, row) => sum + Math.max(0, row.quantity), 0)
-        : rows.reduce((sum, row) => sum + Math.max(0, row.baseAmount), 0);
-
-    let allocatedSoFar = 0;
-
-    return rows.map((row, index) => {
-      const isLast = index === rows.length - 1;
-      const basis = distribution === "quantity" ? Math.max(0, row.quantity) : Math.max(0, row.baseAmount);
-      const rawAllocation = denominator > 0 ? delivery * (basis / denominator) : 0;
-      const allocatedDelivery =
-        isLast
-          ? Math.max(0, Math.round((delivery - allocatedSoFar) * 100) / 100)
-          : Math.max(0, Math.round(rawAllocation * 100) / 100);
-
-      allocatedSoFar += allocatedDelivery;
-
-      const landedAmount = row.baseAmount + allocatedDelivery;
-      const landedUnitCost = row.quantity > 0 ? landedAmount / row.quantity : row.price;
-
-      return {
-        ...row,
-        allocatedDelivery,
-        landedAmount,
-        landedUnitCost,
-      };
-    });
-  }
-
   async function saveChanges() {
     try {
       setSaving(true);
       setError("");
+
+      // A posted receipt must never be edited without a stock-safe reversal.
+      const { data: latestReceipt, error: statusError } = await supabase
+        .from("supplier_receipts")
+        .select("status")
+        .eq("id", receipt.id)
+        .single();
+      if (statusError) throw statusError;
+      if (latestReceipt.status !== "draft") {
+        throw new Error("Проведённую приёмку нельзя редактировать. Для исправления требуется безопасное сторнирование.");
+      }
+
+      for (const item of draftItems) {
+        const quantity = Number(item.quantity);
+        const price = Number(item.price);
+        if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(price) || price < 0) {
+          throw new Error("У каждой позиции должны быть положительное количество и неотрицательная цена.");
+        }
+      }
 
       const totalAmount = getDraftTotalAmount();
       const deliveryCostValue = getDeliveryCostValue();
@@ -267,7 +245,8 @@ export default function ReceiptModal({
           landed_total_amount: totalAmount + deliveryCostValue,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", receipt.id);
+        .eq("id", receipt.id)
+        .eq("status", "draft");
 
       if (receiptError) throw receiptError;
 
@@ -275,11 +254,10 @@ export default function ReceiptModal({
         const { error: itemError } = await supabase
           .from("supplier_receipt_items")
           .update({
-            quantity: Number(item.quantity) || 0,
-            price: Number(item.price) || 0,
+            quantity: Number(item.quantity),
+            price: Number(item.price),
           })
           .eq("id", item.id);
-
         if (itemError) throw itemError;
       }
 
@@ -297,147 +275,81 @@ export default function ReceiptModal({
       await loadItems();
       onSaved();
     } catch (error) {
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Ошибка сохранения приёмки",
-      );
+      setError(error instanceof Error ? error.message : "Ошибка сохранения приёмки");
     } finally {
       setSaving(false);
     }
   }
 
   async function deleteReceipt() {
-    const confirmed = window.confirm(
-      `Удалить приёмку ${receipt.receipt_number || "Черновик приёмки"}?`,
-    );
+    if (currentReceipt.status !== "draft") {
+      setError("Удалять проведённую приёмку нельзя: она уже повлияла на склад.");
+      return;
+    }
 
+    const confirmed = window.confirm(
+      `Удалить черновик приёмки ${receipt.receipt_number || "без номера"}?`,
+    );
     if (!confirmed) return;
 
     try {
       setDeleting(true);
       setError("");
+      const { data: latestReceipt, error: statusError } = await supabase
+        .from("supplier_receipts")
+        .select("status")
+        .eq("id", receipt.id)
+        .single();
+      if (statusError) throw statusError;
+      if (latestReceipt.status !== "draft") {
+        throw new Error("Приёмка уже проведена. Удаление запрещено.");
+      }
+      const { data: existingMovements, error: movementsError } = await supabase
+        .from("stock_movements")
+        .select("id")
+        .eq("source_document_type", "supplier_receipt")
+        .eq("source_document_id", receipt.id)
+        .limit(1);
+      if (movementsError) throw movementsError;
+      if (existingMovements && existingMovements.length > 0) {
+        throw new Error("У приёмки есть складские движения. Для удаления нужен безопасный откат.");
+      }
 
+      // The server-side guard also prevents deleting a receipt with movements.
       const { error } = await supabase
         .from("supplier_receipts")
         .delete()
-        .eq("id", receipt.id);
-
+        .eq("id", receipt.id)
+        .eq("status", "draft");
       if (error) throw error;
 
       onSaved();
       onClose();
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Ошибка удаления приёмки",
-      );
+      setError(error instanceof Error ? error.message : "Ошибка удаления приёмки");
     } finally {
       setDeleting(false);
     }
   }
 
   async function postReceipt() {
-    if (currentReceipt.status === "posted") return;
+    if (posting || currentReceipt.status !== "draft") return;
 
     const confirmed = window.confirm(
-      "Провести приёмку? Остатки будут увеличены по позициям документа.",
+      "Провести приёмку? Склад и закупочные цены изменятся только при успешном проведении всех позиций.",
     );
-
     if (!confirmed) return;
 
     try {
       setPosting(true);
       setError("");
 
-      const receiptItems = items.length > 0 ? items : await loadItemsForPosting();
-
-      if (receiptItems.length === 0) {
-        throw new Error("В приёмке нет позиций для проведения");
-      }
-
-      const now = new Date().toISOString();
-      const delivery = Number(currentReceipt.delivery_cost || 0);
-      const distribution =
-        currentReceipt.delivery_distribution === "quantity" ? "quantity" : "amount";
-      const landedRows = calculateLandedCosts(receiptItems, delivery, distribution);
-
-      for (const row of landedRows) {
-        const item = row.item as SupplierReceiptItem;
-
-        const { error: costError } = await supabase
-          .from("supplier_receipt_items")
-          .update({
-            allocated_delivery_cost: row.allocatedDelivery,
-            landed_unit_cost: Number(row.landedUnitCost.toFixed(4)),
-            landed_amount: Number(row.landedAmount.toFixed(2)),
-          })
-          .eq("id", item.id);
-
-        if (costError) throw costError;
-
-        const landedUnitCost = Number(row.landedUnitCost.toFixed(4));
-
-        if (item.item_type === "material" && item.material_id) {
-          const { error } = await supabase.from("materials").update({ default_price: landedUnitCost }).eq("id", item.material_id);
-          if (error) throw error;
-        } else if (item.item_type === "consumable" && item.consumable_id) {
-          const { error } = await supabase.from("consumables").update({ default_price: landedUnitCost }).eq("id", item.consumable_id);
-          if (error) throw error;
-        } else if (item.item_type === "product" && item.product_id) {
-          const { error } = await supabase.from("products").update({ default_price: landedUnitCost }).eq("id", item.product_id);
-          if (error) throw error;
-        } else if (item.item_type === "resale_product" && item.item_id) {
-          const { error } = await supabase.from("items").update({ default_price: landedUnitCost }).eq("id", item.item_id);
-          if (error) throw error;
-        }
-      }
-
-      const { error: deleteMovementsError } = await supabase
-        .from("stock_movements")
-        .delete()
-        .eq("source_document_type", "supplier_receipt")
-        .eq("source_document_id", currentReceipt.id);
-
-      if (deleteMovementsError) throw deleteMovementsError;
-
-      const movementRows = receiptItems
-        .map((item) => ({
-          movement_type: "supplier_receipt",
-          source_document_type: "supplier_receipt",
-          source_document_id: currentReceipt.id,
-          production_order_id: null,
-          item_type: item.item_type,
-          item_id: item.item_id || null,
-          product_id: item.item_type === "product" ? item.product_id : null,
-          material_id: item.item_type === "material" ? item.material_id : null,
-          consumable_id:
-            item.item_type === "consumable" ? item.consumable_id : null,
-          quantity: Number(item.quantity || 0),
-          created_at: now,
-        }))
-        .filter((item) => Number(item.quantity || 0) > 0);
-
-      if (movementRows.length === 0) {
-        throw new Error("В приёмке нет положительных количеств");
-      }
-
-      const { error: movementsError } = await supabase
-        .from("stock_movements")
-        .insert(movementRows);
-
-      if (movementsError) throw movementsError;
-
-      const { error: receiptError } = await supabase
-        .from("supplier_receipts")
-        .update({
-          status: "posted",
-          landed_total_amount:
-            Number(currentReceipt.total_amount || 0) + Number(currentReceipt.delivery_cost || 0),
-          updated_at: now,
-        })
-        .eq("id", currentReceipt.id);
-
-      if (receiptError) throw receiptError;
+      // This RPC locks the receipt and performs validation, cost allocation,
+      // stock movements and posting in one DB transaction.
+      const { error: postError } = await supabase.rpc("post_supplier_receipt_safe", {
+        p_receipt_id: currentReceipt.id,
+      });
+      if (postError) throw postError;
 
       setCurrentReceipt((prev) => ({
         ...prev,
@@ -445,38 +357,12 @@ export default function ReceiptModal({
         landed_total_amount:
           Number(prev.total_amount || 0) + Number(prev.delivery_cost || 0),
       }));
-
       onSaved();
     } catch (error) {
-      setError(
-        error instanceof Error ? error.message : "Ошибка проведения приёмки",
-      );
+      setError(error instanceof Error ? error.message : "Ошибка проведения приёмки");
     } finally {
       setPosting(false);
     }
-  }
-
-  async function loadItemsForPosting() {
-    const { data, error } = await supabase
-      .from("supplier_receipt_items")
-      .select(
-        `
-        *,
-        materials(name, article, color_id),
-        consumables(name, article),
-        products(name, article)
-      `,
-      )
-      .eq("supplier_receipt_id", currentReceipt.id)
-      .order("created_at", { ascending: true });
-
-    if (error) throw error;
-
-    const loadedItems = (data as SupplierReceiptItem[]) || [];
-    setItems(loadedItems);
-    setDraftItems(loadedItems.map(receiptItemToDraft));
-
-    return loadedItems;
   }
 
   function handleOpenLinkedDocument(type: DocumentType, id: string) {
@@ -593,26 +479,30 @@ export default function ReceiptModal({
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={startEdit}
-                  style={editButtonStyle}
-                >
-                  ✏️ Редактировать
-                </button>
+                {currentReceipt.status === "draft" && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={startEdit}
+                      style={editButtonStyle}
+                    >
+                      ✏️ Редактировать
+                    </button>
 
-                <button
-                  type="button"
-                  onClick={deleteReceipt}
-                  disabled={deleting}
-                  style={{
-                    ...deleteButtonStyle,
-                    opacity: deleting ? 0.65 : 1,
-                    cursor: deleting ? "not-allowed" : "pointer",
-                  }}
-                >
-                  {deleting ? "Удаляю..." : "Удалить"}
-                </button>
+                    <button
+                      type="button"
+                      onClick={deleteReceipt}
+                      disabled={deleting}
+                      style={{
+                        ...deleteButtonStyle,
+                        opacity: deleting ? 0.65 : 1,
+                        cursor: deleting ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {deleting ? "Удаляю..." : "Удалить"}
+                    </button>
+                  </>
+                )}
               </>
             )}
 
