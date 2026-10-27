@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import OzonFbsOrders from "./OzonFbsOrders";
 
-type Tab = "overview" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "fbs" | "transfer";
+type Tab = "overview" | "settlements" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "fbs" | "transfer";
 
 type Operation = {
   id: string;
@@ -1858,6 +1858,7 @@ export default function OzonPage() {
   const tabs: Array<{ id: Tab; label: string; icon: string }> = [
     { id: "overview", label: "Обзор", icon: "🏠" },
     { id: "analytics", label: "Аналитика", icon: "📊" },
+    { id: "settlements", label: "Выплаты Ozon", icon: "₽" },
     { id: "stocks", label: "Остатки", icon: "📦" },
     { id: "matching", label: "Сопоставление", icon: "🔗" },
     { id: "promotions", label: "Акции", icon: "🏷️" },
@@ -1865,6 +1866,53 @@ export default function OzonPage() {
     { id: "fbs", label: "Заказы FBS", icon: "📦" },
     { id: "transfer", label: "Перенос (тест)", icon: "🧪" },
   ];
+
+  function Settlements() {
+    const [data, setData] = useState<any>(null);
+    const [busy, setBusy] = useState(false);
+    const [failure, setFailure] = useState("");
+    async function refresh() {
+      setBusy(true); setFailure("");
+      try {
+        const { data: result, error: invokeError } = await supabase.functions.invoke("ozon-finance-settlements", { body: { from, to } });
+        if (invokeError) throw invokeError;
+        if (!result?.balance && !(result?.cashFlows || []).length) throw new Error((result?.errors || []).join("; ") || "Нет ответа Ozon");
+        setData(result);
+      } catch (err) { setFailure(err instanceof Error ? err.message : "Ошибка загрузки"); }
+      finally { setBusy(false); }
+    }
+    const total = data?.balance?.result?.total || data?.balance?.total;
+    const amount = (v: any) => typeof v?.value === "number" ? v.value : typeof v === "number" ? v : null;
+    const flows: any[] = data?.cashFlows || [];
+    return <section style={{ ...panelStyle, padding: 20, display: "grid", gap: 16 }}>
+      <h2 style={{ margin: 0 }}>Выплаты и взаиморасчёты Ozon</h2>
+      <p style={{ margin: 0, color: "#64748b" }}>Данные напрямую из Seller API. Это не остаток банковского счёта ERP; суммы начислений нельзя повторно прибавлять к выплатам.</p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <label>С <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={inputStyle} /></label>
+        <label>По <input type="date" value={to} onChange={e=>setTo(e.target.value)} style={inputStyle} /></label>
+        <button onClick={refresh} disabled={busy || !from || !to} style={{...inputStyle,background:"#0f172a",color:"white",cursor:"pointer"}}>{busy ? "Загружаю…" : "Обновить из Ozon"}</button>
+      </div>
+      {failure && <p style={{color:"#b91c1c"}}>{failure}</p>}
+      {data && <>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:12}}>
+          <SummaryCard title="Баланс на конец периода" value={amount(total?.closing_balance)===null?"Нет данных":money(amount(total?.closing_balance)!)} />
+          <SummaryCard title="Начислено за период" value={amount(total?.accrued)===null?"Нет данных":money(amount(total?.accrued)!)} />
+          <SummaryCard title="Перечислено за период" value={Array.isArray(total?.payments)?money(total.payments.reduce((sum:number,p:any)=>sum+(amount(p)||0),0)):"Нет данных"} />
+          <SummaryCard title="Периодов выплат" value={String(flows.length)} />
+        </div>
+        <div style={{fontSize:13,color:"#64748b"}}>Обновлено: {new Date(data.fetchedAt).toLocaleString("ru-RU")}. Баланс Ozon и уже полученные на банковский счёт деньги не суммируются.</div>
+        {data.errors?.length>0 && <p style={{color:"#b45309"}}>Часть API-отчётов недоступна: {data.errors.join("; ")}</p>}
+        {flows.length>0 && <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse"}}>
+          <thead><tr><th align="left">Период</th><th align="right">К перечислению</th><th align="right">Остаток на конец</th></tr></thead>
+          <tbody>{flows.map((f:any,i:number)=><tr key={i} style={{borderTop:"1px solid #e2e8f0"}}>
+            <td>{String(f.period?.begin||"").slice(0,10)} — {String(f.period?.end||"").slice(0,10)}</td>
+            <td align="right">{typeof f.invoice_transfer==="number"?money(f.invoice_transfer):"—"}</td>
+            <td align="right">{typeof f.end_balance_amount==="number"?money(f.end_balance_amount):"—"}</td>
+          </tr>)}</tbody>
+        </table></div>}
+      </>}
+    </section>;
+  }
 
   function PeriodControls() {
     return (
@@ -3493,6 +3541,7 @@ export default function OzonPage() {
 
       {activeTab === "overview" && <Overview />}
       {activeTab === "analytics" && <Analytics />}
+      {activeTab === "settlements" && <Settlements />}
       {activeTab === "stocks" && <Stocks />}
       {activeTab === "matching" && <Matching />}
       {activeTab === "promotions" && <Promotions />}
