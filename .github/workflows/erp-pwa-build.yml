@@ -11,6 +11,16 @@ on:
       - "package-lock.json"
       - "vite.config.ts"
       - ".github/workflows/erp-pwa-build.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "public/**"
+      - "package.json"
+      - "package-lock.json"
+      - "vite.config.ts"
+      - ".github/workflows/erp-pwa-build.yml"
   workflow_dispatch:
 
 jobs:
