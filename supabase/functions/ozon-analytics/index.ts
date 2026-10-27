@@ -219,6 +219,17 @@ Deno.serve(async (req: Request) => {
       }
     }
 
+    // Save the actual Ozon SKU -> ERP article mapping for offline financial reconciliation.
+    // This mapping used to exist only in memory during each API request.
+    const skuMappingRows = Array.from(skuToArticle.entries()).map(([sku, article]) => ({
+      sku, article, updated_at: new Date().toISOString(),
+    }));
+    if (skuMappingRows.length) {
+      const { error: mappingWriteError } = await admin.from("ozon_sku_mappings")
+        .upsert(skuMappingRows, { onConflict: "sku" });
+      if (mappingWriteError) console.warn("SKU mapping snapshot save failed", mappingWriteError.message);
+    }
+
     const articles = [...new Set(Array.from(skuToArticle.values()))];
     const [{ data: products }, { data: items }] = await Promise.all([
       articles.length ? admin.from("products").select("article,name").in("article", articles) : Promise.resolve({ data: [] as any[] }),
