@@ -78,6 +78,8 @@ const secondary: CSSProperties = {
 };
 const muted: CSSProperties = { color: "#64748b", fontSize: 12, fontWeight: 700 };
 const money = (n: number) => n.toLocaleString("ru-RU", { maximumFractionDigits: 2 });
+const initialCutQuantity = (job: Job) =>
+  /шапка бини/i.test(job.order.product?.name || "") ? String(Math.min(21, job.available)) : "";
 const humanTime = (minutes: number) => {
   const n = Math.max(0, Math.round(minutes));
   return Math.floor(n / 60) + " ч " + (n % 60) + " мин";
@@ -101,6 +103,7 @@ export default function CuttingQuickStart({
   const [orders, setOrders] = useState<QuickOrder[]>([]);
   const [operations, setOperations] = useState<QuickOperation[]>([]);
   const [filter, setFilter] = useState<Filter>("Все");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -231,7 +234,8 @@ export default function CuttingQuickStart({
           .update({ status: "in_progress" }).eq("id", job.order.id);
         if (orderError) throw orderError;
       }
-      setFinishQuantity(String(Math.min(21, actualAvailable)));
+      setFinishQuantity(initialCutQuantity({ ...job, available: actualAvailable }));
+      setExpandedId(job.operation.id);
       setFinishId(job.operation.id);
       setNotice("Раскрой начат. Время работы учитывается с момента запуска.");
       await loadJobs();
@@ -357,6 +361,7 @@ export default function CuttingQuickStart({
       }
       setCreatedBatch({ id: batch.id, productionOrderId: job.order.id, number: batchNumber, quantity: qty, payload, qrDataUrl });
       setFinishId(null);
+      setExpandedId(null);
       setNotice("Раскрой сохранён: " + qty + " шт. Пачка " + batchNumber +
         " создана. Заработано: " + money(earned) + " ₽." + chzWarning);
     } catch (cause) {
@@ -397,6 +402,10 @@ export default function CuttingQuickStart({
   }
 
   const filterOptions: Filter[] = ["Все", "Раскрой", "Заготовка", "Стачивание"];
+  const selectedId = visible.some((job) => job.operation.id === expandedId)
+    ? expandedId
+    : (running && visible.some((job) => job.operation.id === running.operation.id)
+      ? running.operation.id : visible[0]?.operation.id);
   return (
     <section style={{ ...card, marginTop: 10, padding: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
@@ -406,7 +415,7 @@ export default function CuttingQuickStart({
       </div>
       <div style={{ display: "flex", gap: 6, overflowX: "auto", padding: "12px 0" }}>
         {filterOptions.map((item) => (
-          <button key={item} type="button" onClick={() => setFilter(item)} style={{
+          <button key={item} type="button" onClick={() => { setFilter(item); setExpandedId(null); }} style={{
             ...secondary, flexShrink: 0, padding: "10px 9px", fontSize: 12,
             background: filter === item ? "#2563eb" : "#fff",
             borderColor: filter === item ? "#2563eb" : "#dbeafe",
@@ -436,6 +445,22 @@ export default function CuttingQuickStart({
           const done = Number(job.operation.completed_quantity || 0);
           const progress = Math.round(100 * done / Math.max(1, Number(job.order.quantity)));
           const name = job.order.product?.name || "Изделие";
+          if (job.operation.id !== selectedId) {
+            return <button key={job.operation.id} type="button"
+              onClick={() => { setExpandedId(job.operation.id); setFinishId(null); }}
+              style={{
+                ...card, width: "100%", textAlign: "left", cursor: "pointer",
+                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                color: "#0f172a",
+              }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 900, fontSize: 14 }}>{name}</div>
+                <div style={{ ...muted, marginTop: 4 }}>{job.order.order_number || "Заказ"} · {job.operation.operation_name}</div>
+                <div style={{ ...muted, marginTop: 5 }}>Осталось: {job.available} шт. · Выполнено: {progress}%</div>
+              </div>
+              <span style={{ color: "#2563eb", fontSize: 22, flexShrink: 0 }}>›</span>
+            </button>;
+          }
           return <div key={job.operation.id} style={{ ...card, background: cutting ? "#f8fbff" : "#fff" }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 6 }}>
               <div>
@@ -477,11 +502,11 @@ export default function CuttingQuickStart({
             {cutting && mine && <button type="button" style={{ ...primary, width: "100%", marginTop: 12 }}
               disabled={busy} onClick={() => {
                 setFinishId(finishId === job.operation.id ? null : job.operation.id);
-                setFinishQuantity(String(Math.min(21, job.available)));
+                setFinishQuantity(initialCutQuantity(job));
               }}>✓ Закончить раскрой</button>}
             {cutting && mine && finishId === job.operation.id && <div style={{ ...card, marginTop: 10 }}>
               <div style={{ fontSize: 14, fontWeight: 800 }}>Сколько раскроено?</div>
-              <div style={{ ...muted, margin: "6px 0" }}>Обычно одна линия — 21 шт. Доступно: {job.available} шт.</div>
+              <div style={{ ...muted, margin: "6px 0" }}>{/шапка бини/i.test(name) ? "Для бини одна линия обычно 21 шт. " : ""}Доступно: {job.available} шт.</div>
               <input type="number" min={1} max={job.available} step={1} value={finishQuantity}
                 onChange={(event) => setFinishQuantity(event.target.value)} style={{
                   boxSizing: "border-box", width: "100%", padding: 12, fontSize: 24,
