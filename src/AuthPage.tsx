@@ -38,13 +38,16 @@ export default function AuthPage({
       setRequestError("");
       setRequestSuccess("");
 
-      const { error } = await supabase.from("registration_requests").insert({
-        full_name: fullName,
-        email,
-        password,
-        phone,
-        comment,
+      const { data, error } = await supabase.functions.invoke("registration-request", {
+        body: {
+          full_name: fullName,
+          email,
+          password,
+          phone,
+          comment,
+        },
       });
+      if (data?.error) throw new Error(data.error);
 
       if (error) {
         throw error;
