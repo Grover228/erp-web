@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import OzonFbsOrders from "./OzonFbsOrders";
+import OzonAudit from "./OzonAudit";
 
-type Tab = "overview" | "settlements" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "fbs" | "transfer";
+type Tab = "audit" | "overview" | "settlements" | "analytics" | "stocks" | "matching" | "promotions" | "fbo" | "fbs" | "transfer";
 
 type Operation = {
   id: string;
@@ -1869,6 +1870,7 @@ export default function OzonPage() {
   const tabs: Array<{ id: Tab; label: string; icon: string }> = [
     { id: "overview", label: "Обзор", icon: "🏠" },
     { id: "analytics", label: "Аналитика", icon: "📊" },
+    { id: "audit", label: "Аудит", icon: "🔎" },
     { id: "settlements", label: "Выплаты Ozon", icon: "₽" },
     { id: "stocks", label: "Остатки", icon: "📦" },
     { id: "matching", label: "Сопоставление", icon: "🔗" },
@@ -3583,12 +3585,23 @@ export default function OzonPage() {
           <button onClick={() => setInstructionOpen((value) => !value)} style={{ border: "1px solid #cbd5e1", background: "#fff", color: "#334155", borderRadius: 10, padding: "9px 12px", fontWeight: 800, cursor: "pointer" }}>{instructionOpen ? "Скрыть подключение" : "Подключение API"}</button>
         </div>
 
-        <div style={{ display: "flex", gap: 0, marginTop: 18, overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: 14, background: "#f8fafc" }}>
-          {tabs.map((tab) => {
-            const active = activeTab === tab.id;
-            return <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{ flex: "1 0 150px", border: 0, borderBottom: active ? "3px solid #005bff" : "3px solid transparent", background: active ? "#fff" : "transparent", color: active ? "#005bff" : "#475569", padding: "14px 12px", fontWeight: 850, cursor: "pointer" }}><span style={{ marginRight: 7 }}>{tab.icon}</span>{tab.label}{tab.id === "transfer" && <span style={{ marginLeft: 7, background: "#ede9fe", color: "#6d28d9", borderRadius: 999, padding: "3px 7px", fontSize: 10 }}>Тест</span>}</button>;
-          })}
-        </div>
+        <nav aria-label="Разделы Ozon" style={{ display: "grid", gap: 10, marginTop: 18 }}>
+          {([
+            { title: "Финансы", ids: ["overview", "analytics", "audit", "settlements"] },
+            { title: "Товары", ids: ["stocks", "matching", "promotions"] },
+            { title: "Логистика", ids: ["fbo", "fbs", "transfer"] },
+          ] as const).map(group => (
+            <div key={group.title} style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 6 }}>
+              <span style={{ width: 85, color: "#64748b", fontSize: 12, fontWeight: 800 }}>{group.title}</span>
+              {tabs.filter(tab => (group.ids as readonly string[]).includes(tab.id)).map(tab => (
+                <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} aria-current={activeTab === tab.id ? "page" : undefined}
+                  style={{ border: activeTab === tab.id ? "1px solid #93c5fd" : "1px solid #e2e8f0", borderRadius: 10, background: activeTab === tab.id ? "#eff6ff" : "#fff", color: activeTab === tab.id ? "#005bff" : "#475569", padding: "9px 12px", fontWeight: 750, cursor: "pointer", whiteSpace: "nowrap" }}>
+                  {tab.icon} {tab.label}
+                </button>
+              ))}
+            </div>
+          ))}
+        </nav>
       </header>
 
       {instructionOpen && (
@@ -3599,6 +3612,7 @@ export default function OzonPage() {
 
       {activeTab === "overview" && <Overview />}
       {activeTab === "analytics" && <Analytics />}
+      {activeTab === "audit" && <OzonAudit from={from} to={to} />}
       {activeTab === "settlements" && <Settlements />}
       {activeTab === "stocks" && <Stocks />}
       {activeTab === "matching" && <Matching />}
