@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { supabase } from "../../supabase";
 
@@ -37,6 +38,7 @@ type Job = {
 
 type CreatedBatch = {
   id: string;
+  productionOrderId: string;
   number: string;
   quantity: number;
   qrDataUrl: string;
@@ -52,13 +54,13 @@ type CreatedBatch = {
 
 type Filter = "Все" | "Раскрой" | "Заготовка" | "Стачивание";
 
-const card: React.CSSProperties = {
+const card: CSSProperties = {
   border: "1px solid #dbeafe",
   borderRadius: 16,
   background: "#fff",
   padding: 14,
 };
-const primary: React.CSSProperties = {
+const primary: CSSProperties = {
   border: 0,
   borderRadius: 11,
   background: "#2563eb",
@@ -68,13 +70,13 @@ const primary: React.CSSProperties = {
   padding: "14px 12px",
   cursor: "pointer",
 };
-const secondary: React.CSSProperties = {
+const secondary: CSSProperties = {
   ...primary,
   border: "1px solid #bfdbfe",
   background: "#f8fbff",
   color: "#2563eb",
 };
-const muted: React.CSSProperties = { color: "#64748b", fontSize: 12, fontWeight: 700 };
+const muted: CSSProperties = { color: "#64748b", fontSize: 12, fontWeight: 700 };
 const money = (n: number) => n.toLocaleString("ru-RU", { maximumFractionDigits: 2 });
 const humanTime = (minutes: number) => {
   const n = Math.max(0, Math.round(minutes));
@@ -353,7 +355,7 @@ export default function CuttingQuickStart({
         chzWarning = " Коды ЧЗ не выделены: " +
           (cause instanceof Error ? cause.message : "ошибка распределения") + ".";
       }
-      setCreatedBatch({ id: batch.id, number: batchNumber, quantity: qty, payload, qrDataUrl });
+      setCreatedBatch({ id: batch.id, productionOrderId: job.order.id, number: batchNumber, quantity: qty, payload, qrDataUrl });
       setFinishId(null);
       setNotice("Раскрой сохранён: " + qty + " шт. Пачка " + batchNumber +
         " создана. Заработано: " + money(earned) + " ₽." + chzWarning);
@@ -382,7 +384,7 @@ export default function CuttingQuickStart({
           quantity: createdBatch.quantity,
           qrDataUrl: createdBatch.qrDataUrl,
           batchId: createdBatch.id,
-          productionOrderId: createdBatch.payload.order_number,
+          productionOrderId: createdBatch.productionOrderId,
         },
       });
       if (queueError) throw queueError;
