@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { supabase } from "../supabase";
+import CuttingQuickStart, { type ActiveCutting } from "./production/CuttingQuickStart";
 
 const EMPLOYEE_MOBILE_VERSION = "v0.9.1";
 
@@ -97,6 +98,7 @@ export default function EmployeeMobilePage({
   const [closingLoading, setClosingLoading] = useState(false);
   const [closingError, setClosingError] = useState("");
   const [batchesExpanded, setBatchesExpanded] = useState(true);
+  const [activeCutting, setActiveCutting] = useState<ActiveCutting | null>(null);
   const [batchOperationTargets, setBatchOperationTargets] = useState<
     Record<string, number>
   >({});
@@ -853,6 +855,10 @@ export default function EmployeeMobilePage({
   }
 
   function handleOpenScanner() {
+    if (activeCutting) {
+      setError("Сначала заверши раскрой по заказу " + activeCutting.orderNumber + ".");
+      return;
+    }
     if (batches.length > 0) {
       setError(
         "Сначала завершите текущую операцию. Нельзя взять новую пачку, пока старая находится в работе."
@@ -864,6 +870,10 @@ export default function EmployeeMobilePage({
   }
 
   function handleCloseShift() {
+    if (activeCutting) {
+      setError("Сначала заверши раскрой по заказу " + activeCutting.orderNumber + ".");
+      return;
+    }
     if (batches.length > 0) {
       setError(
         "Сначала завершите текущую операцию. Нельзя закрыть смену, пока есть пачка в работе."
@@ -884,7 +894,9 @@ export default function EmployeeMobilePage({
   const currentOperationText = activeBatch
     ? activeOperation?.operation_name ||
       `Операция №${activeBatch.current_operation_order || "?"}`
-    : "Нет операции в работе";
+    : activeCutting
+      ? "Раскрой: " + activeCutting.name
+      : "Нет операции в работе";
 
   const shiftDuration = getShiftDuration(shift?.opened_at || null);
 
@@ -1023,7 +1035,7 @@ export default function EmployeeMobilePage({
                 marginTop: 4,
                 fontSize: 22,
                 fontWeight: 900,
-                color: activeBatch ? "#111827" : "#94a3b8",
+                color: activeBatch || activeCutting ? "#111827" : "#94a3b8",
                 lineHeight: 1.15,
               }}
             >
@@ -1035,10 +1047,15 @@ export default function EmployeeMobilePage({
                 Пачка {activeBatch.batch_number}
               </div>
             )}
+            {!activeBatch && activeCutting && (
+              <div style={{ marginTop: 4, fontSize: 14, color: "#64748b", fontWeight: 800 }}>
+                Заказ {activeCutting.orderNumber} · завершить раскрой можно в карточке ниже
+              </div>
+            )}
           </div>
 
-          <div style={activeBatch ? activeStatusStyle : idleStatusStyle}>
-            {activeBatch ? "В работе" : "Свободно"}
+          <div style={activeBatch || activeCutting ? activeStatusStyle : idleStatusStyle}>
+            {activeBatch || activeCutting ? "В работе" : "Свободно"}
           </div>
         </div>
 
@@ -1103,6 +1120,15 @@ export default function EmployeeMobilePage({
           <span>Пауза / перерыв</span>
         </button>
       </div>
+
+      <CuttingQuickStart
+        userId={userId}
+        shiftId={shift.id}
+        hasActiveBatch={batches.length > 0}
+        onActiveChange={setActiveCutting}
+        onRefreshShift={async () => { if (userId) await loadCurrentShift(userId); }}
+        onOpenScanner={handleOpenScanner}
+      />
 
       <div style={sectionCardStyle}>
         <button
