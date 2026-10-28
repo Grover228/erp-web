@@ -328,7 +328,9 @@ Deno.serve(async (req: Request) => {
         agg.cost += Number(operation.cost_of_goods || 0) * share;
         agg.profit += Number(operation.profit || 0) * share;
 
-        if (row.isSale && row.sellerPrice > 0 && !unitCostByArticle.has(article.toLowerCase())) {
+        // Only flag sales that have no cost recorded at all on this accrual.
+        // Per-SKU completeness cannot be inferred from mixed-item accrual totals.
+        if (row.isSale && row.sellerPrice > 0 && Number(operation.cost_of_goods || 0) <= 0) {
           agg.missingCostQty += row.qty;
         }
       });
