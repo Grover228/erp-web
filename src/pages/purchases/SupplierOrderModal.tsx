@@ -501,8 +501,11 @@ export default function SupplierOrderModal({
         receipts: nextReceipts,
       });
 
+      const ozonAccount = nextAccounts.find((account) =>
+        account.name.trim().toLocaleLowerCase("ru-RU").includes("озон"),
+      );
       if (!paymentAccountId && nextAccounts.length > 0) {
-        setPaymentAccountId(nextAccounts[0].id);
+        setPaymentAccountId(ozonAccount?.id || nextAccounts[0].id);
       }
 
       if (order?.id) {
