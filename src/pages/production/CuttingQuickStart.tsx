@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { supabase } from "../../supabase";
@@ -51,6 +51,50 @@ type CreatedBatch = {
     quantity: number;
   };
 };
+
+type PrintJob = {
+  id: string;
+  status: "pending" | "claimed" | "printed" | "failed";
+  created_at: string;
+  printed_at: string | null;
+  error: string | null;
+};
+
+async function findBatchPrintJob(batchId: string): Promise<PrintJob | null> {
+  const query = () => supabase
+    .from("print_jobs")
+    .select("id,status,created_at,printed_at,error")
+    .eq("printer_code", "xprinter-main")
+    .eq("job_type", "qr")
+    .filter("payload->>batchId", "eq", batchId);
+
+  const { data: activeJobs, error: activeError } = await query()
+    .in("status", ["pending", "claimed"])
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (activeError) throw activeError;
+
+  const active = activeJobs?.[0] as PrintJob | undefined;
+  if (active) return active;
+
+  const { data: terminalJobs, error: terminalError } = await query()
+    .in("status", ["printed", "failed"])
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (terminalError) throw terminalError;
+
+  const rows = (terminalJobs || []) as PrintJob[];
+  const printed = rows.find((job) => job.status === "printed");
+  const failed = rows.find((job) =>
+    job.status === "failed" &&
+    !String(job.error || "").startsWith("Дубликат QR-задания для пачки")
+  );
+
+  if (failed && (!printed || Date.parse(failed.created_at) > Date.parse(printed.created_at))) {
+    return failed;
+  }
+  return printed || failed || null;
+}
 
 type Filter = "Все" | "Раскрой" | "Заготовка" | "Стачивание";
 
@@ -111,6 +155,10 @@ export default function CuttingQuickStart({
   const [finishId, setFinishId] = useState<string | null>(null);
   const [finishQuantity, setFinishQuantity] = useState("21");
   const [createdBatch, setCreatedBatch] = useState<CreatedBatch | null>(null);
+  const [printJob, setPrintJob] = useState<PrintJob | null>(null);
+  const [printStatusError, setPrintStatusError] = useState("");
+  const printSubmittingRef = useRef(false);
+  const createdBatchId = createdBatch?.id ?? null;
 
   const loadJobs = useCallback(async () => {
     if (!userId) return;
@@ -157,6 +205,37 @@ export default function CuttingQuickStart({
   useEffect(() => {
     void loadJobs();
   }, [loadJobs, shiftId]);
+
+  useEffect(() => {
+    if (!createdBatchId) return;
+
+    let cancelled = false;
+    let checking = false;
+    const refreshPrintStatus = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const latest = await findBatchPrintJob(createdBatchId);
+        if (!cancelled) {
+          setPrintJob(latest);
+          setPrintStatusError("");
+        }
+      } catch (cause) {
+        if (!cancelled) {
+          setPrintStatusError(cause instanceof Error ? cause.message : "Не удалось проверить статус печати.");
+        }
+      } finally {
+        checking = false;
+      }
+    };
+
+    void refreshPrintStatus();
+    const intervalId = window.setInterval(() => void refreshPrintStatus(), 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [createdBatchId]);
 
   const jobs = useMemo((): Job[] => orders.flatMap((order) => {
     const list = operations
@@ -359,6 +438,8 @@ export default function CuttingQuickStart({
         chzWarning = " Коды ЧЗ не выделены: " +
           (cause instanceof Error ? cause.message : "ошибка распределения") + ".";
       }
+      setPrintJob(null);
+      setPrintStatusError("");
       setCreatedBatch({ id: batch.id, productionOrderId: job.order.id, number: batchNumber, quantity: qty, payload, qrDataUrl });
       setFinishId(null);
       setExpandedId(null);
@@ -373,12 +454,31 @@ export default function CuttingQuickStart({
     }
   }
 
-  async function printBatchQr() {
-    if (!createdBatch || busy) return;
+  async function printBatchQr(forceReprint = false) {
+    if (!createdBatch || busy || printSubmittingRef.current) return;
+    printSubmittingRef.current = true;
     try {
       setBusy(true);
       setError("");
-      const { error: queueError } = await supabase.from("print_jobs").insert({
+      setPrintStatusError("");
+
+      // Reuse an existing active job instead of adding duplicate QR jobs.
+      const existing = await findBatchPrintJob(createdBatch.id);
+      if (existing?.status === "pending" || existing?.status === "claimed") {
+        setPrintJob(existing);
+        setNotice(existing.status === "claimed"
+          ? "Принтер уже забрал QR пачки " + createdBatch.number + ". Дождись результата."
+          : "QR пачки " + createdBatch.number + " уже стоит в очереди. Повторное задание не создано.");
+        return;
+      }
+      if (existing?.status === "printed" && !forceReprint) {
+        setPrintJob(existing);
+        setNotice("Сервер уже подтвердил печать QR пачки " + createdBatch.number +
+          ". Если этикетка физически не вышла, нажми «Печать повторно».");
+        return;
+      }
+
+      const { data: queued, error: queueError } = await supabase.from("print_jobs").insert({
         printer_code: "xprinter-main",
         job_type: "qr",
         payload: {
@@ -391,12 +491,14 @@ export default function CuttingQuickStart({
           batchId: createdBatch.id,
           productionOrderId: createdBatch.productionOrderId,
         },
-      });
+      }).select("id,status,created_at,printed_at,error").single();
       if (queueError) throw queueError;
-      setNotice("QR пачки " + createdBatch.number + " поставлен в очередь печати.");
+      setPrintJob(queued as PrintJob);
+      setNotice("QR пачки " + createdBatch.number + " поставлен в очередь. Статус обновляется автоматически.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось поставить QR в очередь.");
     } finally {
+      printSubmittingRef.current = false;
       setBusy(false);
     }
   }
@@ -431,8 +533,26 @@ export default function CuttingQuickStart({
       {notice && <div role="status" style={{ ...card, marginBottom: 10, color: "#166534", background: "#f0fdf4", borderColor: "#bbf7d0" }}>{notice}</div>}
       {createdBatch && <div style={{ ...card, marginBottom: 10, background: "#f8fbff" }}>
         <b>Пачка {createdBatch.number} · {createdBatch.quantity} шт.</b>
-        <button type="button" disabled={busy} style={{ ...primary, display: "block", width: "100%", marginTop: 10 }}
-          onClick={() => void printBatchQr()}>Печать QR пачки</button>
+        <button type="button"
+          disabled={busy || printJob?.status === "pending" || printJob?.status === "claimed"}
+          style={{ ...primary, display: "block", width: "100%", marginTop: 10,
+            opacity: busy || printJob?.status === "pending" || printJob?.status === "claimed" ? 0.7 : 1 }}
+          onClick={() => void printBatchQr(printJob?.status === "printed")}>
+          {printJob?.status === "pending" ? "QR в очереди печати…" :
+            printJob?.status === "claimed" ? "Принтер печатает…" :
+              printJob?.status === "printed" ? "Печать повторно" :
+                printJob?.status === "failed" ? "Повторить печать QR" : "Печать QR пачки"}
+        </button>
+        {printJob && <div role="status" style={{ ...muted, marginTop: 8,
+          color: printJob.status === "failed" ? "#991b1b" : "#334155" }}>
+          {printJob.status === "pending" ? "В очереди. Если статус не меняется, проверь, что локальный сервер печати запущен." :
+            printJob.status === "claimed" ? "Сервер принтера забрал задание. Ожидаем подтверждение." :
+              printJob.status === "printed" ? "Локальный сервер подтвердил отправку этикетки на принтер." :
+                "Ошибка печати: " + (printJob.error || "причина не указана")}
+        </div>}
+        {printStatusError && <div role="alert" style={{ ...muted, marginTop: 8, color: "#991b1b" }}>
+          Не удалось проверить статус печати: {printStatusError}
+        </div>}
       </div>}
       {!loading && visible.length === 0 && <div style={{ ...muted, padding: "12px 0" }}>
         Нет доступных заданий в этой категории.
