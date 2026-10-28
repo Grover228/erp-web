@@ -219,6 +219,9 @@ export default function RelatedDocumentModal({
         status: "draft",
         comment: `Создано из заказа ${order.order_number || "без номера"}`,
         total_amount: order.total_amount || 0,
+        delivery_cost: Number(order.delivery_cost || 0),
+        delivery_distribution: order.delivery_distribution === "amount" ? "amount" : "quantity",
+        landed_total_amount: Number(order.total_amount || 0) + Number(order.delivery_cost || 0),
       })
       .select("id")
       .single();
