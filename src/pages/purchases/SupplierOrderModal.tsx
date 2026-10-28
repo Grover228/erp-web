@@ -497,6 +497,7 @@ export default function SupplierOrderModal({
 
       await syncSupplierOrderStatus({
         transactions: nextTransactions,
+        payments: nextPayments,
         receipts: nextReceipts,
       });
 
@@ -505,9 +506,10 @@ export default function SupplierOrderModal({
       }
 
       if (order?.id) {
-        const paidAmount = nextTransactions
-          .filter((item) => item.type === "expense")
-          .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+        const paidAmount = nextPayments.length > 0
+          ? nextPayments.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+          : nextTransactions.filter((item) => item.type === "expense")
+              .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
         const restAmount = Math.max(0, Number(order.total_amount || 0) - paidAmount);
         setPaymentAmount(restAmount > 0 ? String(restAmount.toFixed(2)) : "");
@@ -526,9 +528,11 @@ export default function SupplierOrderModal({
 
   function getAutoOrderStatus({
     transactions,
+    payments,
     receipts,
   }: {
     transactions: FinanceTransaction[];
+    payments: SupplierPayment[];
     receipts: SupplierReceiptStatus[];
   }) {
     if (!order) return "draft";
@@ -536,9 +540,10 @@ export default function SupplierOrderModal({
       return "cancelled";
     }
 
-    const paidAmount = transactions
-      .filter((item) => item.type === "expense")
-      .reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const paidAmount = payments.length > 0
+      ? payments.reduce((sum, item) => sum + Number(item.amount || 0), 0)
+      : transactions.filter((item) => item.type === "expense")
+          .reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
     const totalAmount = Number(order.total_amount || 0);
     const hasAnyReceipt = receipts.length > 0;
@@ -554,15 +559,17 @@ export default function SupplierOrderModal({
 
   async function syncSupplierOrderStatus({
     transactions = financeTransactions,
+    payments = supplierPayments,
     receipts = supplierReceipts,
   }: {
     transactions?: FinanceTransaction[];
+    payments?: SupplierPayment[];
     receipts?: SupplierReceiptStatus[];
   } = {}) {
     if (!order) return;
     if (currentOrderStatus === "cancelled" || order.status === "cancelled") return;
 
-    const nextStatus = getAutoOrderStatus({ transactions, receipts });
+    const nextStatus = getAutoOrderStatus({ transactions, payments, receipts });
 
     if (!nextStatus || nextStatus === currentOrderStatus || nextStatus === order.status) {
       setCurrentOrderStatus(nextStatus || currentOrderStatus);
@@ -649,7 +656,7 @@ export default function SupplierOrderModal({
   async function saveOrderDelivery() {
     if (!order) return;
     const cost = Number(deliveryCostInput.replace(",", "."));
-    if (!Number.isFinite(cost) || cost < 0 || Math.round(cost * 100) !== cost * 100) {
+    if (!Number.isFinite(cost) || cost < 0 || Math.abs(Math.round(cost * 100) - cost * 100) > 0.000001) {
       setError("Укажи неотрицательную сумму доставки с точностью до копейки.");
       return;
     }
