@@ -490,10 +490,11 @@ export default function OzonPage() {
   }, [activeTab]);
 
   async function loadData() {
+    setLoading(true);
+    setError("");
     try {
-      setLoading(true);
-      setError("");
-      const [operationResult, runResult, analyticsResult] = await Promise.all([
+      // The overview remains usable even when the analytics Edge Function fails.
+      const [operationResult, runResult] = await Promise.all([
         supabase.from("ozon_operations")
           .select("id,operation_date,operation_type_name,posting_number,amount,accruals_for_sale,sale_commission,services_total,cost_of_goods,profit,matched")
           .gte("operation_date", `${from}T00:00:00.000Z`)
@@ -502,20 +503,35 @@ export default function OzonPage() {
         supabase.from("ozon_sync_runs")
           .select("id,started_at,status,operations_loaded,error_message")
           .order("started_at", { ascending: false }).limit(10),
-        supabase.functions.invoke("ozon-analytics", { body: { from, to } }),
       ]);
-      if (operationResult.error) throw operationResult.error;
-      if (runResult.error) throw runResult.error;
-      if (analyticsResult.error) throw analyticsResult.error;
-      if (analyticsResult.data?.error) throw new Error(analyticsResult.data.error);
-      setOperations((operationResult.data as Operation[]) || []);
-      setRuns((runResult.data as SyncRun[]) || []);
-      setArticleAnalytics((analyticsResult.data?.articles as ArticleAnalytics[]) || []);
-      setArticleAllocation((analyticsResult.data?.allocation as ArticleAllocation) || null);
-      setAnalyticsSummary((analyticsResult.data?.summary as PeriodSummary) || null);
-      setFeeBreakdown((analyticsResult.data?.feeBreakdown as FeeBreakdown[]) || []);
-      setDailyFinance((analyticsResult.data?.dailyFinance as DailyFinance[]) || []);
-      setOperationCount(Number(analyticsResult.data?.operationCount || 0));
+      const issues: string[] = [];
+      if (operationResult.error) issues.push(`Операции: ${operationResult.error.message}`);
+      else setOperations((operationResult.data as Operation[]) || []);
+      if (runResult.error) issues.push(`История синхронизации: ${runResult.error.message}`);
+      else setRuns((runResult.data as SyncRun[]) || []);
+      // A separate error boundary for analytics: one failed function must not hide operations.
+      try {
+        const analyticsResult = await supabase.functions.invoke("ozon-analytics", { body: { from, to } });
+        if (analyticsResult.error) {
+          let detail = analyticsResult.error.message;
+          const context = (analyticsResult.error as { context?: Response }).context;
+          if (context && typeof context.json === "function") {
+            const responseBody = await context.json().catch(() => null);
+            if (responseBody?.error) detail = String(responseBody.error);
+          }
+          throw new Error(detail);
+        }
+        if (analyticsResult.data?.error) throw new Error(String(analyticsResult.data.error));
+        setArticleAnalytics((analyticsResult.data?.articles as ArticleAnalytics[]) || []);
+        setArticleAllocation((analyticsResult.data?.allocation as ArticleAllocation) || null);
+        setAnalyticsSummary((analyticsResult.data?.summary as PeriodSummary) || null);
+        setFeeBreakdown((analyticsResult.data?.feeBreakdown as FeeBreakdown[]) || []);
+        setDailyFinance((analyticsResult.data?.dailyFinance as DailyFinance[]) || []);
+        setOperationCount(Number(analyticsResult.data?.operationCount || 0));
+      } catch (analyticsError) {
+        issues.push(`Аналитика Ozon: ${analyticsError instanceof Error ? analyticsError.message : "ошибка сервера"}`);
+      }
+      if (issues.length) setError(issues.join(" · "));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Не удалось загрузить данные Ozon");
     } finally {
