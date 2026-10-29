@@ -2154,6 +2154,7 @@ export default function SupplierOrderModal({
                   setSavedDeliveryCost(total);
                   await onSaved(order.id);
                 }}
+                onPaymentChanged={loadFinanceData}
               />}
               <label style={{ ...labelStyle, maxWidth: 290 }}>
                 <span style={labelTextStyle}>Распределение доставки в себестоимость</span>
