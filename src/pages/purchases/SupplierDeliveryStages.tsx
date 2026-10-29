@@ -5,14 +5,14 @@ type Charge = { id: string; stage: string; carrier: string | null; reference: st
 type Payment = { id: string; charge_id: string; amount: number; finance_transaction_id: string };
 type Account = { id: string; name: string; current_balance: number };
 type Transaction = { id: string; amount: number; type: string; operation_date: string; description: string | null; source_document_type: string | null; source_document_id: string | null };
-type Props = { orderId: string; onChanged: (total: number) => void | Promise<void> };
+type Props = { orderId: string; onChanged: (total: number) => void | Promise<void>; onPaymentChanged?: () => void | Promise<void> };
 const rub = (n: number) => new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB" }).format(n || 0);
 const input: React.CSSProperties = { border: "1px solid #cbd5e1", borderRadius: 10, padding: "9px 11px", width: "100%", boxSizing: "border-box", background: "#fff" };
 const button: React.CSSProperties = { border: "1px solid #93c5fd", background: "#eff6ff", borderRadius: 10, padding: "9px 13px", fontWeight: 750, cursor: "pointer", color: "#1d4ed8" };
 const field: React.CSSProperties = { display: "grid", gap: 5, minWidth: 150, flex: "1 1 150px", fontSize: 13, color: "#475569" };
 const parseRub = (s: string) => Number(s.replace(",", "."));
 const today = () => { const date = new Date(); return new Date(date.getTime() - date.getTimezoneOffset()*60000).toISOString().slice(0,10); };
-export default function SupplierDeliveryStages({ orderId, onChanged }: Props) {
+export default function SupplierDeliveryStages({ orderId, onChanged, onPaymentChanged }: Props) {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -132,6 +132,7 @@ export default function SupplierDeliveryStages({ orderId, onChanged }: Props) {
       }
       setPayChargeId(null); setRequestId(crypto.randomUUID());
       await load();
+      await onPaymentChanged?.();
     } catch(e) { setError(e instanceof Error ? e.message : "Не удалось сохранить оплату"); }
     finally { setSaving(false); }
   }
@@ -159,6 +160,12 @@ export default function SupplierDeliveryStages({ orderId, onChanged }: Props) {
         <div style={{ fontSize: 13, color: "#475569" }}>
           Оплачено: <b>{rub(paidFor(c.id))}</b> · {remaining <= 0 ? "Оплачено полностью" : `К оплате: ${rub(remaining)}`}
         </div>
+        {payments.filter(p => p.charge_id === c.id).map(p => {
+          const tx = transactions.find(t => t.id === p.finance_transaction_id);
+          return <div key={p.id} style={{ color: "#64748b", fontSize: 12 }}>
+            Расход ERP: {rub(Number(p.amount))} · {tx?.operation_date || "дата в журнале"} · операция {p.finance_transaction_id.slice(0, 8)}
+          </div>;
+        })}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           {remaining > 0 && <button type="button" style={button} onClick={() => startPay(c)}>Учесть оплату</button>}
           {paidFor(c.id) === 0 && <>
