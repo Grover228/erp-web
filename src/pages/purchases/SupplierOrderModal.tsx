@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../supabase";
+import SupplierDeliveryStages from "./SupplierDeliveryStages";
 import RelatedDocumentModal from "./RelatedDocumentModal";
 import LinkedDocumentsModal from "./LinkedDocumentsModal";
 import ReceiptModal, { type SupplierReceipt } from "../warehouse/ReceiptModal";
@@ -242,12 +243,6 @@ export default function SupplierOrderModal({
   const [paymentAccountId, setPaymentAccountId] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentComment, setPaymentComment] = useState("");
-  const [deliveryEditorOpen, setDeliveryEditorOpen] = useState(false);
-  const [deliverySaving, setDeliverySaving] = useState(false);
-  const [deliveryCostInput, setDeliveryCostInput] = useState(String(order?.delivery_cost ?? 0));
-  const [deliveryMethod, setDeliveryMethod] = useState<"quantity" | "amount">(
-    order?.delivery_distribution === "amount" ? "amount" : "quantity",
-  );
   const [savedDeliveryCost, setSavedDeliveryCost] = useState(Number(order?.delivery_cost || 0));
   const [savedDeliveryMethod, setSavedDeliveryMethod] = useState<"quantity" | "amount">(
     order?.delivery_distribution === "amount" ? "amount" : "quantity",
@@ -286,8 +281,6 @@ export default function SupplierOrderModal({
     setCurrentOrderStatus(order?.status || "draft");
     setLinkedDocumentsSourceType("supplier_order");
     setLinkedDocumentsSourceId(order?.id || "");
-    setDeliveryCostInput(String(order?.delivery_cost ?? 0));
-    setDeliveryMethod(order?.delivery_distribution === "amount" ? "amount" : "quantity");
     setSavedDeliveryCost(Number(order?.delivery_cost || 0));
     setSavedDeliveryMethod(order?.delivery_distribution === "amount" ? "amount" : "quantity");
   }, [order?.id, order?.status, order?.delivery_cost, order?.delivery_distribution]);
@@ -623,11 +616,10 @@ export default function SupplierOrderModal({
   }
 
   function deliveryPreview() {
-    const raw = deliveryEditorOpen ? deliveryCostInput : String(savedDeliveryCost);
-    const amount = Number(raw.replace(",", "."));
+    const amount = savedDeliveryCost;
     const validAmount = Number.isFinite(amount) && amount >= 0 ? amount : 0;
     const totalCents = Math.round(validAmount * 100);
-    const method = deliveryEditorOpen ? deliveryMethod : savedDeliveryMethod;
+    const method = savedDeliveryMethod;
     const weights = orderItems.map((item) =>
       method === "quantity" ? Number(item.quantity || 0) : Number(item.amount || 0),
     );
@@ -654,36 +646,6 @@ export default function SupplierOrderModal({
       };
     });
     return { rows, amount: validAmount, total: Number(order?.total_amount || 0) + validAmount };
-  }
-
-  async function saveOrderDelivery() {
-    if (!order) return;
-    const cost = Number(deliveryCostInput.replace(",", "."));
-    if (!Number.isFinite(cost) || cost < 0 || Math.abs(Math.round(cost * 100) - cost * 100) > 0.000001) {
-      setError("Укажи неотрицательную сумму доставки с точностью до копейки.");
-      return;
-    }
-    try {
-      setDeliverySaving(true);
-      setError("");
-      const { error: saveError } = await supabase
-        .from("supplier_orders")
-        .update({
-          delivery_cost: cost,
-          delivery_distribution: deliveryMethod,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", order.id);
-      if (saveError) throw saveError;
-      setSavedDeliveryCost(cost);
-      setSavedDeliveryMethod(deliveryMethod);
-      setDeliveryEditorOpen(false);
-      await onSaved(order.id);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Не удалось сохранить доставку");
-    } finally {
-      setDeliverySaving(false);
-    }
   }
 
   function getPaidAmount() {
@@ -2176,77 +2138,63 @@ export default function SupplierOrderModal({
               </div>
             </div>
 
-            <div style={{ border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 14, padding: 16, display: "grid", gap: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <div>
-                  <div style={{ fontWeight: 900, fontSize: 17 }}>Доставка и себестоимость</div>
-                  <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
-                    Товары: {formatCurrency(order?.total_amount || 0)} · Доставка: {formatCurrency(savedDeliveryCost)}
-                  </div>
-                  <div style={{ fontWeight: 900, marginTop: 5 }}>
-                    Итого с доставкой: {formatCurrency(Number(order?.total_amount || 0) + savedDeliveryCost)}
-                  </div>
+            <div style={{ border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 14, padding: 16, display: "grid", gap: 14 }}>
+              <div>
+                <div style={{ fontWeight: 900, fontSize: 17 }}>Доставка и себестоимость</div>
+                <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+                  Товары: {formatCurrency(order?.total_amount || 0)} · Доставка: {formatCurrency(savedDeliveryCost)}
                 </div>
-                <button type="button" style={createDocumentButtonStyle} onClick={() => setDeliveryEditorOpen((open) => !open)}>
-                  {deliveryEditorOpen ? "Свернуть расчёт" : "+ Добавить доставку"}
-                </button>
+                <div style={{ fontWeight: 900, marginTop: 5 }}>
+                  Итого с доставкой: {formatCurrency(Number(order?.total_amount || 0) + savedDeliveryCost)}
+                </div>
               </div>
-              {deliveryEditorOpen && (
-                <>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                    <label style={{ ...labelStyle, minWidth: 190 }}>
-                      <span style={labelTextStyle}>Стоимость доставки, ₽</span>
-                      <input type="number" min="0" step="0.01" value={deliveryCostInput}
-                        onChange={(event) => setDeliveryCostInput(event.target.value)} style={inputStyle} />
-                    </label>
-                    <label style={{ ...labelStyle, minWidth: 240 }}>
-                      <span style={labelTextStyle}>Распределение</span>
-                      <select value={deliveryMethod}
-                        onChange={(event) => setDeliveryMethod(event.target.value === "amount" ? "amount" : "quantity")}
-                        style={inputStyle}>
-                        <option value="quantity">По количеству (например, по кг)</option>
-                        <option value="amount">По стоимости позиций</option>
-                      </select>
-                    </label>
-                  </div>
-                  <div style={{ color: "#64748b", fontSize: 12 }}>
-                    Предпросмотр: можно менять сумму сколько угодно. До поступления на склад себестоимость и остатки не изменяются.
-                  </div>
-                  <div style={tableWrapStyle}>
-                    <table style={{ ...tableStyle, minWidth: 650 }}>
-                      <thead><tr>
-                        <th style={thStyle}>Позиция</th>
-                        <th style={thStyle}>Кол-во</th>
-                        <th style={thStyle}>Доля доставки</th>
-                        <th style={thStyle}>Себестоимость за ед.</th>
-                        <th style={thStyle}>Итого с доставкой</th>
-                      </tr></thead>
-                      <tbody>
-                        {deliveryPreview().rows.map((row) => (
-                          <tr key={row.id}>
-                            <td style={tdStyle}>{row.name} {row.article ? `(${row.article})` : ""}</td>
-                            <td style={tdStyle}>{row.quantity}</td>
-                            <td style={tdStyle}>{formatCurrency(row.delivery)}</td>
-                            <td style={tdStyle}>{formatCurrency(row.unitCost)}</td>
-                            <td style={tdStyle}>{formatCurrency(row.total)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div style={{ fontWeight: 900 }}>Всего с доставкой: {formatCurrency(deliveryPreview().total)}</div>
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                    <button type="button" disabled={deliverySaving} onClick={saveOrderDelivery} style={saveButtonStyle(deliverySaving)}>
-                      {deliverySaving ? "Сохраняю..." : "Сохранить доставку"}
-                    </button>
-                    <button type="button" onClick={() => {
-                      setDeliveryEditorOpen(false);
-                      setDeliveryCostInput(String(savedDeliveryCost));
-                      setDeliveryMethod(savedDeliveryMethod);
-                    }} style={cancelButtonStyle}>Отмена</button>
-                  </div>
-                </>
-              )}
+              <SupplierDeliveryStages
+                orderId={order.id}
+                onChanged={async (total) => {
+                  setSavedDeliveryCost(total);
+                  await onSaved(order.id);
+                }}
+              />
+              <label style={{ ...labelStyle, maxWidth: 290 }}>
+                <span style={labelTextStyle}>Распределение доставки в себестоимость</span>
+                <select value={savedDeliveryMethod} style={inputStyle}
+                  onChange={async (event) => {
+                    const method = event.target.value === "amount" ? "amount" : "quantity";
+                    const { error: updateError } = await supabase.from("supplier_orders")
+                      .update({ delivery_distribution: method }).eq("id", order.id);
+                    if (updateError) { setError(updateError.message); return; }
+                    setSavedDeliveryMethod(method);
+                    await onSaved(order.id);
+                  }}>
+                  <option value="quantity">По количеству (например, по кг)</option>
+                  <option value="amount">По стоимости позиций</option>
+                </select>
+              </label>
+              <div style={{ color: "#64748b", fontSize: 12 }}>
+                Распределение рассчитано по сумме всех этапов. До проведения поступления склада себестоимость и остатки не изменяются.
+              </div>
+              <div style={tableWrapStyle}>
+                <table style={{ ...tableStyle, minWidth: 650 }}>
+                  <thead><tr>
+                    <th style={thStyle}>Позиция</th>
+                    <th style={thStyle}>Кол-во</th>
+                    <th style={thStyle}>Доля доставки</th>
+                    <th style={thStyle}>Себестоимость за ед.</th>
+                    <th style={thStyle}>Итого с доставкой</th>
+                  </tr></thead>
+                  <tbody>
+                    {deliveryPreview().rows.map(row => (
+                      <tr key={row.id}>
+                        <td style={tdStyle}>{row.name} {row.article ? `(${row.article})` : ""}</td>
+                        <td style={tdStyle}>{row.quantity}</td>
+                        <td style={tdStyle}>{formatCurrency(row.delivery)}</td>
+                        <td style={tdStyle}>{formatCurrency(row.unitCost)}</td>
+                        <td style={tdStyle}>{formatCurrency(row.total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             {getPaymentDebt() > 0 && (
