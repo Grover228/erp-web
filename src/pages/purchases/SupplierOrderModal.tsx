@@ -1972,7 +1972,7 @@ export default function SupplierOrderModal({
 
                 <button
                   type="button"
-                  onClick={() => setDeliveryEditorOpen((open) => !open)}
+                  onClick={() => document.getElementById("supplier-order-delivery")?.scrollIntoView({ behavior: "smooth" })}
                   style={createDocumentButtonStyle}
                 >
                   + Добавить доставку
@@ -2138,7 +2138,7 @@ export default function SupplierOrderModal({
               </div>
             </div>
 
-            <div style={{ border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 14, padding: 16, display: "grid", gap: 14 }}>
+            <div id="supplier-order-delivery" style={{ border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 14, padding: 16, display: "grid", gap: 14 }}>
               <div>
                 <div style={{ fontWeight: 900, fontSize: 17 }}>Доставка и себестоимость</div>
                 <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
@@ -2148,23 +2148,23 @@ export default function SupplierOrderModal({
                   Итого с доставкой: {formatCurrency(Number(order?.total_amount || 0) + savedDeliveryCost)}
                 </div>
               </div>
-              <SupplierDeliveryStages
+              {order && <SupplierDeliveryStages
                 orderId={order.id}
                 onChanged={async (total) => {
                   setSavedDeliveryCost(total);
                   await onSaved(order.id);
                 }}
-              />
+              />}
               <label style={{ ...labelStyle, maxWidth: 290 }}>
                 <span style={labelTextStyle}>Распределение доставки в себестоимость</span>
                 <select value={savedDeliveryMethod} style={inputStyle}
                   onChange={async (event) => {
                     const method = event.target.value === "amount" ? "amount" : "quantity";
                     const { error: updateError } = await supabase.from("supplier_orders")
-                      .update({ delivery_distribution: method }).eq("id", order.id);
+                      .update({ delivery_distribution: method }).eq("id", order!.id);
                     if (updateError) { setError(updateError.message); return; }
                     setSavedDeliveryMethod(method);
-                    await onSaved(order.id);
+                    if (order?.id) await onSaved(order.id);
                   }}>
                   <option value="quantity">По количеству (например, по кг)</option>
                   <option value="amount">По стоимости позиций</option>
