@@ -11,7 +11,7 @@ const input: React.CSSProperties = { border: "1px solid #cbd5e1", borderRadius: 
 const button: React.CSSProperties = { border: "1px solid #93c5fd", background: "#eff6ff", borderRadius: 10, padding: "9px 13px", fontWeight: 750, cursor: "pointer", color: "#1d4ed8" };
 const field: React.CSSProperties = { display: "grid", gap: 5, minWidth: 150, flex: "1 1 150px", fontSize: 13, color: "#475569" };
 const parseRub = (s: string) => Number(s.replace(",", "."));
-const today = () => new Date().toLocaleDateString("en-CA");
+const today = () => { const date = new Date(); return new Date(date.getTime() - date.getTimezoneOffset()*60000).toISOString().slice(0,10); };
 export default function SupplierDeliveryStages({ orderId, onChanged }: Props) {
   const [charges, setCharges] = useState<Charge[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
@@ -70,7 +70,7 @@ export default function SupplierDeliveryStages({ orderId, onChanged }: Props) {
   }
   async function saveCharge() {
     const amount = parseRub(cost);
-    if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount*100) !== amount*100 && Math.abs(Math.round(amount*100)-amount*100)>0.00001) {
+    if (!Number.isFinite(amount) || amount <= 0 || Math.abs(Math.round(amount*100)-amount*100)>0.00001) {
       setError("Укажи стоимость доставки больше нуля с точностью до копейки."); return;
     }
     if (!stage.trim()) { setError("Укажи этап доставки."); return; }
