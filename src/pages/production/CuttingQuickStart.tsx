@@ -630,10 +630,6 @@ export default function CuttingQuickStart({
                 <div style={{ fontWeight: 900, fontSize: 14 }}>{name}</div>
                 <div style={{ ...muted, marginTop: 4 }}>{job.order.order_number || "Заказ"} · {job.operation.operation_name}</div>
                 <div style={{ ...muted, marginTop: 5 }}>Осталось: {job.available} шт. · Выполнено: {progress}%</div>
-                {cutting && canChooseFabric(job.order) && <div style={{
-                  fontSize: 12, marginTop: 5, fontWeight: 900,
-                  color: fabricByOrder[job.order.id] === "roll" ? "#166534" : "#1d4ed8",
-                }}>Ткань: {fabricByOrder[job.order.id] === "roll" ? "РУЛОН" : "РУКАВ / ТЮК"}</div>}
               </div>
               <span style={{ color: "#2563eb", fontSize: 22, flexShrink: 0 }}>›</span>
             </button>;
@@ -673,22 +669,6 @@ export default function CuttingQuickStart({
             <div style={{ height: 5, borderRadius: 6, background: "#dbeafe", marginTop: 7, overflow: "hidden" }}>
               <div style={{ width: progress + "%", height: "100%", background: "#16a34a" }} />
             </div>
-            {cutting && canChooseFabric(job.order) && <div style={{
-              marginTop: 12, padding: 12, borderRadius: 12,
-              background: fabricByOrder[job.order.id] === "roll" ? "#ecfdf5" : "#eff6ff",
-              border: fabricByOrder[job.order.id] === "roll" ? "2px solid #16a34a" : "1px solid #93c5fd",
-              display: "grid", gap: 7,
-            }}>
-              <div style={{ fontWeight: 800, color: "#334155", fontSize: 13 }}>ТКАНЬ ДЛЯ СЛЕДУЮЩЕЙ ПАЧКИ</div>
-              <div style={{ fontSize: 18, fontWeight: 900, color: fabricByOrder[job.order.id] === "roll" ? "#166534" : "#1d4ed8" }}>
-                {fabricByOrder[job.order.id] === "roll" ? "✓ РУЛОН · 185 см" : "✓ РУКАВ · ТЮК"}
-              </div>
-              <div style={{ ...muted, fontWeight: 500, lineHeight: 1.5 }}>
-                Источник закреплён за производственным заказом. Выбор ткани
-                выполняется перед созданием нового заказа; при раскрое материал
-                не переключается. Расход — по техкарте.
-              </div>
-            </div>}
             {cutting && !mine && <button type="button" style={{ ...primary, width: "100%", marginTop: 12 }}
               disabled={busy || blocked || hasActiveBatch || someOperationRunning || (canChooseFabric(job.order) && !fabricByOrder[job.order.id])}
               onClick={() => void startCutting(job)}>▶ Начать раскрой</button>}
