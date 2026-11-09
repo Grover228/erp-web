@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import QRCode from "qrcode";
 import { supabase } from "../../supabase";
+import type { FabricSource } from "./createProductionOrder";
 
 type QuickOrder = {
   id: string;
@@ -35,6 +36,11 @@ type Job = {
   operation: QuickOperation;
   available: number;
 };
+
+type SelectedFabricRow = { production_order_id: string; source: FabricSource };
+type OrderMaterialRow = { production_order_id: string; material_id: string; total_quantity: number };
+const canChooseFabric = (order: QuickOrder) =>
+  /^bini-black(?:-|$)/i.test(order.product?.article || "");
 
 type CreatedBatch = {
   id: string;
@@ -152,6 +158,7 @@ export default function CuttingQuickStart({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [fabricByOrder, setFabricByOrder] = useState<Record<string, FabricSource>>({});
   const [finishId, setFinishId] = useState<string | null>(null);
   const [finishQuantity, setFinishQuantity] = useState("21");
   const [createdBatch, setCreatedBatch] = useState<CreatedBatch | null>(null);
@@ -174,17 +181,48 @@ export default function CuttingQuickStart({
       const safeOrders = (rawOrders || []) as QuickOrder[];
       const ids = safeOrders.map((order) => order.id);
       let safeOperations: QuickOperation[] = [];
+      const currentFabrics: Record<string, FabricSource> = {};
       if (ids.length) {
-        const { data, error: operationsError } = await supabase
-          .from("production_order_operations")
-          .select("id,production_order_id,operation_name,sort_order,status,completed_quantity,price_per_unit,planned_time_min_per_unit,started_at,assigned_user_id")
-          .in("production_order_id", ids)
-          .order("sort_order", { ascending: true });
-        if (operationsError) throw operationsError;
-        safeOperations = (data || []) as QuickOperation[];
+        const [operationResult, selectionResult, materialResult, rollResult] = await Promise.all([
+          supabase
+            .from("production_order_operations")
+            .select("id,production_order_id,operation_name,sort_order,status,completed_quantity,price_per_unit,planned_time_min_per_unit,started_at,assigned_user_id")
+            .in("production_order_id", ids)
+            .order("sort_order", { ascending: true }),
+          supabase
+            .from("production_order_fabric_settings")
+            .select("production_order_id,source")
+            .in("production_order_id", ids),
+          supabase
+            .from("production_order_materials")
+            .select("production_order_id,material_id,total_quantity")
+            .in("production_order_id", ids),
+          supabase
+            .from("materials")
+            .select("id")
+            .eq("article", "кулирка-черный-рулон-185-190")
+            .maybeSingle(),
+        ]);
+        if (operationResult.error) throw operationResult.error;
+        if (selectionResult.error) throw selectionResult.error;
+        if (materialResult.error) throw materialResult.error;
+        if (rollResult.error) throw rollResult.error;
+        safeOperations = (operationResult.data || []) as QuickOperation[];
+        const selections = (selectionResult.data || []) as SelectedFabricRow[];
+        const materialRows = (materialResult.data || []) as OrderMaterialRow[];
+        for (const order of safeOrders) {
+          if (!canChooseFabric(order)) continue;
+          const confirmed = selections.find((item) => item.production_order_id === order.id);
+          const planned = materialRows.filter((item) => item.production_order_id === order.id &&
+            Number(item.total_quantity || 0) > 0);
+          currentFabrics[order.id] = confirmed?.source ??
+            (planned.length === 1 && planned[0].material_id === rollResult.data?.id
+              ? "roll" : "sleeve");
+        }
       }
       setOrders(safeOrders);
       setOperations(safeOperations);
+      setFabricByOrder(currentFabrics);
       const active = safeOperations.find((op) =>
         op.operation_name.toLowerCase().includes("раскро") &&
         op.status === "in_progress" && op.assigned_user_id === userId
@@ -266,6 +304,48 @@ export default function CuttingQuickStart({
     filter === "Все" || job.operation.operation_name.toLowerCase().includes(filter.toLowerCase())
   );
 
+  async function switchCuttingFabric(job: Job) {
+    if (!userId || busy || !canChooseFabric(job.order)) return;
+    if (job.operation.status === "in_progress") {
+      setError("Сначала сохрани текущую пачку раскроя, затем переключи ткань.");
+      return;
+    }
+    const next: FabricSource = fabricByOrder[job.order.id] === "roll" ? "sleeve" : "roll";
+    const toLabel = next === "roll" ? "РУЛОН 185 см" : "РУКАВ (ТЮК)";
+    if (!window.confirm(
+      `Переключить ${job.order.order_number} на ${toLabel} для СЛЕДУЮЩЕЙ пачки?\n\n` +
+      `Уже раскроенные изделия останутся со своим материалом.\n` +
+      `Осталось раскроить: ${job.available} шт.\n\nПодтвердить переход?`
+    )) return;
+    try {
+      setBusy(true);
+      setError("");
+      setNotice("");
+      const { data, error: switchError } = await supabase.rpc("set_cut_fabric_source", {
+        p_order_id: job.order.id,
+        p_source: next,
+      });
+      if (switchError) throw switchError;
+      const response = data as {
+        changed?: boolean;
+        remaining_quantity?: number;
+        reserved_kg?: number;
+      } | null;
+      await loadJobs();
+      setNotice(
+        response?.changed
+          ? `Подтверждено: ${job.order.order_number} — следующая пачка из ${toLabel.toLowerCase()}.
+             Предыдущие списания сохранены, остаток заказа: ${response.remaining_quantity} шт.`
+          : `У заказа уже выбран источник: ${toLabel.toLowerCase()}.`
+      );
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Не удалось сменить ткань");
+      await loadJobs();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function startCutting(job: Job) {
     if (!userId || busy) return;
     if (hasActiveBatch || someOperationRunning) {
@@ -285,6 +365,18 @@ export default function CuttingQuickStart({
       if (shiftError) throw shiftError;
       if (shift.status !== "open" || shift.is_paused) {
         throw new Error("Открой смену и выйди из паузы перед началом работы.");
+      }
+      // Do not start cutting with a stale source after another device switched it.
+      if (canChooseFabric(job.order)) {
+        const { data: savedChoice, error: choiceError } = await supabase
+          .from("production_order_fabric_settings")
+          .select("source")
+          .eq("production_order_id", job.order.id)
+          .maybeSingle();
+        if (choiceError) throw choiceError;
+        if (savedChoice?.source && savedChoice.source !== fabricByOrder[job.order.id]) {
+          throw new Error("Ткань изменена на другом устройстве. Обнови задание перед раскроем.");
+        }
       }
       const { data: current, error: readError } = await supabase
         .from("production_order_operations")
@@ -423,6 +515,9 @@ export default function CuttingQuickStart({
           product_article: payload.product_article,
           color_name: payload.color_name,
           qr_payload: payload,
+          comment: canChooseFabric(job.order)
+            ? `Ткань раскроя: ${fabricByOrder[job.order.id] === "roll" ? "рулон 185 см" : "рукав"}`
+            : null,
         })
         .select("id").single();
       if (batchError) throw batchError;
@@ -616,8 +711,35 @@ export default function CuttingQuickStart({
             <div style={{ height: 5, borderRadius: 6, background: "#dbeafe", marginTop: 7, overflow: "hidden" }}>
               <div style={{ width: progress + "%", height: "100%", background: "#16a34a" }} />
             </div>
+            {cutting && canChooseFabric(job.order) && <div style={{
+              marginTop: 12, padding: 12, borderRadius: 12,
+              background: fabricByOrder[job.order.id] === "roll" ? "#ecfdf5" : "#eff6ff",
+              border: fabricByOrder[job.order.id] === "roll" ? "2px solid #16a34a" : "1px solid #93c5fd",
+              display: "grid", gap: 7,
+            }}>
+              <div style={{ fontWeight: 800, color: "#334155", fontSize: 13 }}>ТКАНЬ ДЛЯ СЛЕДУЮЩЕЙ ПАЧКИ</div>
+              <div style={{ fontSize: 18, fontWeight: 900, color: fabricByOrder[job.order.id] === "roll" ? "#166534" : "#1d4ed8" }}>
+                {fabricByOrder[job.order.id] === "roll" ? "✓ РУЛОН · 185 см" : "✓ РУКАВ · ТЮК"}
+              </div>
+              <div style={{ ...muted, fontWeight: 500, lineHeight: 1.5 }}>
+                Расход остаётся по техкарте. Предыдущие пачки не меняются.
+              </div>
+              <button type="button" style={{
+                ...secondary, padding: "11px 12px", width: "100%",
+                background: "#fff", color: "#0f172a", borderColor: "#94a3b8",
+              }}
+                disabled={busy || blocked || mine || hasActiveBatch || someOperationRunning}
+                onClick={() => void switchCuttingFabric(job)}>
+                {fabricByOrder[job.order.id] === "roll"
+                  ? "↩ Перейти обратно на рукав"
+                  : "↪ Перейти на рулон для следующей пачки"}
+              </button>
+              {mine && <div style={{ ...muted, color: "#b45309" }}>
+                Идёт текущий раскрой. Сначала сохрани пачку, затем переключай.
+              </div>}
+            </div>}
             {cutting && !mine && <button type="button" style={{ ...primary, width: "100%", marginTop: 12 }}
-              disabled={busy || blocked || hasActiveBatch || someOperationRunning}
+              disabled={busy || blocked || hasActiveBatch || someOperationRunning || (canChooseFabric(job.order) && !fabricByOrder[job.order.id])}
               onClick={() => void startCutting(job)}>▶ Начать раскрой</button>}
             {cutting && mine && <button type="button" style={{ ...primary, width: "100%", marginTop: 12 }}
               disabled={busy} onClick={() => {
