@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../supabase";
 import type { TechCardItem } from "./production/productionTypes";
 import { createProductionOrder } from "./production/createProductionOrder";
+import type { FabricSource } from "./production/createProductionOrder";
+import FabricSourcePicker from "./production/FabricSourcePicker";
 
 type ProductionSeason = {
   id: string;
@@ -227,6 +229,8 @@ export default function ProductionPlanningPage() {
   const [launchItem, setLaunchItem] = useState<PlanItem | null>(null);
   const [launchQuantity, setLaunchQuantity] = useState("");
   const [launchComment, setLaunchComment] = useState("");
+  const [launchFabricSource, setLaunchFabricSource] = useState<FabricSource>("sleeve");
+  const [launchRollMetersPerItem, setLaunchRollMetersPerItem] = useState("");
   const [launching, setLaunching] = useState(false);
 
   useEffect(() => {
@@ -780,6 +784,8 @@ export default function ProductionPlanningPage() {
     );
 
     setLaunchItem(item);
+    setLaunchFabricSource("sleeve");
+    setLaunchRollMetersPerItem("");
     setLaunchQuantity(String(remaining > 0 ? remaining : 1));
     setLaunchComment(
       selectedSeason
@@ -828,6 +834,8 @@ export default function ProductionPlanningPage() {
         quantity,
         comment: launchComment,
         productionPlanItemId: launchItem.id,
+        fabricSource: launchFabricSource,
+        rollMetersPerItem: Number(launchRollMetersPerItem),
       });
 
       let chzNote = "";
@@ -1541,6 +1549,14 @@ export default function ProductionPlanningPage() {
                 />
               </Field>
 
+              <FabricSourcePicker
+                product={launchItem.product}
+                source={launchFabricSource}
+                rollMetersPerItem={launchRollMetersPerItem}
+                onSourceChange={setLaunchFabricSource}
+                onRollMetersChange={setLaunchRollMetersPerItem}
+              />
+
               <Field label="Комментарий">
                 <input
                   value={launchComment}
@@ -1585,11 +1601,13 @@ export default function ProductionPlanningPage() {
                 <button
                   type="button"
                   onClick={handleLaunchProduction}
-                  disabled={launching || quantity <= 0}
+                  disabled={launching || quantity <= 0 ||
+                    (launchFabricSource === "roll" && !(Number(launchRollMetersPerItem) > 0))}
                   style={{
                     ...primaryButtonStyle,
                     background: "#059669",
-                    opacity: launching || quantity <= 0 ? 0.55 : 1,
+                    opacity: launching || quantity <= 0 ||
+                      (launchFabricSource === "roll" && !(Number(launchRollMetersPerItem) > 0)) ? 0.55 : 1,
                   }}
                 >
                   {launching ? "Создаю заказ..." : "Создать производственный заказ"}
