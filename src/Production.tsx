@@ -165,7 +165,6 @@ export default function Production({
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
   const [fabricSource, setFabricSource] = useState<FabricSource>("sleeve");
-  const [rollMetersPerItem, setRollMetersPerItem] = useState("");
   const [chzOrderEnabled, setChzOrderEnabled] = useState(true);
   const [chzMappingLoading, setChzMappingLoading] = useState(false);
   const [chzMapping, setChzMapping] = useState<{
@@ -662,7 +661,6 @@ export default function Production({
         quantity: Number(quantity),
         comment,
         fabricSource: hasAlternativeRoll(product) ? fabricSource : "sleeve",
-        rollMetersPerItem: Number(rollMetersPerItem),
       });
 
       let chzSuffix = "";
@@ -697,7 +695,6 @@ export default function Production({
       setQuantity("");
       setComment("");
       setFabricSource("sleeve");
-      setRollMetersPerItem("");
 
       await loadProductionOrders();
       setTab("jobs");
@@ -2410,7 +2407,6 @@ export default function Production({
             setQuantity("");
             setComment("");
             setFabricSource("sleeve");
-            setRollMetersPerItem("");
             setIsCreateOpen(true);
           }}
           onOpenQrHistory={openQrHistory}
@@ -2452,7 +2448,6 @@ export default function Production({
             setQuantity("");
             setComment("");
             setFabricSource("sleeve");
-            setRollMetersPerItem("");
             setIsCreateOpen(true);
           }}
           onOpenQrHistory={openQrHistory}
@@ -2525,9 +2520,7 @@ export default function Production({
           quantity={quantity}
           comment={comment}
           fabricSource={fabricSource}
-          rollMetersPerItem={rollMetersPerItem}
           onFabricSourceChange={setFabricSource}
-          onRollMetersPerItemChange={setRollMetersPerItem}
           creating={creating}
           chzOrderEnabled={chzOrderEnabled}
           chzMappingLoading={chzMappingLoading}
@@ -2537,7 +2530,6 @@ export default function Production({
           onProductChange={(id) => {
             setSelectedProductId(id);
             setFabricSource("sleeve");
-            setRollMetersPerItem("");
           }}
           onQuantityChange={setQuantity}
           onCommentChange={setComment}
