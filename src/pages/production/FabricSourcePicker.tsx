@@ -12,15 +12,11 @@ export function hasAlternativeRoll(product: ProductLike): boolean {
 export default function FabricSourcePicker({
   product,
   source,
-  rollMetersPerItem,
   onSourceChange,
-  onRollMetersChange,
 }: {
   product: ProductLike;
   source: FabricSource;
-  rollMetersPerItem: string;
   onSourceChange: (source: FabricSource) => void;
-  onRollMetersChange: (value: string) => void;
 }) {
   if (!hasAlternativeRoll(product)) return null;
 
@@ -65,26 +61,9 @@ export default function FabricSourcePicker({
         Рулон — чёрная кулирка 185 см, 190 г/м²
       </label>
       {source === "roll" && (
-        <div style={{ display: "grid", gap: 5 }}>
-          <label htmlFor="roll-metres-per-item" style={{ fontSize: 13, fontWeight: 700 }}>
-            Расход рулона на одну шапку, пог. м
-          </label>
-          <input
-            id="roll-metres-per-item"
-            type="number"
-            min="0.001"
-            step="0.001"
-            required
-            value={rollMetersPerItem}
-            placeholder="Замерьте по первой раскладке"
-            onChange={(event) => onRollMetersChange(event.target.value)}
-            style={{ border: "1px solid #94a3b8", borderRadius: 8, padding: 10, fontSize: 16 }}
-          />
-          <div style={{ fontSize: 12, color: "#9a3412", lineHeight: 1.5 }}>
-            Рулон шире и плотнее рукава. Не переносим расход из старой техкарты автоматически:
-            укажи измеренный расход. ERP проверит отдельный остаток рулона в кг,
-            зарезервирует его и рассчитает себестоимость.
-          </div>
+        <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+          Расход на шапку берётся автоматически из техкарты, без изменения норматива.
+          ERP отдельно проверит остаток рулона и рассчитает его себестоимость.
         </div>
       )}
     </fieldset>
