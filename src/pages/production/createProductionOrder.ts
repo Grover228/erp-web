@@ -16,12 +16,17 @@ import {
   formatQuantity,
 } from "./productionUtils";
 
+export type FabricSource = "sleeve" | "roll";
+
 export type CreateProductionOrderInput = {
   product: ProductItem;
   techCard: TechCardItem;
   quantity: number;
   comment?: string | null;
   productionPlanItemId?: string | null;
+  fabricSource?: FabricSource;
+  /** Actual cutting consumption for open 185 cm roll, in running metres per item. */
+  rollMetersPerItem?: number | null;
 };
 
 export type CreateProductionOrderResult = {
@@ -35,6 +40,8 @@ export async function createProductionOrder({
   quantity,
   comment,
   productionPlanItemId = null,
+  fabricSource = "sleeve",
+  rollMetersPerItem = null,
 }: CreateProductionOrderInput): Promise<CreateProductionOrderResult> {
   const orderQuantity = Number(quantity);
 
@@ -71,6 +78,37 @@ export async function createProductionOrder({
   if (techOperationsResult.error) throw techOperationsResult.error;
 
   const techMaterials = (techMaterialsResult.data as TechCardMaterial[]) || [];
+
+  // The tech card remains unchanged. Material selection affects only this
+  // production order, its reservations, costing and subsequent write-offs.
+  let selectedMaterials: TechCardMaterial[] = techMaterials;
+  let selectedFabricLabel = "Рукав (по техкарте)";
+  if (fabricSource === "roll") {
+    const metres = Number(rollMetersPerItem);
+    if (!Number.isFinite(metres) || metres <= 0) {
+      throw new Error("Укажи фактический расход рулона в погонных метрах на изделие.");
+    }
+    const { data: blackFabrics, error: fabricLookupError } = await supabase
+      .from("materials")
+      .select("id, article, name, is_active")
+      .in("article", ["кулирка-черный", "кулирка-черный-рулон-185-190"]);
+    if (fabricLookupError) throw fabricLookupError;
+    const sleeve = (blackFabrics || []).find((m) => m.article === "кулирка-черный" && m.is_active);
+    const roll = (blackFabrics || []).find((m) => m.article === "кулирка-черный-рулон-185-190" && m.is_active);
+    if (!sleeve || !roll) throw new Error("Рукав или рулон чёрной кулирки не найден в справочнике.");
+    if (techMaterials.filter((m) => m.material_id === sleeve.id).length !== 1) {
+      throw new Error("Выбор рулона разрешён только для техкарты с одной позицией чёрного рукава.");
+    }
+    selectedMaterials = techMaterials.map((item) =>
+      item.material_id === sleeve.id
+        ? { ...item, material_id: roll.id, quantity: metres }
+        : item,
+    );
+    selectedFabricLabel = "Рулон 185 см, 190 г/м²";
+  } else if (fabricSource !== "sleeve") {
+    throw new Error("Неизвестный тип ткани для запуска.");
+  }
+
   const techConsumables =
     (techConsumablesResult.data as TechCardConsumable[]) || [];
   const techOperations =
@@ -86,9 +124,55 @@ export async function createProductionOrder({
 
   if (stockCheckError) throw stockCheckError;
 
-  const stockShortages = (
-    (stockCheckData as ProductionStockCheckResult[]) || []
-  ).filter((item) => Number(item.missing_quantity || 0) > 0);
+  // For a roll order, the legacy checker still examines the sleeve in the
+  // original tech card. Replace only that material's check, keeping all
+  // consumable checks and checks for other materials as they were.
+  let stockResults = (stockCheckData as ProductionStockCheckResult[]) || [];
+  if (fabricSource === "roll") {
+    const oldMaterial = techMaterials.find((m) =>
+      !selectedMaterials.some((selected) => selected.material_id === m.material_id)
+    );
+    const newMaterial = selectedMaterials.find((m) =>
+      !techMaterials.some((original) => original.material_id === m.material_id)
+    );
+    if (!oldMaterial || !newMaterial) throw new Error("Не удалось определить заменяемую ткань.");
+    const { data: inventory, error: inventoryError } = await supabase
+      .from("stock_available")
+      .select("quantity_available")
+      .eq("item_type", "material")
+      .eq("material_id", newMaterial.material_id);
+    if (inventoryError) throw inventoryError;
+    const { data: rollDetails, error: rollDetailsError } = await supabase
+      .from("materials")
+      .select("production_units_per_purchase_unit")
+      .eq("id", newMaterial.material_id)
+      .single();
+    if (rollDetailsError) throw rollDetailsError;
+    const conversion = Number(rollDetails?.production_units_per_purchase_unit);
+    if (!Number.isFinite(conversion) || conversion <= 0) {
+      throw new Error("У рулона не настроен перевод килограммов в погонные метры.");
+    }
+    const availableStock = (inventory || []).reduce(
+      (sum, row) => sum + Number(row.quantity_available || 0), 0,
+    );
+    const requiredMetres = Number(newMaterial.quantity) * orderQuantity;
+    const availableMetres = availableStock * conversion;
+    stockResults = stockResults.filter(
+      (item) => !(item.item_type === "material" && item.item_id === oldMaterial.material_id),
+    );
+    stockResults.push({
+      item_type: "material",
+      item_id: newMaterial.material_id,
+      item_name: selectedFabricLabel,
+      required_quantity: requiredMetres,
+      available_quantity: availableMetres,
+      missing_quantity: Math.max(0, requiredMetres - availableMetres),
+    });
+  }
+
+  const stockShortages = stockResults.filter(
+    (item) => Number(item.missing_quantity || 0) > 0,
+  );
 
   if (stockShortages.length > 0) {
     throw new Error(
@@ -105,7 +189,7 @@ export async function createProductionOrder({
     );
   }
 
-  const materialIds = techMaterials.map((item) => item.material_id);
+  const materialIds = selectedMaterials.map((item) => item.material_id);
   const consumableIds = techConsumables.map((item) => item.consumable_id);
 
   const [materialsPricesResult, consumablesPricesResult] = await Promise.all([
@@ -148,7 +232,7 @@ export async function createProductionOrder({
   );
 
   const materialStockRequirements: ProductionMaterialRequirement[] =
-    techMaterials.map((item) => {
+    selectedMaterials.map((item) => {
       const materialInfo = materialInfoMap.get(item.material_id);
       const requiredProductionQuantity =
         Number(item.quantity || 0) * orderQuantity;
@@ -177,7 +261,7 @@ export async function createProductionOrder({
       };
     });
 
-  const plannedMaterialsCost = techMaterials.reduce((sum, item) => {
+  const plannedMaterialsCost = selectedMaterials.reduce((sum, item) => {
     const price = materialPriceMap.get(item.material_id) || 0;
     const materialInfo = materialInfoMap.get(item.material_id);
     const productionUnitsPerPurchaseUnit = Number(
@@ -217,7 +301,9 @@ export async function createProductionOrder({
       order_number: orderNumber,
       quantity: orderQuantity,
       status: "draft",
-      comment: comment?.trim() || null,
+      comment: [comment?.trim(), fabricSource === "roll"
+        ? `Ткань: ${selectedFabricLabel}; расход ${Number(rollMetersPerItem)} пог. м/шт.`
+        : null].filter(Boolean).join("\n") || null,
       planned_materials_cost: plannedMaterialsCost,
       planned_consumables_cost: plannedConsumablesCost,
       planned_operations_cost: plannedOperationsCost,
@@ -231,7 +317,7 @@ export async function createProductionOrder({
 
   const orderId = createdOrder.id as string;
 
-  const orderMaterials = techMaterials.map((item) => {
+  const orderMaterials = selectedMaterials.map((item) => {
     const price = materialPriceMap.get(item.material_id) || 0;
     const totalQuantity = Number(item.quantity || 0) * orderQuantity;
 
@@ -248,7 +334,9 @@ export async function createProductionOrder({
               ?.production_units_per_purchase_unit || 1,
           ) *
         price,
-      comment: item.comment,
+      comment: fabricSource === "roll"
+        ? [item.comment, `Источник: ${selectedFabricLabel}; расход ${Number(rollMetersPerItem)} пог. м/шт.`].filter(Boolean).join("; ")
+        : item.comment,
     };
   });
 
