@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { supabase } from "../supabase";
+import PushNotificationsPanel from "../components/PushNotificationsPanel";
 import CuttingQuickStart, { type ActiveCutting } from "./production/CuttingQuickStart";
 
-const EMPLOYEE_MOBILE_VERSION = "v0.9.1";
+const EMPLOYEE_MOBILE_VERSION = "v0.9.2";
 
 type Shift = {
   id: string;
@@ -950,6 +951,7 @@ export default function EmployeeMobilePage({
           <button onClick={openShift} style={openShiftButtonStyle}>
             Открыть смену
           </button>
+          <PushNotificationsPanel />
         </div>
       </div>
     );
@@ -980,6 +982,7 @@ export default function EmployeeMobilePage({
           <button onClick={handleCloseShift} style={closeShiftButtonStyle}>
             Закрыть смену
           </button>
+          <PushNotificationsPanel />
         </div>
       </div>
     );
@@ -1022,6 +1025,8 @@ export default function EmployeeMobilePage({
           </div>
         </div>
       </div>
+
+      <PushNotificationsPanel />
 
       <div style={currentOperationCardStyle}>
         <div style={currentOperationTopRowStyle}>
