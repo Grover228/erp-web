@@ -5,6 +5,8 @@ import QRCode from "qrcode";
 import { supabase } from "./supabase";
 import ProductionOrderModal from "./pages/production/ProductionOrderModal";
 import ProductionCreateOrderModal from "./pages/production/ProductionCreateOrderModal";
+import { hasAlternativeRoll } from "./pages/production/FabricSourcePicker";
+import type { FabricSource } from "./pages/production/createProductionOrder";
 import ProductionJobsList from "./pages/production/ProductionJobsList";
 import ProductionActiveBatches from "./pages/production/ProductionActiveBatches";
 import ProductionFinishOperationModal from "./pages/production/ProductionFinishOperationModal";
@@ -162,6 +164,8 @@ export default function Production({
   const [selectedProductId, setSelectedProductId] = useState("");
   const [quantity, setQuantity] = useState("");
   const [comment, setComment] = useState("");
+  const [fabricSource, setFabricSource] = useState<FabricSource>("sleeve");
+  const [rollMetersPerItem, setRollMetersPerItem] = useState("");
   const [chzOrderEnabled, setChzOrderEnabled] = useState(true);
   const [chzMappingLoading, setChzMappingLoading] = useState(false);
   const [chzMapping, setChzMapping] = useState<{
@@ -657,6 +661,8 @@ export default function Production({
         techCard,
         quantity: Number(quantity),
         comment,
+        fabricSource: hasAlternativeRoll(product) ? fabricSource : "sleeve",
+        rollMetersPerItem: Number(rollMetersPerItem),
       });
 
       let chzSuffix = "";
@@ -690,6 +696,8 @@ export default function Production({
       setIsCreateOpen(false);
       setQuantity("");
       setComment("");
+      setFabricSource("sleeve");
+      setRollMetersPerItem("");
 
       await loadProductionOrders();
       setTab("jobs");
@@ -2401,6 +2409,8 @@ export default function Production({
             setSelectedProductId("");
             setQuantity("");
             setComment("");
+            setFabricSource("sleeve");
+            setRollMetersPerItem("");
             setIsCreateOpen(true);
           }}
           onOpenQrHistory={openQrHistory}
@@ -2441,6 +2451,8 @@ export default function Production({
             setSelectedProductId("");
             setQuantity("");
             setComment("");
+            setFabricSource("sleeve");
+            setRollMetersPerItem("");
             setIsCreateOpen(true);
           }}
           onOpenQrHistory={openQrHistory}
@@ -2512,13 +2524,21 @@ export default function Production({
           selectedProductId={selectedProductId}
           quantity={quantity}
           comment={comment}
+          fabricSource={fabricSource}
+          rollMetersPerItem={rollMetersPerItem}
+          onFabricSourceChange={setFabricSource}
+          onRollMetersPerItemChange={setRollMetersPerItem}
           creating={creating}
           chzOrderEnabled={chzOrderEnabled}
           chzMappingLoading={chzMappingLoading}
           chzMapping={chzMapping}
           onClose={() => setIsCreateOpen(false)}
           onSubmit={handleCreateProductionOrder}
-          onProductChange={setSelectedProductId}
+          onProductChange={(id) => {
+            setSelectedProductId(id);
+            setFabricSource("sleeve");
+            setRollMetersPerItem("");
+          }}
           onQuantityChange={setQuantity}
           onCommentChange={setComment}
           onChzOrderEnabledChange={setChzOrderEnabled}
