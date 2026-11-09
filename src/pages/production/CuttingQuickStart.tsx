@@ -304,48 +304,6 @@ export default function CuttingQuickStart({
     filter === "Все" || job.operation.operation_name.toLowerCase().includes(filter.toLowerCase())
   );
 
-  async function switchCuttingFabric(job: Job) {
-    if (!userId || busy || !canChooseFabric(job.order)) return;
-    if (job.operation.status === "in_progress") {
-      setError("Сначала сохрани текущую пачку раскроя, затем переключи ткань.");
-      return;
-    }
-    const next: FabricSource = fabricByOrder[job.order.id] === "roll" ? "sleeve" : "roll";
-    const toLabel = next === "roll" ? "РУЛОН 185 см" : "РУКАВ (ТЮК)";
-    if (!window.confirm(
-      `Переключить ${job.order.order_number} на ${toLabel} для СЛЕДУЮЩЕЙ пачки?\n\n` +
-      `Уже раскроенные изделия останутся со своим материалом.\n` +
-      `Осталось раскроить: ${job.available} шт.\n\nПодтвердить переход?`
-    )) return;
-    try {
-      setBusy(true);
-      setError("");
-      setNotice("");
-      const { data, error: switchError } = await supabase.rpc("set_cut_fabric_source", {
-        p_order_id: job.order.id,
-        p_source: next,
-      });
-      if (switchError) throw switchError;
-      const response = data as {
-        changed?: boolean;
-        remaining_quantity?: number;
-        reserved_kg?: number;
-      } | null;
-      await loadJobs();
-      setNotice(
-        response?.changed
-          ? `Подтверждено: ${job.order.order_number} — следующая пачка из ${toLabel.toLowerCase()}.
-             Предыдущие списания сохранены, остаток заказа: ${response.remaining_quantity} шт.`
-          : `У заказа уже выбран источник: ${toLabel.toLowerCase()}.`
-      );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Не удалось сменить ткань");
-      await loadJobs();
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function startCutting(job: Job) {
     if (!userId || busy) return;
     if (hasActiveBatch || someOperationRunning) {
@@ -672,6 +630,10 @@ export default function CuttingQuickStart({
                 <div style={{ fontWeight: 900, fontSize: 14 }}>{name}</div>
                 <div style={{ ...muted, marginTop: 4 }}>{job.order.order_number || "Заказ"} · {job.operation.operation_name}</div>
                 <div style={{ ...muted, marginTop: 5 }}>Осталось: {job.available} шт. · Выполнено: {progress}%</div>
+                {cutting && canChooseFabric(job.order) && <div style={{
+                  fontSize: 12, marginTop: 5, fontWeight: 900,
+                  color: fabricByOrder[job.order.id] === "roll" ? "#166534" : "#1d4ed8",
+                }}>Ткань: {fabricByOrder[job.order.id] === "roll" ? "РУЛОН" : "РУКАВ / ТЮК"}</div>}
               </div>
               <span style={{ color: "#2563eb", fontSize: 22, flexShrink: 0 }}>›</span>
             </button>;
@@ -722,21 +684,10 @@ export default function CuttingQuickStart({
                 {fabricByOrder[job.order.id] === "roll" ? "✓ РУЛОН · 185 см" : "✓ РУКАВ · ТЮК"}
               </div>
               <div style={{ ...muted, fontWeight: 500, lineHeight: 1.5 }}>
-                Расход остаётся по техкарте. Предыдущие пачки не меняются.
+                Источник закреплён за производственным заказом. Выбор ткани
+                выполняется перед созданием нового заказа; при раскрое материал
+                не переключается. Расход — по техкарте.
               </div>
-              <button type="button" style={{
-                ...secondary, padding: "11px 12px", width: "100%",
-                background: "#fff", color: "#0f172a", borderColor: "#94a3b8",
-              }}
-                disabled={busy || blocked || mine || hasActiveBatch || someOperationRunning}
-                onClick={() => void switchCuttingFabric(job)}>
-                {fabricByOrder[job.order.id] === "roll"
-                  ? "↩ Перейти обратно на рукав"
-                  : "↪ Перейти на рулон для следующей пачки"}
-              </button>
-              {mine && <div style={{ ...muted, color: "#b45309" }}>
-                Идёт текущий раскрой. Сначала сохрани пачку, затем переключай.
-              </div>}
             </div>}
             {cutting && !mine && <button type="button" style={{ ...primary, width: "100%", marginTop: 12 }}
               disabled={busy || blocked || hasActiveBatch || someOperationRunning || (canChooseFabric(job.order) && !fabricByOrder[job.order.id])}
