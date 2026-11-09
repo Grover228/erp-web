@@ -148,6 +148,21 @@ Deno.serve(async (req: Request) => {
       return { succeeded, failed };
     }
 
+    if (action === "diagnostic") {
+      if (req.headers.get("x-erp-cron") !== secret.cron_secret) {
+        return reply({ error: "Forbidden" }, 403, origin);
+      }
+      const keys = await webpush.importVapidKeys(
+        vapidJwk(secret.vapid_public, secret.vapid_private),
+        { extractable: false },
+      );
+      await webpush.ApplicationServer.new({
+        contactInformation: "https://streetstream.ru",
+        vapidKeys: keys,
+      });
+      return reply({ cryptoReady: true, configured: true }, 200, origin);
+    }
+
     if (action === "run-shift-check") {
       const cronKey = req.headers.get("x-erp-cron");
       if (!cronKey || cronKey !== secret.cron_secret) {
