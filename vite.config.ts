@@ -8,6 +8,7 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       workbox: {
+        importScripts: ["/erp-push-sw.js"],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
