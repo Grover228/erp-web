@@ -7,6 +7,7 @@ import DirectoriesPage from "./pages/DirectoriesPage";
 import ProcurementStatusesPage from "./pages/ProcurementStatusesPage";
 import WarehouseStatusesPage from "./pages/WarehouseStatusesPage";
 import EmployeeMobilePage from "./pages/EmployeeMobilePage";
+import PushNotificationsPanel from "./components/PushNotificationsPanel";
 import FinancePage from "./pages/FinancePage";
 import OzonPage from "./pages/OzonPage";
 import ChestnyZnakPage from "./pages/ChestnyZnakPage";
@@ -36,6 +37,7 @@ type Screen =
   | "scanner"
   | "valera"
   | "employee-home"
+  | "notifications"
   | "directories"
   | "directory-employees"
   | "directory-suppliers"
@@ -71,7 +73,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
-const APP_BUILD = "2026.11.09-96";
+const APP_BUILD = "2026.11.09-97";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
@@ -84,6 +86,7 @@ function isScreen(value: string | null): value is Screen {
     value === "scanner" ||
     value === "valera" ||
     value === "employee-home" ||
+    value === "notifications" ||
     value === "directories" ||
     value === "directory-employees" ||
     value === "directory-suppliers" ||
@@ -191,6 +194,7 @@ function App() {
     canViewOzon && { key: "ozon" as Screen, label: "Ozon 🟦" },
     canViewChestnyZnak && { key: "chestny-znak" as Screen, label: "Честный ЗНАК 🟨" },
     { key: "employee-home" as Screen, label: "Моя смена 👤" },
+    { key: "notifications" as Screen, label: "Уведомления 🔔" },
     canManageDirectories && {
       key: "directories" as Screen,
       label: "Справочники 📚",
@@ -202,6 +206,8 @@ function App() {
       ? "Валера"
       : currentScreen === "employee-home"
       ? "Моя смена"
+      : currentScreen === "notifications"
+      ? "Уведомления"
       : currentScreen === "dashboard"
       ? "Дашборд"
       : currentScreen === "production"
@@ -253,6 +259,8 @@ function App() {
       ? "Голосовой помощник, навыки и маршрутизация команд"
       : currentScreen === "employee-home"
       ? "Рабочий экран сотрудника"
+      : currentScreen === "notifications"
+      ? "Подключение телефона и тест push-уведомлений"
       : currentScreen === "dashboard"
       ? "Главный экран ERP"
       : currentScreen === "production"
@@ -848,6 +856,14 @@ function App() {
       );
     }
 
+    if (currentScreen === "notifications") {
+      return (
+        <div style={{ maxWidth: 640, margin: "0 auto", padding: 16 }}>
+          <PushNotificationsPanel />
+        </div>
+      );
+    }
+
     if (currentScreen === "dashboard") {
       if (!canViewDashboard) return renderAccessDenied();
 
@@ -1183,7 +1199,9 @@ function App() {
                       currentScreen === "warehouse-statuses")) ||
                   (item.key === "scanner" && currentScreen === "scanner") ||
                   (item.key === "employee-home" &&
-                    currentScreen === "employee-home");
+                    currentScreen === "employee-home") ||
+                  (item.key === "notifications" &&
+                    currentScreen === "notifications");
 
                 return (
                   <button
@@ -1223,6 +1241,9 @@ function App() {
                           break;
                         case "employee-home":
                           setCurrentScreen("employee-home");
+                          break;
+                        case "notifications":
+                          setCurrentScreen("notifications");
                           break;
                         default:
                           break;
