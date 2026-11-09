@@ -169,7 +169,7 @@ Deno.serve(async (req: Request) => {
         return reply({ error: "Forbidden" }, 403, origin);
       }
       const local = moscowDateTime();
-      if (local.hour !== 19 || local.minute < 30 || local.minute > 59) {
+      if (local.hour !== 19) {
         return reply({ skipped: "Outside Moscow reminder window", localDay: local.day }, 200, origin);
       }
 
@@ -188,7 +188,7 @@ Deno.serve(async (req: Request) => {
 
         const delivery = await pushTo(devices, {
           title: "Стритстрим ERP · Смена открыта",
-          body: "Вы ещё работаете? Если рабочий день закончился, не забудьте закрыть смену.",
+          body: "Вы ещё на работе? Смена открыта. Если закончили работу, откройте ERP и закройте смену.",
           url: "/?erp_screen=employee-home",
           tag: `shift-${shift.id}-${local.day}`,
         });
