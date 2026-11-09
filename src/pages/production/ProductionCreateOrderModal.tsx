@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ProductItem, TechCardItem } from "../../Production";
+import FabricSourcePicker, { hasAlternativeRoll } from "./FabricSourcePicker";
+import type { FabricSource } from "./createProductionOrder";
 
 type ProductionCreateOrderModalProps = {
   products: ProductItem[];
@@ -7,6 +9,10 @@ type ProductionCreateOrderModalProps = {
   selectedProductId: string;
   quantity: string;
   comment: string;
+  fabricSource: FabricSource;
+  rollMetersPerItem: string;
+  onFabricSourceChange: (value: FabricSource) => void;
+  onRollMetersPerItemChange: (value: string) => void;
   creating: boolean;
   chzOrderEnabled: boolean;
   chzMappingLoading: boolean;
@@ -29,6 +35,10 @@ export default function ProductionCreateOrderModal({
   selectedProductId,
   quantity,
   comment,
+  fabricSource,
+  rollMetersPerItem,
+  onFabricSourceChange,
+  onRollMetersPerItemChange,
   creating,
   chzOrderEnabled,
   chzMappingLoading,
@@ -320,6 +330,14 @@ export default function ProductionCreateOrderModal({
             </Field>
           </div>
 
+          <FabricSourcePicker
+            product={selectedProduct}
+            source={fabricSource}
+            rollMetersPerItem={rollMetersPerItem}
+            onSourceChange={onFabricSourceChange}
+            onRollMetersChange={onRollMetersPerItemChange}
+          />
+
           <div style={footerStyleFor(isMobile)}>
             <div style={{ color: "#64748b", fontSize: 12 }}>
               Показаны только изделия с активной техкартой: {productsWithActiveTechCards.length}
@@ -345,12 +363,18 @@ export default function ProductionCreateOrderModal({
 
               <button
                 type="submit"
-                disabled={creating || !selectedProductId || !quantity}
+                disabled={creating || !selectedProductId || !quantity ||
+                  (hasAlternativeRoll(selectedProduct) && fabricSource === "roll" &&
+                    !(Number(rollMetersPerItem) > 0))}
                 style={{
                   ...primaryBlueButtonStyle,
                   flex: isMobile ? 1.4 : undefined,
-                  opacity: creating || !selectedProductId || !quantity ? 0.55 : 1,
-                  cursor: creating || !selectedProductId || !quantity ? "not-allowed" : "pointer",
+                  opacity: creating || !selectedProductId || !quantity ||
+                    (hasAlternativeRoll(selectedProduct) && fabricSource === "roll" &&
+                      !(Number(rollMetersPerItem) > 0)) ? 0.55 : 1,
+                  cursor: creating || !selectedProductId || !quantity ||
+                    (hasAlternativeRoll(selectedProduct) && fabricSource === "roll" &&
+                      !(Number(rollMetersPerItem) > 0)) ? "not-allowed" : "pointer",
                 }}
               >
                 {creating ? "Создание..." : "Создать задание"}
