@@ -51,6 +51,18 @@ type ProductionOperation = {
   status: string;
 };
 
+type ProductionBatchProgress = {
+  production_order_id: string;
+  quantity: number;
+  completed_quantity: number | null;
+  status: string;
+};
+
+type ProductionReceiptProgress = {
+  production_order_id: string | null;
+  quantity: number;
+};
+
 type ItemStats = {
   ordered: number;
   completed: number;
@@ -196,6 +208,8 @@ export default function ProductionPlanningPage() {
   const [techCards, setTechCards] = useState<TechCardItem[]>([]);
   const [orders, setOrders] = useState<ProductionOrder[]>([]);
   const [operations, setOperations] = useState<ProductionOperation[]>([]);
+  const [batches, setBatches] = useState<ProductionBatchProgress[]>([]);
+  const [receipts, setReceipts] = useState<ProductionReceiptProgress[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [savingSeason, setSavingSeason] = useState(false);
@@ -306,6 +320,8 @@ export default function ProductionPlanningPage() {
       if (planItemIds.length === 0) {
         setOrders([]);
         setOperations([]);
+        setBatches([]);
+        setReceipts([]);
         return;
       }
 
@@ -327,20 +343,36 @@ export default function ProductionPlanningPage() {
 
       if (orderIds.length === 0) {
         setOperations([]);
+        setBatches([]);
+        setReceipts([]);
         return;
       }
 
-      const { data: operationsData, error: operationsError } = await supabase
-        .from("production_order_operations")
-        .select(
-          "id, production_order_id, operation_name, sort_order, completed_quantity, status",
-        )
-        .in("production_order_id", orderIds)
-        .order("sort_order", { ascending: true });
+      const [operationsResult, batchesResult, receiptsResult] = await Promise.all([
+        supabase
+          .from("production_order_operations")
+          .select("id, production_order_id, operation_name, sort_order, completed_quantity, status")
+          .in("production_order_id", orderIds)
+          .order("sort_order", { ascending: true }),
+        supabase
+          .from("production_batches")
+          .select("production_order_id, quantity, completed_quantity, status")
+          .in("production_order_id", orderIds),
+        supabase
+          .from("stock_movements")
+          .select("production_order_id, quantity")
+          .in("production_order_id", orderIds)
+          .eq("movement_type", "production_receipt")
+          .eq("item_type", "product"),
+      ]);
 
-      if (operationsError) throw operationsError;
+      if (operationsResult.error) throw operationsResult.error;
+      if (batchesResult.error) throw batchesResult.error;
+      if (receiptsResult.error) throw receiptsResult.error;
 
-      setOperations((operationsData as ProductionOperation[]) || []);
+      setOperations((operationsResult.data as ProductionOperation[]) || []);
+      setBatches((batchesResult.data as ProductionBatchProgress[]) || []);
+      setReceipts((receiptsResult.data as ProductionReceiptProgress[]) || []);
     } catch (loadError) {
       setError(
         loadError instanceof Error
@@ -358,82 +390,118 @@ export default function ProductionPlanningPage() {
 
   const statsByProduct = useMemo(() => {
     const map = new Map<string, ItemStats>();
+    const batchDoneByOrder = new Map<string, number>();
+    const stockReceivedByOrder = new Map<string, number>();
 
+    // Count finished goods only when a completed batch has a stock receipt.
+    // Packaging and operation logs are not finished-goods stock movements.
+    for (const batch of batches) {
+      if (batch.status !== "done") continue;
+      const batchQuantity = Math.max(0, toNumber(batch.quantity));
+      const completedQuantity = batch.completed_quantity == null
+        ? batchQuantity
+        : Math.max(0, toNumber(batch.completed_quantity));
+      batchDoneByOrder.set(
+        batch.production_order_id,
+        (batchDoneByOrder.get(batch.production_order_id) || 0) +
+          Math.min(batchQuantity, completedQuantity),
+      );
+    }
+
+    for (const receipt of receipts) {
+      if (!receipt.production_order_id) continue;
+      stockReceivedByOrder.set(
+        receipt.production_order_id,
+        (stockReceivedByOrder.get(receipt.production_order_id) || 0) +
+          toNumber(receipt.quantity),
+      );
+    }
+
+    const finishedByOrder = new Map<string, number>();
     for (const order of orders) {
+      const orderQuantity = Math.max(0, toNumber(order.quantity));
+      const finished = Math.min(
+        orderQuantity,
+        Math.max(0, batchDoneByOrder.get(order.id) || 0),
+        Math.max(0, stockReceivedByOrder.get(order.id) || 0),
+      );
+      finishedByOrder.set(order.id, finished);
+
       const current = map.get(order.product_id) || {
         ordered: 0,
         completed: 0,
         stages: [],
       };
-
-      current.ordered += toNumber(order.quantity);
+      current.ordered += orderQuantity;
+      current.completed += finished;
       map.set(order.product_id, current);
+    }
+
+    // Older orders changed routes part-way through production. Completed and
+    // received batches count as passed at every recorded stage; active work
+    // still uses the logs. Bound each stage by its order to prevent >100%.
+    // Never rewrite operation logs: they may be used for payroll.
+    const stagesByOrder = new Map<
+      string,
+      Map<string, { name: string; sortOrder: number; completed: number }>
+    >();
+
+    for (const operation of operations) {
+      const order = orderMap.get(operation.production_order_id);
+      if (!order) continue;
+      const orderQuantity = Math.max(0, toNumber(order.quantity));
+      const finished = finishedByOrder.get(order.id) || 0;
+      const completed = Math.min(
+        orderQuantity,
+        Math.max(finished, Math.max(0, toNumber(operation.completed_quantity))),
+      );
+
+      const byStage = stagesByOrder.get(order.id) ||
+        new Map<string, { name: string; sortOrder: number; completed: number }>();
+      const key = `${operation.sort_order}:${operation.operation_name}`;
+      const existing = byStage.get(key);
+      if (existing) {
+        existing.completed = Math.max(existing.completed, completed);
+      } else {
+        byStage.set(key, {
+          name: operation.operation_name,
+          sortOrder: operation.sort_order,
+          completed,
+        });
+      }
+      stagesByOrder.set(order.id, byStage);
     }
 
     const operationTotals = new Map<
       string,
       Map<string, { name: string; sortOrder: number; completed: number }>
     >();
-    const finalOperationByOrder = new Map<string, ProductionOperation>();
-
-    for (const operation of operations) {
-      const order = orderMap.get(operation.production_order_id);
+    for (const [orderId, stages] of stagesByOrder.entries()) {
+      const order = orderMap.get(orderId);
       if (!order) continue;
-
-      const byStage =
-        operationTotals.get(order.product_id) ||
-        new Map<
-          string,
-          { name: string; sortOrder: number; completed: number }
-        >();
-
-      const key = `${operation.sort_order}:${operation.operation_name}`;
-      const stage = byStage.get(key) || {
-        name: operation.operation_name,
-        sortOrder: operation.sort_order,
-        completed: 0,
-      };
-
-      stage.completed += toNumber(operation.completed_quantity);
-      byStage.set(key, stage);
-      operationTotals.set(order.product_id, byStage);
-
-      const finalOperation = finalOperationByOrder.get(order.id);
-      if (!finalOperation || operation.sort_order > finalOperation.sort_order) {
-        finalOperationByOrder.set(order.id, operation);
+      const byProduct = operationTotals.get(order.product_id) ||
+        new Map<string, { name: string; sortOrder: number; completed: number }>();
+      for (const [key, stage] of stages.entries()) {
+        const existing = byProduct.get(key);
+        if (existing) {
+          existing.completed += stage.completed;
+        } else {
+          byProduct.set(key, { ...stage });
+        }
       }
-    }
-
-    for (const operation of finalOperationByOrder.values()) {
-      const order = orderMap.get(operation.production_order_id);
-      if (!order) continue;
-
-      const current = map.get(order.product_id) || {
-        ordered: 0,
-        completed: 0,
-        stages: [],
-      };
-
-      current.completed += toNumber(operation.completed_quantity);
-      map.set(order.product_id, current);
+      operationTotals.set(order.product_id, byProduct);
     }
 
     for (const [productId, stages] of operationTotals.entries()) {
-      const current = map.get(productId) || {
-        ordered: 0,
-        completed: 0,
-        stages: [],
-      };
-
+      const current = map.get(productId);
+      if (!current) continue;
       current.stages = Array.from(stages.values()).sort(
         (a, b) => a.sortOrder - b.sortOrder,
       );
-
-      map.set(productId, current);
     }
 
     return map;
-  }, [orders, operations, orderMap]);
+  }, [orders, operations, batches, receipts, orderMap]);
 
   const allocatedPlan = useMemo(
     () => planItems.reduce((sum, item) => sum + toNumber(item.plan_quantity), 0),
