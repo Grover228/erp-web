@@ -71,7 +71,7 @@ type Employee = {
 };
 
 const SCREEN_STORAGE_KEY = "erp:last-screen";
-const APP_BUILD = "2026.11.09-95";
+const APP_BUILD = "2026.11.09-96";
 
 function isScreen(value: string | null): value is Screen {
   return value === "dashboard" ||
@@ -109,6 +109,9 @@ function App() {
     const launch = readValeraLaunchContext();
 
     if (typeof window !== "undefined") {
+      if (new URL(window.location.href).searchParams.get("erp_screen") === "employee-home") {
+        return "employee-home";
+      }
       const saved = window.localStorage.getItem(SCREEN_STORAGE_KEY);
 
       if (launch.requested && launch.source === "android") {
@@ -302,6 +305,11 @@ function App() {
   useEffect(() => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem(SCREEN_STORAGE_KEY, currentScreen);
+      const launchUrl = new URL(window.location.href);
+      if (launchUrl.searchParams.has("erp_screen")) {
+        launchUrl.searchParams.delete("erp_screen");
+        window.history.replaceState(null, "", launchUrl.toString());
+      }
 
       if (currentScreen !== "valera") {
         const url = new URL(window.location.href);
