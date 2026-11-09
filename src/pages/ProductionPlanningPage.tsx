@@ -230,7 +230,6 @@ export default function ProductionPlanningPage() {
   const [launchQuantity, setLaunchQuantity] = useState("");
   const [launchComment, setLaunchComment] = useState("");
   const [launchFabricSource, setLaunchFabricSource] = useState<FabricSource>("sleeve");
-  const [launchRollMetersPerItem, setLaunchRollMetersPerItem] = useState("");
   const [launching, setLaunching] = useState(false);
 
   useEffect(() => {
@@ -785,7 +784,6 @@ export default function ProductionPlanningPage() {
 
     setLaunchItem(item);
     setLaunchFabricSource("sleeve");
-    setLaunchRollMetersPerItem("");
     setLaunchQuantity(String(remaining > 0 ? remaining : 1));
     setLaunchComment(
       selectedSeason
@@ -835,7 +833,6 @@ export default function ProductionPlanningPage() {
         comment: launchComment,
         productionPlanItemId: launchItem.id,
         fabricSource: launchFabricSource,
-        rollMetersPerItem: Number(launchRollMetersPerItem),
       });
 
       let chzNote = "";
@@ -1552,9 +1549,7 @@ export default function ProductionPlanningPage() {
               <FabricSourcePicker
                 product={launchItem.product}
                 source={launchFabricSource}
-                rollMetersPerItem={launchRollMetersPerItem}
                 onSourceChange={setLaunchFabricSource}
-                onRollMetersChange={setLaunchRollMetersPerItem}
               />
 
               <Field label="Комментарий">
@@ -1601,13 +1596,11 @@ export default function ProductionPlanningPage() {
                 <button
                   type="button"
                   onClick={handleLaunchProduction}
-                  disabled={launching || quantity <= 0 ||
-                    (launchFabricSource === "roll" && !(Number(launchRollMetersPerItem) > 0))}
+                  disabled={launching || quantity <= 0}
                   style={{
                     ...primaryButtonStyle,
                     background: "#059669",
-                    opacity: launching || quantity <= 0 ||
-                      (launchFabricSource === "roll" && !(Number(launchRollMetersPerItem) > 0)) ? 0.55 : 1,
+                    opacity: launching || quantity <= 0 ? 0.55 : 1,
                   }}
                 >
                   {launching ? "Создаю заказ..." : "Создать производственный заказ"}
