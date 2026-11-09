@@ -25,8 +25,6 @@ export type CreateProductionOrderInput = {
   comment?: string | null;
   productionPlanItemId?: string | null;
   fabricSource?: FabricSource;
-  /** Actual cutting consumption for open 185 cm roll, in running metres per item. */
-  rollMetersPerItem?: number | null;
 };
 
 export type CreateProductionOrderResult = {
@@ -41,7 +39,6 @@ export async function createProductionOrder({
   comment,
   productionPlanItemId = null,
   fabricSource = "sleeve",
-  rollMetersPerItem = null,
 }: CreateProductionOrderInput): Promise<CreateProductionOrderResult> {
   const orderQuantity = Number(quantity);
 
@@ -84,10 +81,6 @@ export async function createProductionOrder({
   let selectedMaterials: TechCardMaterial[] = techMaterials;
   let selectedFabricLabel = "Рукав (по техкарте)";
   if (fabricSource === "roll") {
-    const metres = Number(rollMetersPerItem);
-    if (!Number.isFinite(metres) || metres <= 0) {
-      throw new Error("Укажи фактический расход рулона в погонных метрах на изделие.");
-    }
     const { data: blackFabrics, error: fabricLookupError } = await supabase
       .from("materials")
       .select("id, article, name, is_active")
@@ -101,7 +94,7 @@ export async function createProductionOrder({
     }
     selectedMaterials = techMaterials.map((item) =>
       item.material_id === sleeve.id
-        ? { ...item, material_id: roll.id, quantity: metres }
+        ? { ...item, material_id: roll.id }
         : item,
     );
     selectedFabricLabel = "Рулон 185 см, 190 г/м²";
@@ -302,7 +295,7 @@ export async function createProductionOrder({
       quantity: orderQuantity,
       status: "draft",
       comment: [comment?.trim(), fabricSource === "roll"
-        ? `Ткань: ${selectedFabricLabel}; расход ${Number(rollMetersPerItem)} пог. м/шт.`
+        ? `Ткань: ${selectedFabricLabel}; расход по техкарте`
         : null].filter(Boolean).join("\n") || null,
       planned_materials_cost: plannedMaterialsCost,
       planned_consumables_cost: plannedConsumablesCost,
@@ -335,7 +328,7 @@ export async function createProductionOrder({
           ) *
         price,
       comment: fabricSource === "roll"
-        ? [item.comment, `Источник: ${selectedFabricLabel}; расход ${Number(rollMetersPerItem)} пог. м/шт.`].filter(Boolean).join("; ")
+        ? [item.comment, `Источник: ${selectedFabricLabel}; расход по техкарте ${Number(item.quantity)} пог. м/шт.`].filter(Boolean).join("; ")
         : item.comment,
     };
   });
