@@ -156,6 +156,14 @@ export default function Production({
   const [deletingOrderId, setDeletingOrderId] = useState("");
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [chzPrintConfirmation, setChzPrintConfirmation] = useState<{
+    batchId: string;
+    batchNumber: string;
+    quantity: number;
+    source: "preview" | "historical";
+  } | null>(null);
+  const [chzPrintConfirmLoading, setChzPrintConfirmLoading] = useState(false);
+  const [chzPrintConfirmError, setChzPrintConfirmError] = useState("");
 
   const [openJobs, setOpenJobs] = useState<Record<string, boolean>>({});
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
@@ -1225,7 +1233,22 @@ export default function Production({
         throw new Error("В пачке разные данные этикеток. Печать остановлена.");
       }
       const count = printUnifiedChzLabels(labels.map((label) => label.code), first, batchNumber);
-      const message = `Открыто окно печати ${count} этикеток ЧЗ для пачки ${batchNumber}. Коды закреплены за пачкой.`;
+      // Opening the browser preview does NOT prove that the printer produced labels.
+      // Only explicit human confirmation may update the CHZ print fields.
+      if (!batch.chz_labels_printed_at || alreadyPrinted < required) {
+        setChzPrintConfirmError("");
+        setChzPrintConfirmation({
+          batchId: batch.id,
+          batchNumber,
+          quantity: count,
+          source: "preview",
+        });
+      }
+      const message = `Открыто окно печати ${count} этикеток ЧЗ для пачки ${batchNumber}. ` +
+        `Коды закреплены за пачкой. ` +
+        (!batch.chz_labels_printed_at || alreadyPrinted < required
+          ? "После печати подтвердите результат в ERP."
+          : "Печать этой пачки уже подтверждена ранее.");
       setMessage(message);
       return message;
     } catch (cause) {
@@ -1234,6 +1257,48 @@ export default function Production({
       throw cause;
     } finally {
       setActionLoading(false);
+    }
+  }
+
+  function requestHistoricalChzPrintConfirmation(batch: ProductionBatch) {
+    if (chzPrintConfirmLoading) return;
+    const quantity = Number(batch.quantity || 0);
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
+      setError("У пачки некорректное количество изделий.");
+      return;
+    }
+    setChzPrintConfirmError("");
+    setChzPrintConfirmation({
+      batchId: batch.id,
+      batchNumber: batch.batch_number,
+      quantity,
+      source: "historical",
+    });
+  }
+
+  async function confirmChzPrinted() {
+    if (!chzPrintConfirmation || chzPrintConfirmLoading) return;
+    const pending = chzPrintConfirmation;
+    try {
+      setChzPrintConfirmLoading(true);
+      setChzPrintConfirmError("");
+      const { data, error: confirmError } = await supabase.rpc("confirm_chz_batch_print", {
+        p_batch_id: pending.batchId,
+        p_source: pending.source,
+      });
+      if (confirmError) throw confirmError;
+      if (!data || Number(data.count) !== pending.quantity) {
+        throw new Error("Сервер вернул несовпадающее количество подтверждённых кодов.");
+      }
+      await loadProductionOrders();
+      setChzPrintConfirmation(null);
+      setMessage(`Печать ЧЗ подтверждена: ${pending.batchNumber}, ${pending.quantity} этикеток. Новые коды не выделялись.`);
+    } catch (cause) {
+      setChzPrintConfirmError(
+        cause instanceof Error ? cause.message : "Не удалось подтвердить печать ЧЗ.",
+      );
+    } finally {
+      setChzPrintConfirmLoading(false);
     }
   }
 
@@ -2412,6 +2477,7 @@ export default function Production({
           onOpenQrHistory={openQrHistory}
           onPrintBatchQr={printBatchQr}
           onPrintChzLabels={(batch) => printChzLabelsForBatch(batch.batch_number)}
+          onRequestChzPrintConfirmation={requestHistoricalChzPrintConfirmation}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2453,6 +2519,7 @@ export default function Production({
           onOpenQrHistory={openQrHistory}
           onPrintBatchQr={printBatchQr}
           onPrintChzLabels={(batch) => printChzLabelsForBatch(batch.batch_number)}
+          onRequestChzPrintConfirmation={requestHistoricalChzPrintConfirmation}
           onDeleteOrder={handleDeleteOrder}
           onStartOperation={handleStartOperation}
           onOpenFinishOperation={openFinishOperation}
@@ -2875,6 +2942,49 @@ export default function Production({
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {chzPrintConfirmation && (
+        <div style={{ ...stackedModalOverlayStyle, zIndex: 15000 }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="chz-confirm-heading"
+            style={{ ...modalBoxStyle, maxWidth: 540 }}>
+            <div style={modalHeaderStyle}>
+              <div>
+                <div id="chz-confirm-heading" style={modalTitleStyle}>
+                  Подтверждение печати Честного ЗНАКа
+                </div>
+                <div style={{ marginTop: 5, fontWeight: 800, color: "#334155" }}>
+                  {chzPrintConfirmation.batchNumber} · {chzPrintConfirmation.quantity} этикеток
+                </div>
+              </div>
+            </div>
+            <div style={{ color: "#334155", lineHeight: 1.55, marginBottom: 14 }}>
+              {chzPrintConfirmation.source === "preview"
+                ? "Окно предпросмотра открылось. Все этикетки действительно вышли из принтера?"
+                : "Эти этикетки уже были физически напечатаны ранее? Подтвердите только если все этикетки готовы."}
+              <div style={{ marginTop: 8, fontSize: 13, color: "#64748b" }}>
+                Открытие окна печати не считается подтверждением. Новые коды ЧЗ не выделяются.
+              </div>
+            </div>
+            {chzPrintConfirmError && (
+              <div role="alert" style={{ marginBottom: 12, color: "#b91c1c", fontWeight: 700 }}>
+                {chzPrintConfirmError}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button type="button" disabled={chzPrintConfirmLoading}
+                style={{ ...primaryGreenButtonStyle, flex: "1 1 220px" }}
+                onClick={() => void confirmChzPrinted()}>
+                {chzPrintConfirmLoading ? "Сохраняю…" : "Да, все этикетки напечатаны"}
+              </button>
+              <button type="button" disabled={chzPrintConfirmLoading}
+                style={{ ...secondaryBlueButtonStyle(), flex: "1 1 130px" }}
+                onClick={() => { setChzPrintConfirmation(null); setChzPrintConfirmError(""); }}>
+                Нет / пока не напечатаны
+              </button>
+            </div>
           </div>
         </div>
       )}
