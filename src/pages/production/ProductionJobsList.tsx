@@ -47,6 +47,7 @@ type Props = {
   onOpenQrHistory: (order: ProductionOrder) => void;
   onPrintBatchQr: (batch: ProductionBatch) => void;
   onPrintChzLabels: (batch: ProductionBatch) => Promise<string | null>;
+  onRequestChzPrintConfirmation: (batch: ProductionBatch) => void;
   onDeleteOrder: (order: ProductionOrder) => void;
   onStartOperation: (
     order: ProductionOrder,
@@ -103,6 +104,7 @@ export default function ProductionJobsList({
   onOpenQrHistory,
   onPrintBatchQr,
   onPrintChzLabels,
+  onRequestChzPrintConfirmation,
   onDeleteOrder,
   onStartOperation,
   onOpenFinishOperation,
@@ -863,6 +865,7 @@ export default function ProductionJobsList({
           onOpenQrHistory={onOpenQrHistory}
           onPrintBatchQr={onPrintBatchQr}
           onPrintChzLabels={onPrintChzLabels}
+          onRequestChzPrintConfirmation={onRequestChzPrintConfirmation}
           onDeleteOrder={onDeleteOrder}
           onStartOperation={onStartOperation}
           onOpenFinishOperation={onOpenFinishOperation}
