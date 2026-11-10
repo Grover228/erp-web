@@ -57,6 +57,7 @@ type ProductionOrderModalProps = {
   onOpenQrHistory: (order: ProductionOrder) => void;
   onPrintBatchQr: (batch: ProductionBatch) => void;
   onPrintChzLabels: (batch: ProductionBatch) => Promise<string | null>;
+  onRequestChzPrintConfirmation: (batch: ProductionBatch) => void;
   onDeleteOrder: (order: ProductionOrder) => void;
   onStartOperation: (
     order: ProductionOrder,
@@ -101,6 +102,7 @@ export default function ProductionOrderModal({
   onOpenQrHistory,
   onPrintBatchQr,
   onPrintChzLabels,
+  onRequestChzPrintConfirmation,
   onDeleteOrder,
   onStartOperation,
   onOpenFinishOperation,
@@ -1185,8 +1187,8 @@ export default function ProductionOrderModal({
                             ЧЗ: закреплено {Number(batch.chz_codes_allocated || 0)} из {batchTotal} кодов
                             {" · "}
                             {batch.chz_labels_printed_at
-                              ? `Этикетки печатались ${formatDateTime(batch.chz_labels_printed_at)}`
-                              : "Этикетки не печатались"}
+                              ? `Печать подтверждена ${formatDateTime(batch.chz_labels_printed_at)}`
+                              : "Печать не подтверждена"}
                           </div>
                         )}
                       </div>
@@ -1210,6 +1212,26 @@ export default function ProductionOrderModal({
                             {chzBatchPrintingId === batch.id ? "Печать ЧЗ…" : `Этикетки ЧЗ · ${batchTotal} шт`}
                           </button>
                         )}
+                        {!batch.chz_labels_printed_at &&
+                          batchTotal > 0 &&
+                          Number(batch.chz_codes_allocated || 0) === batchTotal &&
+                          (chzOrder?.id || batch.chz_gtin) && (
+                            <button
+                              type="button"
+                              disabled={actionLoading || chzBatchPrintingId !== null}
+                              onClick={() => onRequestChzPrintConfirmation(batch)}
+                              style={{
+                                ...printBatchButtonStyle,
+                                background: "#fff7ed",
+                                borderColor: "#fdba74",
+                                color: "#9a3412",
+                                opacity: actionLoading || chzBatchPrintingId !== null ? 0.6 : 1,
+                              }}
+                              title="Для уже распечатанных этикеток: подтвердить факт печати без повторного выделения кодов"
+                            >
+                              ✓ Уже печатались — подтвердить
+                            </button>
+                          )}
                         {(() => {
                           const printInfo = getBatchPrintInfo(batch.id);
                           return (
