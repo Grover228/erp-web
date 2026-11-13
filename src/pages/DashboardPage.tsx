@@ -1025,93 +1025,35 @@ export default function DashboardPage({
                         const employee = employees.find(
                           (employeeItem) => employeeItem.id === item.userId
                         );
-                        const isMixedPayment =
-                          employeeHasSalary(employee) &&
-                          item.unpaidShiftIds.length > 0 &&
-                          item.payableAmount > 0;
-                        const salaryAlreadyPaid = employee
-                          ? salaryPayments.some(
-                              (payment) =>
-                                payment.employee_id === employee.id &&
-                                payment.week_start === getCurrentWeekStart()
-                            )
-                          : false;
-
-                        if (
-                          isMixedPayment &&
-                          employee &&
-                          item.unpaidShiftIds.length > 0
-                        ) {
-                          if (salaryAlreadyPaid) {
-                            return (
-                              <PayableActionCell
-                                item={payableItem}
-                                disabled={payingUserId === item.userId || loading}
-                                onPay={openEmployeePayoutModal}
-                              />
-                            );
-                          }
-
-                          if (!isThursdayToday()) {
-                            return (
-                              <td style={tableCellStyle}>
-                                <span
-                                  style={{
-                                    display: "inline-flex",
-                                    borderRadius: 999,
-                                    padding: "8px 12px",
-                                    background: "#fff7ed",
-                                    color: "#b45309",
-                                    fontWeight: 800,
-                                    whiteSpace: "nowrap",
-                                  }}
-                                >
-                                  В четверг: {formatMoney(
-                                    item.payableAmount +
-                                      Number(employee.weekly_salary_amount || 0)
-                                  )}
-                                </span>
-                              </td>
-                            );
-                          }
-
+                        const dueWeeks = employee && employeeHasSalary(employee)
+                          ? getDueSalaryWeeks(employee)
+                          : [];
+                        // Only shifts from the selected salary week are combined
+                        // with that week's salary. Older shifts stay unpaid and
+                        // available through the standalone piece-rate action.
+                        if (employee && dueWeeks.length > 0 && item.unpaidShiftIds.length > 0) {
+                          const preview = makeSalaryPayout(employee, dueWeeks[0]);
                           return (
                             <td style={tableCellStyle}>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  openSalaryPayoutModal(
-                                    employee,
-                                    item.payableAmount,
-                                    item.unpaidShiftIds
-                                  )
-                                }
-                                disabled={
-                                  salaryPayingEmployeeId === employee.id || loading
-                                }
+                                onClick={() => openSalaryPayoutModal(employee)}
+                                disabled={salaryPayingEmployeeId === employee.id || loading}
                                 style={{
                                   border: "none",
                                   borderRadius: 10,
                                   padding: "8px 10px",
-                                  background:
-                                    salaryPayingEmployeeId === employee.id || loading
-                                      ? "#94a3b8"
-                                      : "#16a34a",
+                                  background: salaryPayingEmployeeId === employee.id || loading
+                                    ? "#94a3b8" : "#16a34a",
                                   color: "#ffffff",
                                   fontWeight: 800,
-                                  cursor:
-                                    salaryPayingEmployeeId === employee.id || loading
-                                      ? "not-allowed"
-                                      : "pointer",
-                                  whiteSpace: "nowrap",
+                                  cursor: salaryPayingEmployeeId === employee.id || loading
+                                    ? "not-allowed" : "pointer",
                                 }}
                               >
                                 {salaryPayingEmployeeId === employee.id
                                   ? "Провожу..."
-                                  : `Выплатить ${formatMoney(
-                                      item.payableAmount +
-                                        Number(employee.weekly_salary_amount || 0)
-                                    )}`}
+                                  : `Выплатить ${formatMoney(preview.totalAmount)} · неделя с ${formatPayoutDate(preview.weekStart)}`}
                               </button>
                             </td>
                           );
@@ -1156,7 +1098,7 @@ export default function DashboardPage({
 
 
       {salaryOnlyEmployees.length > 0 && (
-        <Panel title="Предстоящие выплаты по окладу">
+        <Panel title="Выплаты по окладу">
           <div style={{ overflowX: "auto" }}>
             <table
               style={{
@@ -1177,14 +1119,16 @@ export default function DashboardPage({
 
               <tbody>
                 {salaryOnlyEmployees.map((employee) => {
+                  const dueSalaryWeeks = getDueSalaryWeeks(employee);
                   const currentWeekStart = getCurrentWeekStart();
                   const salaryPaid = salaryPayments.some(
-                    (payment) =>
-                      payment.employee_id === employee.id &&
+                    (payment) => payment.employee_id === employee.id &&
                       payment.week_start === currentWeekStart
                   );
-                  const canPaySalary = isThursdayToday() && !salaryPaid;
-
+                  const canPaySalary = dueSalaryWeeks.length > 0;
+                  const dateLabel = canPaySalary
+                    ? `Не выплачено с ${formatPayoutDate(shiftDateKey(dueSalaryWeeks[dueSalaryWeeks.length - 1], 3))}`
+                    : getNextThursdayLabel();
                   return (
                     <tr key={employee.id}>
                       <td style={tableCellStyle}>
@@ -1201,7 +1145,7 @@ export default function DashboardPage({
                         text={formatMoney(Number(employee.weekly_salary_amount || 0))}
                         strong
                       />
-                      <TableCell text={getNextThursdayLabel()} />
+                      <TableCell text={dateLabel} />
                       <td style={tableCellStyle}>
                         {salaryPaid ? (
                           <span
@@ -1220,7 +1164,7 @@ export default function DashboardPage({
                         ) : canPaySalary ? (
                           <button
                             type="button"
-                            onClick={() => openSalaryPayoutModal(employee, 0, [])}
+                            onClick={() => openSalaryPayoutModal(employee)}
                             disabled={salaryPayingEmployeeId === employee.id || loading}
                             style={{
                               border: "none",
@@ -1255,7 +1199,7 @@ export default function DashboardPage({
                               whiteSpace: "nowrap",
                             }}
                           >
-                            Ожидает выплаты
+                            Ожидает четверга
                           </span>
                         )}
                       </td>
