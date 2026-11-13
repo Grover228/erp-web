@@ -183,39 +183,43 @@ function getPayoutReferenceDate() {
 }
 
 
-function getNextThursdayLabel() {
-  const today = getPayoutReferenceDate();
-  const day = today.getDay();
-  const diff = day <= 4 ? 4 - day : 7 - day + 4;
+// Salary weeks and shift dates are calculated in the ERP's business timezone
+// rather than the browser timezone (which can be different on another device).
+function getBusinessDateKey(date = getPayoutReferenceDate()): string {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Moscow",
+    day: "2-digit", month: "2-digit", year: "numeric",
+  }).formatToParts(date);
+  const value = (part: string) => parts.find((item) => item.type === part)?.value || "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
 
-  const nextThursday = new Date(today);
-  nextThursday.setDate(today.getDate() + diff);
+function shiftDateKey(key: string, days: number): string {
+  const result = new Date(`${key}T12:00:00Z`);
+  result.setUTCDate(result.getUTCDate() + days);
+  return result.toISOString().slice(0, 10);
+}
 
-  return nextThursday.toLocaleDateString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-  });
+function getWeekStartForDateKey(key: string): string {
+  const date = new Date(`${key}T12:00:00Z`);
+  const daysSinceMonday = (date.getUTCDay() + 6) % 7;
+  return shiftDateKey(key, -daysSinceMonday);
 }
 
 function getCurrentWeekStart() {
-  const today = getPayoutReferenceDate();
-  const day = today.getDay();
-  const diffToMonday = day === 0 ? -6 : 1 - day;
-
-  const monday = new Date(today);
-  monday.setHours(0, 0, 0, 0);
-  monday.setDate(today.getDate() + diffToMonday);
-
-  const year = monday.getFullYear();
-  const month = String(monday.getMonth() + 1).padStart(2, "0");
-  const date = String(monday.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${date}`;
+  return getWeekStartForDateKey(getBusinessDateKey());
 }
 
-function isThursdayToday() {
-  return getPayoutReferenceDate().getDay() === 4;
+function getNextThursdayLabel() {
+  const today = getBusinessDateKey();
+  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
+  return formatPayoutDate(shiftDateKey(today, (4 - weekday + 7) % 7));
+}
+
+function formatPayoutDate(dateKey: string) {
+  return new Date(`${dateKey}T12:00:00Z`).toLocaleDateString("ru-RU", {
+    timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric",
+  });
 }
 
 
@@ -582,22 +586,59 @@ export default function DashboardPage({
     return Boolean(employee?.payment_type?.includes("piece"));
   }
 
-  function openSalaryPayoutModal(
-    employee: Employee,
-    pieceAmount = 0,
-    unpaidShiftIds: string[] = []
-  ) {
-    const salaryAmount = Number(employee.weekly_salary_amount || 0);
-    if (salaryAmount <= 0 && pieceAmount <= 0) return;
+  function getDueSalaryWeeks(employee: Employee): string[] {
+    const today = getBusinessDateKey();
+    const currentWeek = getCurrentWeekStart();
+    const paidWeeks = salaryPayments
+      .filter((payment) => payment.employee_id === employee.id)
+      .map((payment) => payment.week_start)
+      .sort();
+    const paid = new Set(paidWeeks);
+    // Normal catch-up starts after the last paid week. First-time employees
+    // see a limited recent window, never unverified years of old salaries.
+    const earliest = paidWeeks.length
+      ? shiftDateKey(paidWeeks[paidWeeks.length - 1], 7)
+      : shiftDateKey(currentWeek, -7 * 7);
+    const createdWeek = employee.created_at
+      ? getWeekStartForDateKey(getBusinessDateKey(new Date(employee.created_at)))
+      : earliest;
+    const lowerBound = earliest > createdWeek ? earliest : createdWeek;
+    const unpaid: string[] = [];
+    for (let weeksAgo = 0; weeksAgo < 16; weeksAgo += 1) {
+      const week = shiftDateKey(currentWeek, -7 * weeksAgo);
+      if (week < lowerBound) break;
+      // Thursday of the target week must already have arrived.
+      if (shiftDateKey(week, 3) > today || paid.has(week)) continue;
+      unpaid.push(week);
+    }
+    return unpaid;
+  }
 
-    setSelectedSalaryPayout({
-      employee,
-      weekStart: getCurrentWeekStart(),
-      salaryAmount,
-      pieceAmount,
-      totalAmount: salaryAmount + pieceAmount,
-      unpaidShiftIds,
-    });
+  function makeSalaryPayout(employee: Employee, weekStart: string): SalaryPayoutEmployee {
+    const selectedShifts = shifts.filter((shift) =>
+      shift.user_id === employee.id &&
+      shift.status === "closed" &&
+      !shift.is_paid &&
+      getWeekStartForDateKey(getBusinessDateKey(new Date(shift.opened_at))) === weekStart
+    );
+    const salaryAmount = Number(employee.weekly_salary_amount || 0);
+    const pieceAmount = Math.round(
+      selectedShifts.reduce((total, shift) => total + Number(shift.total_earned || 0), 0) * 100
+    ) / 100;
+    return {
+      employee, weekStart, salaryAmount, pieceAmount,
+      totalAmount: Math.round((salaryAmount + pieceAmount) * 100) / 100,
+      unpaidShiftIds: selectedShifts.map((shift) => shift.id),
+    };
+  }
+
+  function openSalaryPayoutModal(employee: Employee) {
+    const dueWeeks = getDueSalaryWeeks(employee);
+    if (dueWeeks.length === 0) {
+      setDashboardError("Нет просроченных или доступных к выплате недель оклада.");
+      return;
+    }
+    setSelectedSalaryPayout(makeSalaryPayout(employee, dueWeeks[0]));
     setSelectedFinanceAccountId(financeAccounts[0]?.id || "");
   }
 
