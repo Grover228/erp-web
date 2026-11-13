@@ -480,84 +480,22 @@ export default function DashboardPage({
     financeAccountId: string,
   ) {
     if (item.unpaidShiftIds.length === 0) return;
-
     try {
       setPayingUserId(item.userId);
       setDashboardError("");
-
-      const account = financeAccounts.find(
-        (financeAccount) => financeAccount.id === financeAccountId,
-      );
-
-      if (!account) {
-        throw new Error("Выбери финансовый счёт для выплаты");
-      }
-
-      const amount = Number(item.payableAmount || 0);
-
-      if (amount <= 0) {
-        throw new Error("Сумма выплаты должна быть больше 0");
-      }
-
-      const currentBalance = Number(account.current_balance || 0);
-
-      if (amount > currentBalance) {
-        throw new Error("Недостаточно средств на выбранном счёте");
-      }
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
-      if (!user) throw new Error("Администратор не найден");
-
-      const now = new Date().toISOString();
-
-      const { error: transactionError } = await supabase
-        .from("finance_transactions")
-        .insert({
-          account_id: financeAccountId,
-          type: "expense",
-          amount,
-          operation_date: now.slice(0, 10),
-          description: `Выплата сотруднику ${item.name}`,
-          source_document_type: "employee_payout",
-          source_document_id: item.unpaidShiftIds[0],
-          category: "employee_salary",
-          counterparty_id: item.userId,
-          comment: `Смен к оплате: ${item.unpaidShiftsCount}; смены: ${item.unpaidShiftIds.join(", ")}`,
-        });
-
-      if (transactionError) throw transactionError;
-
-      const { error: accountError } = await supabase
-        .from("finance_accounts")
-        .update({
-          current_balance: currentBalance - amount,
-          updated_at: now,
-        })
-        .eq("id", financeAccountId);
-
-      if (accountError) throw accountError;
-
-      const { error } = await supabase
-        .from("employee_shifts")
-        .update({
-          is_paid: true,
-          paid_at: now,
-          paid_by: user.id,
-        })
-        .in("id", item.unpaidShiftIds);
-
-      if (error) throw error;
-
+      // One server transaction: finance debit, ledger and shift flags.
+      const { error: payoutError } = await supabase.rpc("pay_employee_compensation", {
+        p_employee_id: item.userId,
+        p_account_id: financeAccountId,
+        p_week_start: null,
+        p_shift_ids: item.unpaidShiftIds,
+      });
+      if (payoutError) throw payoutError;
       setSelectedPayoutEmployee(null);
       await loadDashboardData();
     } catch (error) {
       setDashboardError(
-        error instanceof Error ? error.message : "Не удалось отметить выплату"
+        error instanceof Error ? error.message : "Не удалось провести выплату смен"
       );
     } finally {
       setPayingUserId(null);
@@ -643,169 +581,27 @@ export default function DashboardPage({
   }
 
   async function confirmSalaryPayout() {
-    if (!selectedSalaryPayout) return;
-
-    const {
-      employee,
-      weekStart,
-      salaryAmount,
-      pieceAmount,
-      totalAmount,
-      unpaidShiftIds,
-    } = selectedSalaryPayout;
-
-    let salaryPaymentId: string | null = null;
-    let financeTransactionId: string | null = null;
-    let accountWasDebited = false;
-
+    if (!selectedSalaryPayout || salaryPayingEmployeeId) return;
+    const { employee, weekStart, unpaidShiftIds } = selectedSalaryPayout;
     try {
       setSalaryPayingEmployeeId(employee.id);
       setDashboardError("");
-
-      if (!isThursdayToday()) {
-        throw new Error("Выплата оклада доступна только в четверг");
+      if (!getDueSalaryWeeks(employee).includes(weekStart)) {
+        throw new Error("Неделя уже выплачена либо её срок ещё не наступил. Обнови дашборд.");
       }
-
-      const alreadyPaid = salaryPayments.some(
-        (payment) =>
-          payment.employee_id === employee.id &&
-          payment.week_start === weekStart
-      );
-
-      if (alreadyPaid) {
-        throw new Error("Оклад за эту неделю уже выплачен");
-      }
-
-      const account = financeAccounts.find(
-        (financeAccount) => financeAccount.id === selectedFinanceAccountId
-      );
-
-      if (!account) {
-        throw new Error("Выбери финансовый счёт для выплаты");
-      }
-
-      if (totalAmount <= 0) {
-        throw new Error("Сумма выплаты должна быть больше 0");
-      }
-
-      const currentBalance = Number(account.current_balance || 0);
-
-      if (totalAmount > currentBalance) {
-        throw new Error("Недостаточно средств на выбранном счёте");
-      }
-
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError) throw userError;
-      if (!user) throw new Error("Администратор не найден");
-
-      const now = new Date().toISOString();
-
-      if (salaryAmount > 0) {
-        const { data: salaryPayment, error: salaryPaymentError } = await supabase
-          .from("employee_salary_payments")
-          .insert({
-            employee_id: employee.id,
-            week_start: weekStart,
-            amount: salaryAmount,
-            paid_at: now,
-            paid_by: user.id,
-            finance_account_id: selectedFinanceAccountId,
-          })
-          .select("id")
-          .single();
-
-        if (salaryPaymentError) throw salaryPaymentError;
-        salaryPaymentId = salaryPayment.id;
-      }
-
-      const { data: financeTransaction, error: transactionError } = await supabase
-        .from("finance_transactions")
-        .insert({
-          account_id: selectedFinanceAccountId,
-          type: "expense",
-          amount: totalAmount,
-          operation_date: now.slice(0, 10),
-          description:
-            pieceAmount > 0
-              ? `Выплата сотруднику ${employee.full_name || "Без имени"}: оклад + сдельно`
-              : `Оклад сотруднику ${employee.full_name || "Без имени"}`,
-          source_document_type:
-            pieceAmount > 0 ? "employee_combined_payout" : "employee_salary_payment",
-          source_document_id: salaryPaymentId || employee.id,
-          category: "employee_salary",
-          counterparty_id: employee.id,
-          comment:
-            pieceAmount > 0
-              ? `Неделя с ${weekStart}; оклад: ${salaryAmount}; сдельно: ${pieceAmount}; смены: ${unpaidShiftIds.join(", ")}`
-              : `Оклад за неделю с ${weekStart}`,
-        })
-        .select("id")
-        .single();
-
-      if (transactionError) throw transactionError;
-      financeTransactionId = financeTransaction.id;
-
-      const { error: accountError } = await supabase
-        .from("finance_accounts")
-        .update({
-          current_balance: currentBalance - totalAmount,
-          updated_at: now,
-        })
-        .eq("id", selectedFinanceAccountId);
-
-      if (accountError) throw accountError;
-      accountWasDebited = true;
-
-      if (unpaidShiftIds.length > 0) {
-        const { error: shiftsError } = await supabase
-          .from("employee_shifts")
-          .update({
-            is_paid: true,
-            paid_at: now,
-            paid_by: user.id,
-          })
-          .in("id", unpaidShiftIds);
-
-        if (shiftsError) throw shiftsError;
-      }
-
+      // The server calculates and posts salary + selected shifts atomically.
+      const { error: payoutError } = await supabase.rpc("pay_employee_compensation", {
+        p_employee_id: employee.id,
+        p_account_id: selectedFinanceAccountId,
+        p_week_start: weekStart,
+        p_shift_ids: unpaidShiftIds,
+      });
+      if (payoutError) throw payoutError;
       setSelectedSalaryPayout(null);
       await loadDashboardData();
     } catch (error) {
-      const account = financeAccounts.find(
-        (financeAccount) => financeAccount.id === selectedFinanceAccountId
-      );
-
-      if (accountWasDebited && account) {
-        await supabase
-          .from("finance_accounts")
-          .update({
-            current_balance: Number(account.current_balance || 0),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", selectedFinanceAccountId);
-      }
-
-      if (financeTransactionId) {
-        await supabase
-          .from("finance_transactions")
-          .delete()
-          .eq("id", financeTransactionId);
-      }
-
-      if (salaryPaymentId) {
-        await supabase
-          .from("employee_salary_payments")
-          .delete()
-          .eq("id", salaryPaymentId);
-      }
-
       setDashboardError(
-        error instanceof Error ? error.message : "Не удалось провести выплату"
+        error instanceof Error ? error.message : "Не удалось провести выплату оклада"
       );
     } finally {
       setSalaryPayingEmployeeId(null);
