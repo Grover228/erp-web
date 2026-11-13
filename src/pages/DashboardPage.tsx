@@ -564,7 +564,7 @@ export default function DashboardPage({
     item: PayableEmployeeStats,
     financeAccountId: string,
   ) {
-    if (item.unpaidShiftIds.length === 0) return;
+    if (item.unpaidShiftIds.length === 0 || !payrollCanPay) return;
     try {
       setPayingUserId(item.userId);
       setDashboardError("");
@@ -577,7 +577,9 @@ export default function DashboardPage({
       });
       if (payoutError) throw payoutError;
       setSelectedPayoutEmployee(null);
+      setPayrollAccess((prev) => ({ ...prev, unlocked: false, expires_at: null }));
       await loadDashboardData();
+      await refreshPayrollAccess();
     } catch (error) {
       setDashboardError(
         error instanceof Error ? error.message : "Не удалось провести выплату смен"
@@ -660,6 +662,7 @@ export default function DashboardPage({
   }
 
   function openSalaryPayoutModal(employee: Employee) {
+    if (!payrollCanPay) return;
     const dueWeeks = getDueSalaryWeeks(employee);
     if (dueWeeks.length === 0) {
       setDashboardError("Нет просроченных или доступных к выплате недель оклада.");
@@ -670,7 +673,7 @@ export default function DashboardPage({
   }
 
   async function confirmSalaryPayout() {
-    if (!selectedSalaryPayout || salaryPayingEmployeeId) return;
+    if (!selectedSalaryPayout || salaryPayingEmployeeId || !payrollCanPay) return;
     const { employee, weekStart, unpaidShiftIds } = selectedSalaryPayout;
     try {
       setSalaryPayingEmployeeId(employee.id);
@@ -687,7 +690,9 @@ export default function DashboardPage({
       });
       if (payoutError) throw payoutError;
       setSelectedSalaryPayout(null);
+      setPayrollAccess((prev) => ({ ...prev, unlocked: false, expires_at: null }));
       await loadDashboardData();
+      await refreshPayrollAccess();
     } catch (error) {
       setDashboardError(
         error instanceof Error ? error.message : "Не удалось провести выплату оклада"
@@ -1039,7 +1044,36 @@ export default function DashboardPage({
         )}
       </Panel>
 
-      <Panel title="Сотрудники сегодня и к выплате">        {employeesLoading && <EmptyText text="Загрузка сотрудников..." />}
+      <Panel title="Сотрудники сегодня и к выплате">
+        <div style={{
+          border: "1px solid #dbeafe", background: "#f8fafc",
+          borderRadius: 12, padding: 12, marginBottom: 14,
+          display: "flex", alignItems: "center", justifyContent: "space-between",
+          gap: 12, flexWrap: "wrap"
+        }}>
+          <div style={{ color: "#334155", fontSize: 13, fontWeight: 750 }}>
+            {payrollAccess.is_thursday
+              ? "Четверг — день выплаты зарплаты"
+              : payrollCanPay
+                ? "Разовая выплата разблокирована. После одной выплаты доступ закроется."
+                : `Выплаты закрыты до четверга (${getNextThursdayLabel()}).`}
+            {payrollCanPay && !payrollAccess.is_thursday && payrollAccess.expires_at && (
+              <div style={{ fontSize: 12, fontWeight: 500, color: "#64748b" }}>
+                Разблокировка действует до {new Date(payrollAccess.expires_at).toLocaleTimeString("ru-RU", {
+                  timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit"
+                })} (МСК)
+              </div>
+            )}
+          </div>
+          {payrollAccess.is_admin && !payrollAccess.is_thursday && !payrollCanPay && (
+            <button type="button" onClick={() => void unlockPayrollOnce()}
+              disabled={payrollUnlocking || loading}
+              style={{ ...secondaryButtonStyle, opacity: payrollUnlocking || loading ? 0.55 : 1 }}>
+              {payrollUnlocking ? "Разблокирую…" : "Разблокировать пропущенную выплату"}
+            </button>
+          )}
+        </div>
+        {employeesLoading && <EmptyText text="Загрузка сотрудников..." />}
 
         {employeesError && (
           <div
