@@ -1484,11 +1484,32 @@ export default function DashboardPage({
               </button>
             </div>
 
+            <label style={{ ...payoutLabelStyle, marginBottom: 16 }}>
+              <span style={payoutLabelTextStyle}>За какую неделю выплачиваем</span>
+              <select
+                value={selectedSalaryPayout.weekStart}
+                disabled={salaryPayingEmployeeId === selectedSalaryPayout.employee.id}
+                onChange={(event) => setSelectedSalaryPayout(
+                  makeSalaryPayout(selectedSalaryPayout.employee, event.target.value)
+                )}
+                style={payoutSelectStyle}
+              >
+                {getDueSalaryWeeks(selectedSalaryPayout.employee).map((week) => (
+                  <option key={week} value={week}>
+                    {formatPayoutDate(week)} — {formatPayoutDate(shiftDateKey(week, 6))}
+                  </option>
+                ))}
+              </select>
+              <span style={{ fontSize: 12, color: "#64748b" }}>
+                Пропущенный четверг не переносит начисления на другую неделю.
+              </span>
+            </label>
+
             <div style={payoutInfoGridStyle}>
               <div style={payoutInfoCardStyle}>
                 <div style={payoutInfoLabelStyle}>Неделя с</div>
                 <div style={payoutInfoValueStyle}>
-                  {new Date(`${selectedSalaryPayout.weekStart}T00:00:00`).toLocaleDateString("ru-RU")}
+                  {formatPayoutDate(selectedSalaryPayout.weekStart)}
                 </div>
               </div>
 
@@ -1536,8 +1557,8 @@ export default function DashboardPage({
 
             <div style={payoutHintStyle}>
               {selectedSalaryPayout.pieceAmount > 0
-                ? "Оклад и накопленная сдельная оплата будут выплачены одной суммой. Смены будут отмечены выплаченными, а оклад за эту неделю повторно провести будет нельзя."
-                : "Будет создана выплата оклада за текущую неделю и расход в финансах. Повторно провести оклад этому сотруднику за ту же неделю будет нельзя."}
+                ? "Оклад и сдельные начисления только за выбранную неделю будут выплачены одной суммой. Старые неоплаченные смены останутся отдельно. Повторно провести тот же оклад или оплатить те же смены нельзя."
+                : "Будет создана выплата оклада именно за выбранную неделю и расход в финансах. Повторная выплата этой недели блокируется."}
             </div>
 
             <div style={payoutActionsStyle}>
