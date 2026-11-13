@@ -210,6 +210,17 @@ function getCurrentWeekStart() {
   return getWeekStartForDateKey(getBusinessDateKey());
 }
 
+function isPayrollThursday() {
+  const today = getBusinessDateKey();
+  return new Date(`${today}T12:00:00Z`).getUTCDay() === 4;
+}
+
+function getLastPayrollThursdayKey() {
+  const today = getBusinessDateKey();
+  const day = new Date(`${today}T12:00:00Z`).getUTCDay();
+  return shiftDateKey(today, -((day - 4 + 7) % 7));
+}
+
 function getNextThursdayLabel() {
   const today = getBusinessDateKey();
   const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
@@ -353,10 +364,66 @@ export default function DashboardPage({
   const [salaryPayingEmployeeId, setSalaryPayingEmployeeId] =
     useState<string | null>(null);
   const [dashboardError, setDashboardError] = useState("");
+  const [payrollAccess, setPayrollAccess] = useState<{
+    is_admin: boolean;
+    is_thursday: boolean;
+    unlocked: boolean;
+    expires_at: string | null;
+  }>({ is_admin: false, is_thursday: isPayrollThursday(), unlocked: false, expires_at: null });
+  const [payrollUnlocking, setPayrollUnlocking] = useState(false);
+  const payrollCanPay = payrollAccess.is_admin &&
+    (payrollAccess.is_thursday || (payrollAccess.unlocked &&
+      payrollAccess.expires_at !== null &&
+      Date.parse(payrollAccess.expires_at) > Date.now()));
 
   useEffect(() => {
-    loadDashboardData();
+    void loadDashboardData();
+    void refreshPayrollAccess();
   }, []);
+
+  // Re-lock the screen after the short manual override expires.
+  useEffect(() => {
+    if (!payrollAccess.unlocked || !payrollAccess.expires_at) return;
+    const timer = window.setInterval(() => {
+      if (Date.now() >= Date.parse(payrollAccess.expires_at!)) {
+        setPayrollAccess((prev) => ({ ...prev, unlocked: false, expires_at: null }));
+      }
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [payrollAccess.unlocked, payrollAccess.expires_at]);
+
+  async function refreshPayrollAccess() {
+    const { data, error } = await supabase.rpc("payroll_unlock_state");
+    if (error) {
+      setPayrollAccess({ is_admin: false, is_thursday: isPayrollThursday(), unlocked: false, expires_at: null });
+      setDashboardError(`Не удалось проверить доступ к зарплате: ${error.message}`);
+      return;
+    }
+    setPayrollAccess({
+      is_admin: Boolean(data?.is_admin),
+      is_thursday: Boolean(data?.is_thursday),
+      unlocked: Boolean(data?.unlocked),
+      expires_at: data?.expires_at || null,
+    });
+  }
+
+  async function unlockPayrollOnce() {
+    if (!payrollAccess.is_admin || payrollAccess.is_thursday || payrollUnlocking) return;
+    if (!window.confirm(
+      "Разблокировать зарплату на ОДНУ выплату? Доступ действует 20 минут и выключится после подтверждённой выплаты."
+    )) return;
+    try {
+      setPayrollUnlocking(true);
+      setDashboardError("");
+      const { error } = await supabase.rpc("unlock_payroll_once");
+      if (error) throw error;
+      await refreshPayrollAccess();
+    } catch (cause) {
+      setDashboardError(cause instanceof Error ? cause.message : "Не удалось разблокировать выплату");
+    } finally {
+      setPayrollUnlocking(false);
+    }
+  }
 
   async function loadDashboardData() {
     try {
@@ -462,9 +529,27 @@ export default function DashboardPage({
   }
 
   function openEmployeePayoutModal(item: PayableEmployeeStats) {
-    if (item.unpaidShiftIds.length === 0) return;
-
-    setSelectedPayoutEmployee(item);
+    if (!payrollCanPay) return;
+    const cutoff = getLastPayrollThursdayKey();
+    const eligible = shifts.filter((shift) =>
+      shift.user_id === item.userId &&
+      shift.status === "closed" &&
+      !shift.is_paid &&
+      Boolean(shift.closed_at) &&
+      getBusinessDateKey(new Date(shift.closed_at!)) <= cutoff
+    );
+    if (eligible.length === 0) {
+      setDashboardError("Нет закрытых неоплаченных смен к прошедшему четвергу.");
+      return;
+    }
+    setSelectedPayoutEmployee({
+      ...item,
+      unpaidShiftIds: eligible.map((shift) => shift.id),
+      unpaidShiftsCount: eligible.length,
+      totalQuantity: eligible.reduce((sum, shift) => sum + Number(shift.total_quantity || 0), 0),
+      payableAmount: Math.round(eligible.reduce((sum, shift) =>
+        sum + Number(shift.total_earned || 0), 0) * 100) / 100,
+    });
     setSelectedFinanceAccountId(financeAccounts[0]?.id || "");
   }
 
@@ -553,11 +638,15 @@ export default function DashboardPage({
   }
 
   function makeSalaryPayout(employee: Employee, weekStart: string): SalaryPayoutEmployee {
+    const cutoff = shiftDateKey(weekStart, 3);
+    // Include ALL older unpaid shifts through the selected Thursday. The
+    // weekly salary stays assigned only to the chosen calculation week.
     const selectedShifts = shifts.filter((shift) =>
       shift.user_id === employee.id &&
       shift.status === "closed" &&
       !shift.is_paid &&
-      getWeekStartForDateKey(getBusinessDateKey(new Date(shift.opened_at))) === weekStart
+      Boolean(shift.closed_at) &&
+      getBusinessDateKey(new Date(shift.closed_at!)) <= cutoff
     );
     const salaryAmount = Number(employee.weekly_salary_amount || 0);
     const pieceAmount = Math.round(
