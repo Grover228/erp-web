@@ -1113,7 +1113,7 @@ export default function DashboardPage({
                   <TableHead text="Время" />
                   <TableHead text="Смен к оплате" />
                   <TableHead text="Кол-во к оплате" />
-                  <TableHead text="К выплате" />
+                  <TableHead text="Сдельно к выплате" />
                   <TableHead text="Действие" />
                 </tr>
               </thead>
@@ -1151,9 +1151,8 @@ export default function DashboardPage({
                         const dueWeeks = employee && employeeHasSalary(employee)
                           ? getDueSalaryWeeks(employee)
                           : [];
-                        // Only shifts from the selected salary week are combined
-                        // with that week's salary. Older shifts stay unpaid and
-                        // available through the standalone piece-rate action.
+                        // Include overdue piece work from all earlier unpaid shifts
+                        // through the chosen Thursday, plus the week's salary.
                         if (employee && dueWeeks.length > 0 && item.unpaidShiftIds.length > 0) {
                           const preview = makeSalaryPayout(employee, dueWeeks[0]);
                           return (
@@ -1161,16 +1160,16 @@ export default function DashboardPage({
                               <button
                                 type="button"
                                 onClick={() => openSalaryPayoutModal(employee)}
-                                disabled={salaryPayingEmployeeId === employee.id || loading}
+                                disabled={!payrollCanPay || salaryPayingEmployeeId === employee.id || loading}
                                 style={{
                                   border: "none",
                                   borderRadius: 10,
                                   padding: "8px 10px",
-                                  background: salaryPayingEmployeeId === employee.id || loading
+                                  background: !payrollCanPay || salaryPayingEmployeeId === employee.id || loading
                                     ? "#94a3b8" : "#16a34a",
                                   color: "#ffffff",
                                   fontWeight: 800,
-                                  cursor: salaryPayingEmployeeId === employee.id || loading
+                                  cursor: !payrollCanPay || salaryPayingEmployeeId === employee.id || loading
                                     ? "not-allowed" : "pointer",
                                 }}
                               >
@@ -1186,7 +1185,8 @@ export default function DashboardPage({
                           return (
                             <PayableActionCell
                               item={payableItem}
-                              disabled={payingUserId === item.userId || loading}
+                              disabled={!payrollCanPay || payingUserId === item.userId || loading}
+                              locked={!payrollCanPay}
                               onPay={openEmployeePayoutModal}
                             />
                           );
@@ -1288,19 +1288,19 @@ export default function DashboardPage({
                           <button
                             type="button"
                             onClick={() => openSalaryPayoutModal(employee)}
-                            disabled={salaryPayingEmployeeId === employee.id || loading}
+                            disabled={!payrollCanPay || salaryPayingEmployeeId === employee.id || loading}
                             style={{
                               border: "none",
                               borderRadius: 10,
                               padding: "8px 12px",
                               background:
-                                salaryPayingEmployeeId === employee.id || loading
+                                !payrollCanPay || salaryPayingEmployeeId === employee.id || loading
                                   ? "#94a3b8"
                                   : "#16a34a",
                               color: "#ffffff",
                               fontWeight: 800,
                               cursor:
-                                salaryPayingEmployeeId === employee.id || loading
+                                !payrollCanPay || salaryPayingEmployeeId === employee.id || loading
                                   ? "not-allowed"
                                   : "pointer",
                               whiteSpace: "nowrap",
@@ -1308,7 +1308,7 @@ export default function DashboardPage({
                           >
                             {salaryPayingEmployeeId === employee.id
                               ? "Провожу..."
-                              : "Выплатить"}
+                              : !payrollCanPay ? "Только по четвергам" : "Выплатить"}
                           </button>
                         ) : (
                           <span
@@ -1680,7 +1680,7 @@ export default function DashboardPage({
 
             <div style={payoutHintStyle}>
               {selectedSalaryPayout.pieceAmount > 0
-                ? "Оклад и сдельные начисления только за выбранную неделю будут выплачены одной суммой. Старые неоплаченные смены останутся отдельно. Повторно провести тот же оклад или оплатить те же смены нельзя."
+                ? "Оклад за выбранную неделю и ВСЕ ранее неоплаченные смены, закрытые не позже её четверга, будут выплачены одной суммой. Повторно провести оклад или оплатить те же смены нельзя."
                 : "Будет создана выплата оклада именно за выбранную неделю и расход в финансах. Повторная выплата этой недели блокируется."}
             </div>
 
@@ -1697,6 +1697,7 @@ export default function DashboardPage({
                 type="button"
                 onClick={confirmSalaryPayout}
                 disabled={
+                  !payrollCanPay ||
                   !selectedFinanceAccountId ||
                   salaryPayingEmployeeId === selectedSalaryPayout.employee.id
                 }
@@ -1803,6 +1804,7 @@ export default function DashboardPage({
                 type="button"
                 onClick={confirmEmployeePayout}
                 disabled={
+                  !payrollCanPay ||
                   !selectedFinanceAccountId ||
                   payingUserId === selectedPayoutEmployee.userId
                 }
@@ -2248,10 +2250,12 @@ function TableCell({ text, strong }: { text: string; strong?: boolean }) {
 function PayableActionCell({
   item,
   disabled,
+  locked = false,
   onPay,
 }: {
   item: PayableEmployeeStats;
   disabled: boolean;
+  locked?: boolean;
   onPay: (item: PayableEmployeeStats) => void;
 }) {
   return (
@@ -2275,7 +2279,7 @@ function PayableActionCell({
           whiteSpace: "nowrap",
         }}
       >
-        {disabled ? "Сохраняю..." : "Отметить выплаченным"}
+        {locked ? "Только по четвергам" : disabled ? "Сохраняю..." : "Отметить выплаченным"}
       </button>
     </td>
   );
