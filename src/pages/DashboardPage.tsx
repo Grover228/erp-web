@@ -379,6 +379,9 @@ export default function DashboardPage({
   useEffect(() => {
     void loadDashboardData();
     void refreshPayrollAccess();
+    // Keep the Thursday switch and one-time unlock synced across open tabs.
+    const refresh = window.setInterval(() => { void refreshPayrollAccess(); }, 60000);
+    return () => window.clearInterval(refresh);
   }, []);
 
   // Re-lock the screen after the short manual override expires.
@@ -1308,7 +1311,7 @@ export default function DashboardPage({
                           >
                             {salaryPayingEmployeeId === employee.id
                               ? "Провожу..."
-                              : !payrollCanPay ? "Только по четвергам" : "Выплатить"}
+                              : !payrollCanPay ? "Выплата заблокирована" : "Выплатить"}
                           </button>
                         ) : (
                           <span
@@ -1704,11 +1707,13 @@ export default function DashboardPage({
                 style={{
                   ...payoutConfirmButtonStyle,
                   opacity:
+                    !payrollCanPay ||
                     !selectedFinanceAccountId ||
                     salaryPayingEmployeeId === selectedSalaryPayout.employee.id
                       ? 0.65
                       : 1,
                   cursor:
+                    !payrollCanPay ||
                     !selectedFinanceAccountId ||
                     salaryPayingEmployeeId === selectedSalaryPayout.employee.id
                       ? "not-allowed"
@@ -1811,11 +1816,13 @@ export default function DashboardPage({
                 style={{
                   ...payoutConfirmButtonStyle,
                   opacity:
+                    !payrollCanPay ||
                     !selectedFinanceAccountId ||
                     payingUserId === selectedPayoutEmployee.userId
                       ? 0.65
                       : 1,
                   cursor:
+                    !payrollCanPay ||
                     !selectedFinanceAccountId ||
                     payingUserId === selectedPayoutEmployee.userId
                       ? "not-allowed"
@@ -2279,7 +2286,7 @@ function PayableActionCell({
           whiteSpace: "nowrap",
         }}
       >
-        {locked ? "Только по четвергам" : disabled ? "Сохраняю..." : "Отметить выплаченным"}
+        {locked ? "Выплата заблокирована" : disabled ? "Сохраняю..." : "Отметить выплаченным"}
       </button>
     </td>
   );
