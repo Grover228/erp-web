@@ -76,8 +76,11 @@ class WakeWordService : Service(), RecognitionListener {
         if (assistantQueryListening) {
             assistantQueryListening = false
             stopWakeDetector()
-            updateNotification("Не расслышал вопрос • жду «Валера»")
-            finishAssistantHandoff()
+            appLogger.log("assistant_query", "timeout", details = diagnosticDetails())
+            assistantResponseComplete = true
+            updateNotification("Не расслышал команду")
+            enqueueAssistantSpeech("Не расслышал команду. Повторите, пожалуйста.")
+            finishNativeAssistantIfDone()
         }
     }
 
@@ -410,7 +413,9 @@ class WakeWordService : Service(), RecognitionListener {
         handler.postDelayed({
             val currentModel = model
             if (currentModel == null) {
-                finishAssistantHandoff()
+                assistantResponseComplete = true
+                enqueueAssistantSpeech("Распознавание речи не готово. Попробуйте ещё раз.")
+                finishNativeAssistantIfDone()
                 return@postDelayed
             }
 
@@ -425,7 +430,9 @@ class WakeWordService : Service(), RecognitionListener {
             } catch (exception: Throwable) {
                 updateNotification("Не удалось слушать вопрос")
                 sendStateBroadcast(STATE_ERROR, exception.message ?: "Ошибка микрофона")
-                finishAssistantHandoff()
+                assistantResponseComplete = true
+                enqueueAssistantSpeech("Не удалось включить микрофон для команды.")
+                finishNativeAssistantIfDone()
             }
         }, ASSISTANT_QUERY_START_DELAY_MS)
     }
@@ -628,8 +635,9 @@ class WakeWordService : Service(), RecognitionListener {
             if (erpCommand == ErpVoiceCommand.FinishOperation) {
                 updateNotification("ERP • определяю активную операцию…")
                 assistantResponseComplete = false
+                enqueueAssistantSpeech("Проверяю вашу текущую операцию.")
                 Thread {
-                    val result = erpExecutor.activeOperation()
+                    val result = runCatching { erpExecutor.activeOperation().getOrThrow() }
                     handler.post {
                         val active = result.getOrElse {
                             assistantResponseComplete = true
@@ -683,8 +691,10 @@ class WakeWordService : Service(), RecognitionListener {
         if (LOCAL_COMMANDS_ONLY) {
             assistantResponseComplete = true
             assistantStreamBuffer = ""
-            updateNotification("Локальный режим • жду команду")
-            finishAssistantHandoff()
+            appLogger.log("command_route", "unrecognized", recognizedText = text, details = diagnosticDetails())
+            updateNotification("Команда не распознана: $text")
+            enqueueAssistantSpeech("Не распознал команду. Повторите, пожалуйста.")
+            finishNativeAssistantIfDone()
             return
         }
 
@@ -1425,6 +1435,12 @@ class WakeWordService : Service(), RecognitionListener {
         stopWakeDetector()
 
         if (assistantHandoffActive) {
+            assistantQueryListening = false
+            handler.removeCallbacks(assistantQueryTimeoutRunnable)
+            assistantResponseComplete = true
+            updateNotification("Ошибка распознавания команды")
+            enqueueAssistantSpeech("Ошибка распознавания речи. Повторите команду.")
+            finishNativeAssistantIfDone()
             return
         }
 
