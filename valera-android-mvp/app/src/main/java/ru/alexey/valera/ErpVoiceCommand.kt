@@ -7,6 +7,7 @@ sealed class ErpVoiceCommand {
     data object CloseShift : ErpVoiceCommand()
     data object StartCutting : ErpVoiceCommand()
     data object FinishCutting : ErpVoiceCommand()
+    data object FinishOperation : ErpVoiceCommand()
     data object Progress : ErpVoiceCommand()
     data object Print : ErpVoiceCommand()
 }
@@ -24,9 +25,11 @@ object ErpVoiceCommands {
         "закончить раскрой" to ErpVoiceCommand.FinishCutting,
         "останови раскрой" to ErpVoiceCommand.FinishCutting,
         "остановить раскрой" to ErpVoiceCommand.FinishCutting,
-        "закончи операцию" to ErpVoiceCommand.FinishCutting,
-        "останови операцию" to ErpVoiceCommand.FinishCutting,
-        "остановить операцию" to ErpVoiceCommand.FinishCutting,
+        "закончи операцию" to ErpVoiceCommand.FinishOperation,
+        "заверши операцию" to ErpVoiceCommand.FinishOperation,
+        "завершить операцию" to ErpVoiceCommand.FinishOperation,
+        "останови операцию" to ErpVoiceCommand.FinishOperation,
+        "остановить операцию" to ErpVoiceCommand.FinishOperation,
         "сколько готово" to ErpVoiceCommand.Progress,
         "сколько уже готово" to ErpVoiceCommand.Progress,
         "сколько сделано" to ErpVoiceCommand.Progress,
