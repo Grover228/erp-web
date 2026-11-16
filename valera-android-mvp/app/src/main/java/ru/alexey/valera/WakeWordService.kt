@@ -388,7 +388,7 @@ class WakeWordService : Service(), RecognitionListener {
         } catch (_: Throwable) {}
     }
 
-    private fun startNativeAssistantConversation() {
+    private fun startNativeAssistantConversation(initialErpCommand: String? = null) {
         duckMediaForCommand()
         playWakeChime()
         assistantHandoffActive = true
@@ -401,6 +401,11 @@ class WakeWordService : Service(), RecognitionListener {
         stopWakeDetector()
         updateNotification("Валера слушает вопрос…")
         sendStateBroadcast(STATE_HANDOFF, "Слушаю вопрос")
+
+        if (initialErpCommand != null) {
+            sendAssistantQuery(initialErpCommand)
+            return
+        }
 
         handler.postDelayed({
             val currentModel = model
@@ -854,6 +859,18 @@ class WakeWordService : Service(), RecognitionListener {
             wakeDecisionPending = false
             lastWakeHypothesis = ""
             handleLightCommand(localCommand)
+            return
+        }
+
+        val erpCommand = ErpVoiceCommands.parse(normalized)
+        if (erpCommand == ErpVoiceCommand.FinishOperation || erpCommand == ErpVoiceCommand.FinishCutting) {
+            handler.removeCallbacks(wakeDecisionRunnable)
+            wakeDecisionPending = false
+            lastWakeHypothesis = ""
+            if (System.currentTimeMillis() - lastWakeAt >= WAKE_DEBOUNCE_MS) {
+                lastWakeAt = System.currentTimeMillis()
+                startNativeAssistantConversation(normalized.substringAfter("валера").trim())
+            }
             return
         }
 
