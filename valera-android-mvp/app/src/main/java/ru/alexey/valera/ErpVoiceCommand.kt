@@ -43,6 +43,17 @@ object ErpVoiceCommands {
 
         aliases[text]?.let { return it }
 
+        // Vosk may add short filler words or choose a slightly different verb.
+        // Keep action recognition anchored to the explicit noun "операцию":
+        // no operation is changed until the employee confirms the result.
+        val tokens = text.split(" ").filter { it.isNotBlank() }
+        val operationMentioned = tokens.any { it in setOf("операцию", "операция", "операции") }
+        val completionVerb = tokens.any {
+            it.startsWith("останов") || it.startsWith("заверш") ||
+                it.startsWith("законч") || it.startsWith("прекрат")
+        }
+        if (operationMentioned && completionVerb) return ErpVoiceCommand.FinishOperation
+
         // Vosk often adds harmless service words around short ERP commands.
         // Keep the destructive/action routing strict, but allow natural shift phrases.
         if (
