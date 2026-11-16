@@ -15,6 +15,7 @@ class ErpVoiceExecutor(context: Context) {
             ErpVoiceCommand.CloseShift -> closeShift(s)
             ErpVoiceCommand.StartCutting -> startCutting(s)
             ErpVoiceCommand.FinishCutting -> "Чтобы закончить раскрой, скажи количество, например: закончи раскрой 50 штук."
+            ErpVoiceCommand.FinishOperation -> "Проверяю текущую операцию."
             ErpVoiceCommand.Progress -> progress(s)
             ErpVoiceCommand.Print -> "Для печати нужно выбрать конкретную пачку. Открой производство и выбери этикетку."
         }
@@ -46,7 +47,7 @@ class ErpVoiceExecutor(context: Context) {
     }
     fun finishCuttingAndPrint(quantity: Int): Result<String> = withSession { s ->
         require(quantity > 0) { "Количество должно быть больше нуля." }
-        val rows = get(s, "production_order_operations?operation_name=ilike.%D0%A0%D0%B0%D1%81%D0%BA%D1%80%D0%BE%D0%B9&status=eq.in_progress&select=id,production_order_id,operation_name,completed_quantity,price_per_unit,started_at,sort_order&order=created_at.desc&limit=2")
+        val rows = get(s, "production_order_operations?operation_name=ilike.%D0%A0%D0%B0%D1%81%D0%BA%D1%80%D0%BE%D0%B9&status=eq.in_progress&assigned_user_id=eq."+enc(s.userId)+"&select=id,production_order_id,operation_name,completed_quantity,price_per_unit,started_at,sort_order&order=created_at.desc&limit=2")
         if (rows.length() == 0) error("Активный раскрой не найден.")
         if (rows.length() > 1) error("Нашёл несколько активных раскроев. Ничего не изменяю.")
         val op = rows.getJSONObject(0)
@@ -108,6 +109,108 @@ class ErpVoiceExecutor(context: Context) {
             .put("batchId",batchId).put("productionOrderId",orderId)
         request(s,"POST","print_jobs",JSONObject().put("printer_code","xprinter-main").put("job_type","qr").put("payload",printPayload).toString(),"return=representation")
         "Раскрой завершён: $quantity штук. Этикетка $batchNumber отправлена на печать."
+    }
+
+
+    data class ActiveOperation(
+        val batchId: String?,
+        val operationId: String,
+        val orderId: String,
+        val operationName: String,
+        val batchNumber: String,
+        val remaining: Int,
+        val completed: Int,
+        val operationOrder: Int,
+        val isCutting: Boolean
+    )
+
+    /** Read-only: never choose an arbitrary batch when several are active. */
+    fun activeOperation(): Result<ActiveOperation?> = withSession { s ->
+        val batches = get(s, "production_batches?assigned_user_id=eq."+enc(s.userId)+
+            "&status=eq.in_progress&select=id,production_order_id,batch_number,quantity,completed_quantity,current_operation_order&limit=2")
+        val cutting = get(s, "production_order_operations?assigned_user_id=eq."+enc(s.userId)+
+            "&operation_name=ilike.%D0%A0%D0%B0%D1%81%D0%BA%D1%80%D0%BE%D0%B9&status=eq.in_progress"+
+            "&select=id,production_order_id,operation_name,completed_quantity,sort_order&limit=2")
+        val count = batches.length() + cutting.length()
+        if (count == 0) return@withSession null
+        if (count > 1) error("Найдено несколько активных операций. Заверши нужную через ERP.")
+        if (cutting.length() == 1) {
+            val op = cutting.getJSONObject(0)
+            return@withSession ActiveOperation(null, op.getString("id"),op.getString("production_order_id"),
+                op.optString("operation_name","Раскрой"),"",0,op.optInt("completed_quantity"),op.optInt("sort_order"),true)
+        }
+        val b = batches.getJSONObject(0)
+        val orderId = b.getString("production_order_id")
+        val sortOrder = b.optInt("current_operation_order")
+        val operations = get(s,"production_order_operations?production_order_id=eq."+enc(orderId)+
+            "&select=id,operation_name,sort_order&order=sort_order.asc")
+        var current: JSONObject? = null
+        val previousIds = mutableListOf<String>()
+        for (i in 0 until operations.length()) {
+            val op = operations.getJSONObject(i)
+            if (op.optInt("sort_order") == sortOrder) current = op
+            if (op.optInt("sort_order") < sortOrder) previousIds.add(op.getString("id"))
+        }
+        val op = current ?: error("Текущая операция пачки не найдена.")
+        val defects = get(s,"production_defects?batch_id=eq."+enc(b.getString("id"))+
+            "&select=production_order_operation_id,quantity")
+        var previousDefects = 0
+        var currentDefects = 0
+        for (i in 0 until defects.length()) {
+            val d = defects.getJSONObject(i)
+            val id = d.optString("production_order_operation_id")
+            if (id in previousIds) previousDefects += d.optInt("quantity")
+            if (id == op.getString("id")) currentDefects += d.optInt("quantity")
+        }
+        // The existing atomic RPC does not account for defective units.
+        // Never silently overwrite defect accounting from a voice command.
+        if (previousDefects > 0 || currentDefects > 0)
+            error("По пачке зарегистрирован брак. Заверши операцию через ERP, чтобы сохранить учёт брака.")
+        val remaining = b.optInt("quantity") - b.optInt("completed_quantity")
+        if (remaining <= 0) error("По пачке нет незавершённых изделий.")
+        ActiveOperation(b.getString("id"),op.getString("id"),orderId,
+            op.optString("operation_name","Операция"),b.optString("batch_number"),
+            remaining,b.optInt("completed_quantity"),sortOrder,false)
+    }
+
+    /** Re-read active work immediately before writing, so stale voice dialogs cannot close another job. */
+    fun finishActiveOperation(expected: ActiveOperation, quantity: Int): Result<String> = withSession { s ->
+        require(quantity > 0) { "Количество должно быть больше нуля." }
+        val current = activeOperation().getOrThrow() ?: error("Активной операции больше нет.")
+        if (current.batchId != expected.batchId || current.operationId != expected.operationId ||
+            current.completed != expected.completed || current.operationOrder != expected.operationOrder)
+            error("Активная операция изменилась. Повтори команду.")
+        if (current.isCutting) return@withSession finishCuttingAndPrint(quantity).getOrThrow()
+        if (quantity > current.remaining) error("Осталось только ${current.remaining} изделий.")
+        val shift = currentShift(s) ?: error("Сначала открой смену.")
+        val batchId = current.batchId ?: error("Не найдена пачка.")
+        val body = JSONObject().put("p_batch_id",batchId).put("p_operation_id",current.operationId)
+            .put("p_quantity",quantity).put("p_expected_completed",current.completed)
+            .put("p_expected_operation_order",current.operationOrder)
+            .put("p_comment",if(quantity==current.remaining) "Всё готово (Валера)" else "Готово частично (Валера)")
+        val rpcResult = JSONObject(request(s,"POST","rpc/complete_production_batch_operation",body.toString(),null))
+        if (rpcResult.optString("status") != "ok") error("ERP не подтвердила завершение операции.")
+        val earned = rpcResult.optDouble("earned",0.0)
+        val shiftRows = JSONArray(request(s,"PATCH","employee_shifts?id=eq."+enc(shift.getString("id"))+
+            "&status=eq.open&total_quantity=eq."+shift.optInt("total_quantity",0),
+            JSONObject().put("total_quantity",shift.optInt("total_quantity",0)+quantity)
+                .put("total_earned",shift.optDouble("total_earned",0.0)+earned).toString(),
+            "return=representation"))
+        if (shiftRows.length()!=1) error("Операция сохранена, но начисление в смену не подтверждено. Проверь ERP; повторно не закрывай пачку.")
+        val batchRows = get(s,"production_batches?id=eq."+enc(batchId)+"&select=status,current_operation_order&limit=1")
+        val batch = if(batchRows.length()>0)batchRows.getJSONObject(0) else error("Операция сохранена, но статус пачки не удалось проверить.")
+        val fullyDone = quantity == current.remaining
+        if (fullyDone && current.operationName == "Стачивание" && batch.optString("status") == "waiting") {
+            request(s,"POST","rpc/complete_stitching_container_transfer",
+                JSONObject().put("p_batch_id",batchId).toString(),null)
+        }
+        if (fullyDone && batch.optString("status") == "done") {
+            request(s,"POST","rpc/release_completed_batch_containers",
+                JSONObject().put("p_batch_id",batchId).toString(),null)
+        }
+        "Операция ${current.operationName} завершена: $quantity изделий. " +
+            "Начислено ${"%.2f".format(java.util.Locale.US,earned)} руб. " +
+            "Можете приступать к следующей операции."
     }
 
     private fun progress(s: ErpSession): String {
