@@ -495,12 +495,12 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     private fun isAffirmative(text: String): Boolean {
-        val words = normalize(text).replace(Regex("""[^а-я0-9\\s]""")," ").split(Regex("""\\s+"""))
+        val words = normalize(text).replace(Regex("""[^а-я0-9\s]""")," ").split(Regex("""\s+"""))
         return words.any { it in setOf("да","верно","подтверждаю","готово","все") }
     }
 
     private fun isNegative(text: String): Boolean {
-        val words = normalize(text).replace(Regex("""[^а-я0-9\\s]""")," ").split(Regex("""\\s+"""))
+        val words = normalize(text).replace(Regex("""[^а-я0-9\s]""")," ").split(Regex("""\s+"""))
         return words.any { it in setOf("нет","не","неверно") }
     }
 
