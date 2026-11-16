@@ -56,9 +56,10 @@ class WakeWordService : Service(), RecognitionListener {
     private var cpuWakeLock: PowerManager.WakeLock? = null
     private var assistantPartialCandidate = ""
     private var assistantPartialSeenAt = 0L
-    private enum class ErpDialogueState { NONE, WAIT_CUTTING_QUANTITY, CONFIRM_CUTTING_QUANTITY }
+    private enum class ErpDialogueState { NONE, WAIT_CUTTING_CONFIRM, WAIT_CUTTING_QUANTITY, CONFIRM_CUTTING_QUANTITY, WAIT_BATCH_READY, WAIT_BATCH_QUANTITY, CONFIRM_BATCH_QUANTITY }
     private var erpDialogueState = ErpDialogueState.NONE
     private var pendingCuttingQuantity: Int? = null
+    private var pendingActiveOperation: ErpVoiceExecutor.ActiveOperation? = null
     private var resumeErpDialogueAfterSpeech = false
 
     private val wakeDecisionRunnable = Runnable {
@@ -488,42 +489,100 @@ class WakeWordService : Service(), RecognitionListener {
         return if (seen && total > 0) total else null
     }
 
+    private fun isAffirmative(text: String): Boolean {
+        val words = normalize(text).replace(Regex("""[^а-я0-9\\s]""")," ").split(Regex("""\\s+"""))
+        return words.any { it in setOf("да","верно","подтверждаю","готово","все") }
+    }
+
+    private fun isNegative(text: String): Boolean {
+        val words = normalize(text).replace(Regex("""[^а-я0-9\\s]""")," ").split(Regex("""\\s+"""))
+        return words.any { it in setOf("нет","не","неверно") }
+    }
+
+    private fun finishVoiceOperation(quantity: Int) {
+        val active = pendingActiveOperation
+        erpDialogueState = ErpDialogueState.NONE
+        pendingActiveOperation = null
+        pendingCuttingQuantity = null
+        resumeErpDialogueAfterSpeech = false
+        updateNotification("ERP • сохраняю завершение…")
+        Thread {
+            val result = if (active != null) erpExecutor.finishActiveOperation(active,quantity)
+                else erpExecutor.finishCuttingAndPrint(quantity)
+            handler.post {
+                val reply = result.getOrElse { it.message ?: "Не удалось завершить операцию." }
+                assistantResponseComplete = true
+                updateNotification(reply)
+                enqueueAssistantSpeech(reply)
+                finishNativeAssistantIfDone()
+            }
+        }.start()
+    }
+
     private fun handleErpDialogueAnswer(text: String): Boolean {
         when (erpDialogueState) {
-            ErpDialogueState.WAIT_CUTTING_QUANTITY -> {
+            ErpDialogueState.WAIT_CUTTING_CONFIRM -> {
+                when {
+                    isNegative(text) -> {
+                        erpDialogueState = ErpDialogueState.NONE
+                        pendingActiveOperation = null
+                        assistantResponseComplete = true
+                        enqueueAssistantSpeech("Хорошо, раскрой продолжается.")
+                        finishNativeAssistantIfDone()
+                    }
+                    isAffirmative(text) -> {
+                        erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
+                        speakErpAndListen("Сколько изделий вы раскроили?")
+                    }
+                    else -> speakErpAndListen("Раскрой завершён? Ответь да или нет.")
+                }
+                return true
+            }
+            ErpDialogueState.WAIT_BATCH_READY -> {
+                when {
+                    isNegative(text) -> {
+                        erpDialogueState = ErpDialogueState.WAIT_BATCH_QUANTITY
+                        speakErpAndListen("Сколько изделий готово?")
+                    }
+                    isAffirmative(text) -> {
+                        val active = pendingActiveOperation
+                        if (active == null) {
+                            erpDialogueState = ErpDialogueState.NONE
+                            finishAssistantHandoff()
+                        } else {
+                            finishVoiceOperation(active.remaining)
+                        }
+                    }
+                    else -> speakErpAndListen("Вся пачка готова? Ответь да или нет.")
+                }
+                return true
+            }
+            ErpDialogueState.WAIT_BATCH_QUANTITY, ErpDialogueState.WAIT_CUTTING_QUANTITY -> {
                 val quantity = parseRussianQuantity(text)
-                if (quantity == null || quantity <= 0) {
-                    speakErpAndListen("Не расслышал количество. Сколько штук готово?")
+                val max = pendingActiveOperation?.takeIf { !it.isCutting }?.remaining
+                if (quantity == null || quantity <= 0 || (max != null && quantity > max)) {
+                    speakErpAndListen(if(max != null) "Назови количество от одного до $max." else "Не расслышал количество. Сколько штук готово?")
                 } else {
                     pendingCuttingQuantity = quantity
-                    erpDialogueState = ErpDialogueState.CONFIRM_CUTTING_QUANTITY
+                    erpDialogueState = if (erpDialogueState == ErpDialogueState.WAIT_BATCH_QUANTITY)
+                        ErpDialogueState.CONFIRM_BATCH_QUANTITY else ErpDialogueState.CONFIRM_CUTTING_QUANTITY
                     speakErpAndListen("Ты сказал $quantity штук. Всё верно?")
                 }
                 return true
             }
-            ErpDialogueState.CONFIRM_CUTTING_QUANTITY -> {
-                val answer = normalize(text)
-                if (listOf("да","верно","правильно","подтверждаю").any { answer.contains(it) }) {
-                    val quantity = pendingCuttingQuantity ?: return true
-                    erpDialogueState = ErpDialogueState.NONE
-                    pendingCuttingQuantity = null
-                    updateNotification("ERP • завершаю раскрой…")
-                    Thread {
-                        val result = erpExecutor.finishCuttingAndPrint(quantity)
-                        handler.post {
-                            val reply = result.getOrElse { it.message ?: "Не удалось завершить раскрой." }
-                            assistantResponseComplete = true
-                            updateNotification(reply)
-                            enqueueAssistantSpeech(reply)
-                            finishNativeAssistantIfDone()
-                        }
-                    }.start()
-                } else if (listOf("нет","неверно","не правильно","ошибка").any { answer.contains(it) }) {
-                    pendingCuttingQuantity = null
-                    erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
-                    speakErpAndListen("Хорошо. Сколько штук готово?")
-                } else {
-                    speakErpAndListen("Скажи да, если количество верное, или нет, чтобы назвать заново.")
+            ErpDialogueState.CONFIRM_CUTTING_QUANTITY, ErpDialogueState.CONFIRM_BATCH_QUANTITY -> {
+                when {
+                    isNegative(text) -> {
+                        pendingCuttingQuantity = null
+                        erpDialogueState = if (erpDialogueState == ErpDialogueState.CONFIRM_BATCH_QUANTITY)
+                            ErpDialogueState.WAIT_BATCH_QUANTITY else ErpDialogueState.WAIT_CUTTING_QUANTITY
+                        speakErpAndListen("Хорошо. Сколько штук готово?")
+                    }
+                    isAffirmative(text) -> {
+                        val quantity = pendingCuttingQuantity ?: return true
+                        finishVoiceOperation(quantity)
+                    }
+                    else -> speakErpAndListen("Скажи да, если количество верное, или нет, чтобы назвать заново.")
                 }
                 return true
             }
@@ -561,6 +620,38 @@ class WakeWordService : Service(), RecognitionListener {
         val erpCommand = ErpVoiceCommands.parse(text)
         if (erpCommand != null) {
             appLogger.log("command_route", "matched", recognizedText = text, action = "erp:${erpCommand.javaClass.simpleName}", details = diagnosticDetails())
+            if (erpCommand == ErpVoiceCommand.FinishOperation) {
+                updateNotification("ERP • определяю активную операцию…")
+                assistantResponseComplete = false
+                Thread {
+                    val result = erpExecutor.activeOperation()
+                    handler.post {
+                        val active = result.getOrElse {
+                            assistantResponseComplete = true
+                            val message = it.message ?: "Не удалось определить текущую операцию."
+                            enqueueAssistantSpeech(message)
+                            finishNativeAssistantIfDone()
+                            return@post
+                        }
+                        if (active == null) {
+                            assistantResponseComplete = true
+                            enqueueAssistantSpeech("У вас сейчас нет активной операции.")
+                            finishNativeAssistantIfDone()
+                        } else {
+                            pendingActiveOperation = active
+                            pendingCuttingQuantity = null
+                            if (active.isCutting) {
+                                erpDialogueState = ErpDialogueState.WAIT_CUTTING_CONFIRM
+                                speakErpAndListen("У вас выполняется раскрой. Операция завершена?")
+                            } else {
+                                erpDialogueState = ErpDialogueState.WAIT_BATCH_READY
+                                speakErpAndListen("У вас операция ${active.operationName}, пачка ${active.batchNumber}, ${active.remaining} изделий. Всё готово?")
+                            }
+                        }
+                    }
+                }.start()
+                return
+            }
             if (erpCommand == ErpVoiceCommand.FinishCutting) {
                 erpDialogueState = ErpDialogueState.WAIT_CUTTING_QUANTITY
                 pendingCuttingQuantity = null
@@ -745,7 +836,7 @@ class WakeWordService : Service(), RecognitionListener {
         }
 
         val normalized = normalize(phrase)
-        if (!normalized.contains(WAKE_WORD)) return
+        if (normalized.split(Regex("""[^а-я0-9]+""")).none { it == WAKE_WORD }) return
         appLogger.log("wake_hypothesis", "recognized", recognizedText = phrase, details = diagnosticDetails())
 
         val musicCommand = MusicVoiceCommands.parse(normalized)
@@ -1173,6 +1264,7 @@ class WakeWordService : Service(), RecognitionListener {
         resumeErpDialogueAfterSpeech = false
         erpDialogueState = ErpDialogueState.NONE
         pendingCuttingQuantity = null
+        pendingActiveOperation = null
         handler.removeCallbacks(assistantQueryTimeoutRunnable)
         assistantRecordingSeen = false
         assistantSilentPolls = 0
@@ -1272,10 +1364,9 @@ class WakeWordService : Service(), RecognitionListener {
     }
 
     override fun onPartialResult(hypothesis: String?) {
-        if (!assistantQueryListening) {
-            inspectHypothesis(hypothesis)
-            return
-        }
+        // Partial Vosk guesses frequently contain "Валера" during films or noise.
+        // Wake only on a finalized recognition segment, never on partial text.
+        if (!assistantQueryListening) return
         if (hypothesis.isNullOrBlank()) return
         val text = runCatching { JSONObject(hypothesis).optString("partial").trim() }.getOrDefault("")
         if (text.isBlank()) return
@@ -1386,6 +1477,6 @@ class WakeWordService : Service(), RecognitionListener {
         private const val ASSISTANT_SPEECH_CHUNK_CHARS = 180
         private const val ASSISTANT_QUERY_START_DELAY_MS = 250L
         private const val ASSISTANT_QUERY_TIMEOUT_MS = 12_000L
-        private const val STABLE_PARTIAL_MS = 220L
+        private const val STABLE_PARTIAL_MS = 600L
     }
 }
